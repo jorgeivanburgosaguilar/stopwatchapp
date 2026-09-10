@@ -44,6 +44,7 @@ records list, and a system-tray presence showing elapsed time while the main win
 .gitattributes             from the user's config repo (§5)
 .gitignore                 bin/, obj/, publish/, *.db — base file from the user's config repo (§5), *.db added
 AGENTS.md                  this file
+StopwatchApp.slnx          solution, XML format (the .NET 10 SDK default); x64 is the only solution platform
 StopwatchApp/
   StopwatchApp.csproj      net10.0-windows, WinForms, nullable, analyzers-as-errors, x64
   Program.cs               single-instance mutex, ApplicationConfiguration.Initialize, SetColorMode, Application.Run
@@ -52,10 +53,15 @@ StopwatchApp/
     StopwatchControl.cs    timer state (§8) + control row (§8.5)
     RecordsListControl.cs  records and laps list rendering
     ClearRecordsDialog.cs  confirm dialog
+  Models/                  one record type per file (§5)
+    StopwatchRecord.cs     a persisted record (§8.1/§9)
+    Lap.cs                 an in-memory/restored split (§8.1)
+    PausedSession.cs       the single saved-session snapshot (§9)
   Services/                UI-free, unit-testable
     StopwatchTimer.cs      tick loop + transitions (§8)
     TrayIconService.cs     NotifyIcon, rendered icon, context menu (§10)
     HotkeyService.cs       RegisterHotKey P/Invoke (§10)
+    IStopwatchStore.cs     the data-access interface (§3.1/§9)
     Database.cs            SQLite access (§9)
   Formatting/
     TimeFormat.cs          the four formatters (§8.4)
@@ -167,21 +173,24 @@ public static class ClearRecordsDialog    // §8.5 — the confirm dialog
 
 | Command | Purpose |
 |---|---|
-| `dotnet csharpier format .` | Formats the whole repo (whitespace, wrapping, brace style) per `.editorconfig`. |
-| `dotnet csharpier check .` | Check-only; exits `1` if anything is unformatted. Use before presenting any change as complete. |
+| `csharpier format .` | Formats the whole repo (whitespace, wrapping, brace style) per `.editorconfig`. |
+| `csharpier check .` | Check-only; exits `1` if anything is unformatted. Use before presenting any change as complete. |
 | `dotnet build -c Release` | Compiles with analyzers enabled and warnings treated as errors. |
 | `dotnet test` | Runs the full test suite. |
 
 **Formatting is CSharpier, not `dotnet format`.** This project uses the CLI
-(`dotnet csharpier format`/`check`) exclusively — there is no `CSharpier.MSBuild` package
+(`csharpier format`/`check`) exclusively — there is no `CSharpier.MSBuild` package
 reference, so formatting is not enforced at build time and must be run explicitly. **Never run
 `dotnet format`** on this repo: it fights CSharpier over whitespace and brace placement and will
-undo or conflict with its output.
+undo or conflict with its output. CSharpier is installed as a **global** dotnet tool
+(`dotnet tool install -g csharpier`, currently `1.3.0`), so the command is bare `csharpier`, not
+`dotnet csharpier` — the latter requires a local tool manifest, which this repo deliberately does
+not have.
 
 Run after **every** completed change, before presenting the result as done:
 
-1. `dotnet csharpier format .`
-2. `dotnet csharpier check .` — must exit `0`
+1. `csharpier format .`
+2. `csharpier check .` — must exit `0`
 3. `dotnet build -c Release` — must produce **zero warnings**, not just zero errors
 4. `dotnet test` — all tests green
 5. If tray, hotkey, or window-hiding code changed: launch the app once and manually confirm the
@@ -254,6 +263,7 @@ Keep these set — they make lint and analyzers run on every `dotnet build` and 
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <Platforms>x64</Platforms>
+    <Platform>x64</Platform>
     <Version>1.0.0</Version>
 
     <!-- WinForms application configuration (source-generates ApplicationConfiguration.Initialize) -->
@@ -272,6 +282,11 @@ Keep these set — they make lint and analyzers run on every `dotnet build` and 
 </Project>
 ```
 
+- `<Platforms>` only declares which platforms exist for the project; it does not select the active
+  one. `<Platform>x64</Platform>` pins that selection so a direct `dotnet build <csproj>` (no
+  solution involved) also lands in `bin\x64\...` — the solution file (`StopwatchApp.slnx`) separately
+  declares x64 as its only platform, so a solution-level build stays consistent with it. Both are
+  required; setting only one leaves the other build path on `AnyCPU`.
 - `EnableNETAnalyzers` defaults on for .NET 5+, but set it explicitly so intent survives future
   edits.
 - `EnforceCodeStyleInBuild` promotes `IDExxxx` code-style rules from IDE-only hints to build
@@ -782,3 +797,62 @@ Rules:
 
 Never run `git commit` unless the user has explicitly asked for a commit to be created in that
 turn. Completing a task, or making code changes, is never implicit permission to commit.
+
+---
+
+## 17. Design decision log
+
+**Rule:** when implementation reveals a design choice that differs from, or is absent from, what
+this file says, fold the substance into the governing section **and** log it here, dated, in the
+same change. A decision that exists only as a code comment or a chat message is lost to the next
+agent that opens this file cold. Keep entries short — one or two lines plus a pointer to the section
+that now carries the actual rule.
+
+- **2026-09-09 — Solution platform mapping.** An `.slnx` solution needs explicit per-project
+  `<Platform Project="x64" />` entries under each `<Project>`; a bare solution-level
+  `<Platform Name="x64" />` with no per-project mapping causes a solution build to silently fall back
+  to `AnyCPU` (the solution build's global `Platform` property overrides a project's own
+  `<Platform>` unless the solution maps it explicitly). See `StopwatchApp.slnx` and §3/§6.
+- **2026-09-09 — Test project omits `GenerateDocumentationFile`.** Deliberate: xUnit test classes
+  are public with no XML doc comments, and `CS1591` + `TreatWarningsAsErrors` would otherwise fail
+  the build on every test method. See `StopwatchApp.Tests/StopwatchApp.Tests.csproj`.
+- **2026-09-09 — CA1707 suppressed in the test project.** xUnit test names follow the
+  `MethodUnderTest_Scenario_ExpectedResult` convention, which requires underscores; CA1707 (no
+  underscores in identifiers) is suppressed once, module-scoped, via
+  `StopwatchApp.Tests/GlobalSuppressions.cs`. This is also the project's test-naming convention,
+  otherwise unstated in §13.
+- **2026-09-09 — Visibility vs. XML docs.** §5 requires XML docs only on public members of
+  `Services/`/`Formatting/`, but `GenerateDocumentationFile` (§6) makes `CS1591` fire on *any*
+  undocumented public member, project-wide. Resolved rule: types that are part of §3.1's contract
+  (`Services/`, `Formatting/`, `Theme/`, the record models) are `public` with XML docs; app-internal
+  plumbing (`Program`) is `internal`. `MainForm` is `public` with minimal docs since it's referenced
+  from tests.
+- **2026-09-10 — Models are one-file-per-record, not `Models.cs`.** The S1–S3 roadmap stage names a
+  single `StopwatchApp/Models.cs`; §5's "one type per file" is the authoritative rule and wins, so
+  the three records live in `StopwatchApp/Models/{StopwatchRecord,Lap,PausedSession}.cs` under
+  namespace `StopwatchApp.Models`. §3's layout tree reflects this.
+- **2026-09-10 — `Database` construction shape.** §3.1 fixes `IStopwatchStore` but not how
+  `Database` itself is built. Settled: `public Database(string databasePath)` (explicit path, so
+  tests can point at a temp file instead of `%LOCALAPPDATA%`), `static string DefaultDatabasePath`
+  (the real `%LOCALAPPDATA%\StopwatchApp\stopwatch.db` path), and `Task InitializeAsync()` (opens
+  one long-lived `SqliteConnection`, idempotently runs both `CREATE TABLE IF NOT EXISTS`
+  statements). Callers `new` it and `await InitializeAsync()` once at startup.
+- **2026-09-10 — CA1031 suppressed once, class-scoped, on `Database`.** §9's swallow-everything
+  design requires `catch (Exception)` in every storage method; a single class-level
+  `[SuppressMessage("Design", "CA1031:...")]` covers all of them rather than six repeated pragmas,
+  which is still narrow (one class, one rule) per §6's "never a blanket `<NoWarn>`" rule.
+- **2026-09-10 — `SqliteConnection.ClearPool` required on dispose.** Microsoft.Data.Sqlite pools
+  connections by default: disposing a `SqliteConnection` returns it to the pool rather than
+  releasing the OS file handle, which left the database file locked immediately after
+  `Database.DisposeAsync()` (surfaced by `DatabaseTests`' temp-file cleanup failing with
+  `IOException`). Fixed by calling `SqliteConnection.ClearPool(_connection)` right after
+  `DisposeAsync()` in `Database.DisposeAsync`. Anyone adding a second `Database`-like consumer of
+  the same connection string should know pooling is on by default.
+- **2026-09-10 — Test project's `IAsyncLifetime` uses `Task`, not `ValueTask`.** The installed
+  xUnit is v2 (`2.9.3`), where `IAsyncLifetime.InitializeAsync`/`DisposeAsync` return `Task`; xUnit
+  v3 changed this to `ValueTask`. `DatabaseTests` needs the `Task` signature to compile — relevant
+  if this project ever upgrades to xUnit v3.
+- **2026-09-10 — CA1001 suppressed on `DatabaseTests`.** The class owns a disposable `Database`
+  field but isn't itself `IDisposable`/`IAsyncDisposable` — disposal happens through xUnit's
+  `IAsyncLifetime.DisposeAsync` convention instead, which the analyzer doesn't recognize. Suppressed
+  once, class-scoped, with a justification citing this.
