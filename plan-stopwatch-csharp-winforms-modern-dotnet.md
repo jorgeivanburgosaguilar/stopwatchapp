@@ -449,7 +449,7 @@ log for anything discovered or decided while executing a stage — check it alon
 | S3 Database | ✅ Done | 2026-09-10 | + `SqliteConnection.ClearPool` fix (see `AGENTS.md` §17) |
 | S3a Dapper + schema versioning | ✅ Done | 2026-09-10 | + `InitializeAsync` double-call fix (see `AGENTS.md` §17) |
 | S4 StopwatchTimer | ✅ Done | 2026-09-10 | |
-| S5 StopwatchControl | ⬜ Not started | — | |
+| S5 StopwatchControl | ✅ Done | 2026-09-10 | |
 | S6 RecordsListControl + ClearRecordsDialog | ⬜ Not started | — | |
 | S7 MainForm | ⬜ Not started | — | |
 | S8 TrayIconService | ⬜ Not started | — | |
@@ -750,7 +750,7 @@ S3a sits on the critical path between S3 and S4 — it is not part of a parallel
 - **Out of scope:** all UI — this class must compile and be fully tested with zero WinForms
   references.
 
-### S5 — `StopwatchControl`
+### S5 — `StopwatchControl` ✅ Done
 
 - **Depends on:** S1 (`TimeFormat`), S2 (`Palette`), S4 (`StopwatchTimer`).
 - **Files:** `StopwatchApp/Controls/StopwatchControl.cs` (+ designer file if using the WinForms
@@ -760,12 +760,30 @@ S3a sits on the critical path between S3 and S4 — it is not part of a parallel
   `System.Windows.Forms.Timer` (1000 ms, enabled only while `IsRunning`) that calls
   `StopwatchTimer.Tick()`. Owns a `StopwatchTimer` instance internally; exposes it or proxies its
   events — agent's call, but `MainForm` (S7) must not need to reach into `StopwatchTimer` state
-  directly for anything the control already displays.
+  directly for anything the control already displays. Built as pure code (no `.Designer.cs` split —
+  no interactive WinForms Designer available in an agent environment). Button `Click` handlers call
+  `UpdateDisplay()` explicitly after their own (non-`ConfigureAwait(false)`) `await`, rather than
+  subscribing it to `StopwatchTimer`'s events, since those events fire from inside the timer's own
+  `ConfigureAwait(false)` continuations and could otherwise touch controls off the UI thread — see
+  `AGENTS.md` §5/§17, dated 2026-09-10. The monospace font is resolved at runtime (`Cascadia Mono`
+  if installed, else `Consolas`) rather than hardcoded. `StopwatchControl.DarkMode` (default
+  `false`) exists so S12 can wire real OS dark-mode detection later; `Palette` is already applied
+  using it.
 - **Public interface:** a `UserControl` subclass; exact member shape is this stage's judgment call,
   but it must expose enough for S7 to read `Laps`/`Records` for `RecordsListControl` and to know
-  when a paused session was restored (to show/hide the note).
+  when a paused session was restored (to show/hide the note). Settled shape: constructor
+  `StopwatchControl(IStopwatchStore store, TimeProvider time)`; `public StopwatchTimer Timer { get; }`
+  (S7 reads `Timer.Laps`/`Timer.Records`/`Timer.RestoredPausedAtMs` directly rather than the control
+  proxying each one); `public bool DarkMode { get; set; }`; `public Task RestoreAsync()` (delegates
+  to `Timer.RestoreAsync()` then refreshes the display — S7 calls this one, not `Timer.RestoreAsync()`
+  directly, so the UI updates).
 - **Done when:** manual/visual check that all three button rows from §2.6 render correctly and
-  that the timer disposes cleanly on control disposal (no ticks fire after teardown).
+  that the timer disposes cleanly on control disposal (no ticks fire after teardown). No interactive
+  display was available in the environment that built this stage, so the visual render itself is
+  unverified — verify it manually before shipping (§6's tray/hotkey manual-check precedent). The
+  build-clean/analyzer-clean/test-green portions of "done" are verified: `dotnet build -c Release`
+  zero warnings, `dotnet test` all 40 passing (unchanged — S4 already covers everything this control
+  delegates to; no new automated tests were needed for this stage).
 - **Owns acceptance criteria:** "Lap button exists only while running" (UI half, absent at idle
   and while paused).
 - **Out of scope:** records/laps list rendering (S6), tray (S8).

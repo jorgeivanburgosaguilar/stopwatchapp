@@ -222,6 +222,14 @@ Run after **every** completed change, before presenting the result as done:
   error handling.
 - All cross-thread UI updates go through `Control.Invoke` — tray icon and global hotkey callbacks
   can arrive off the UI thread.
+- UI event handlers that `await` a `Services/` method (e.g. `StopwatchTimer.PauseAsync`) must not
+  use `ConfigureAwait(false)` on that outer `await` — letting it capture the UI
+  `SynchronizationContext` is what guarantees code after the `await` (a `UpdateDisplay()`-style
+  refresh) runs back on the UI thread, even though the awaited method's own internals use
+  `ConfigureAwait(false)` (§9) and may complete off-thread. For the same reason, controls must not
+  subscribe UI-mutating code directly to a `Services/` type's events (`StopwatchTimer.OnPause`, etc.)
+  — those fire from inside the service's own `ConfigureAwait(false)` continuation and may not be on
+  the UI thread; call the refresh explicitly after the awaited call instead.
 - XML doc comments on every public member of `Services/` and `Formatting/`.
 - Every format/parse call passes `CultureInfo.InvariantCulture` explicitly (CA1305 flags
   omissions).
@@ -938,3 +946,23 @@ that now carries the actual rule.
   stay frozen at its last value while paused (§8.3's `Pause()` comment) — computing
   `Now - StartTime` unconditionally would silently overwrite the frozen value if the UI timer (S5)
   ever ticked while not running. `StopwatchTimer.Tick()` returns immediately when `!IsRunning`.
+- **2026-09-10 — S5: `StopwatchControl` does not subscribe UI updates to `StopwatchTimer`'s events.**
+  `PauseAsync`/`StopAsync`/`RestoreAsync` use `ConfigureAwait(false)` internally (§9), so the
+  continuation that invokes `OnPause`/`OnStop` can resume off the UI thread — wiring
+  `Timer.OnPause += UpdateDisplay` etc. directly would risk a cross-thread control-property write.
+  Instead each button `Click` handler calls its `StopwatchTimer` method, then calls `UpdateDisplay()`
+  itself right after the `await` — since the *handler's own* await has no `ConfigureAwait(false)`,
+  it resumes on the captured UI `SynchronizationContext` regardless of what thread the awaited call
+  completed on. `System.Windows.Forms.Timer.Tick` is exempt (it always fires on the UI thread), so
+  its handler calls `Timer.Tick()` + `UpdateDisplay()` directly. See §3.1/§8.5.
+- **2026-09-10 — S5: dark-mode detection deferred to S12; `StopwatchControl` exposes a `DarkMode`
+  bool.** `Theme/Palette.cs` (§11) takes an explicit `dark` bool per call, but nothing wires the
+  real OS setting yet — that is S12's stated job ("apply Palette to every custom-painted surface").
+  `StopwatchControl.DarkMode` (default `false`) lets S12 flip it once real detection exists, without
+  S5 having to guess at that mechanism now. `[DesignerSerializationVisibility(Hidden)]` is required
+  on it (WFO1000) since the control isn't designer-serialized.
+- **2026-09-10 — S5: monospace font resolved at runtime, not hardcoded.** §8.5 allows either
+  "Cascadia Mono or Consolas." `StopwatchControl` checks `System.Drawing.Text.InstalledFontCollection`
+  for "Cascadia Mono" and falls back to "Consolas" (present on all supported Windows 11 installs)
+  if it's absent, rather than hardcoding one and risking a silent GDI substitution to a
+  non-monospace default font.
