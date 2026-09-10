@@ -157,6 +157,93 @@ public sealed class DatabaseTests : IAsyncLifetime
     Assert.Null(loaded);
   }
 
+  [Fact]
+  public async Task InitializeAsync_OnFreshDatabase_StampsCurrentSchemaVersion()
+  {
+    long userVersion = await ReadUserVersionAsync();
+
+    Assert.Equal(SchemaMigrations.Current, userVersion);
+  }
+
+  [Fact]
+  public async Task InitializeAsync_OnLegacyDatabaseWithNoVersionStamp_AdoptsItAsV1AndKeepsData()
+  {
+    // Build a database the pre-versioning way: both CREATE TABLE statements, one row, and no
+    // PRAGMA user_version stamp (defaults to 0) — simulating a database created by an earlier
+    // build of this app, before schema versioning existed.
+    await _database.DisposeAsync();
+    if (File.Exists(_databasePath))
+    {
+      File.Delete(_databasePath);
+    }
+
+    await using (SqliteConnection legacyConnection = new($"Data Source={_databasePath}"))
+    {
+      await legacyConnection.OpenAsync();
+      await using SqliteCommand createTables = legacyConnection.CreateCommand();
+      createTables.CommandText = """
+        CREATE TABLE IF NOT EXISTS records (
+          id             INTEGER PRIMARY KEY AUTOINCREMENT,
+          startTimestamp INTEGER NOT NULL,
+          endTimestamp   INTEGER NOT NULL,
+          elapsedMinutes INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS paused_session (
+          id               INTEGER PRIMARY KEY CHECK (id = 1),
+          elapsedTime      INTEGER NOT NULL,
+          sessionStartTime INTEGER NOT NULL,
+          lapsJson         TEXT    NOT NULL,
+          lastLapElapsed   INTEGER NOT NULL,
+          lastLapTimestamp INTEGER NOT NULL,
+          pausedAt         INTEGER NOT NULL
+        );
+        """;
+      await createTables.ExecuteNonQueryAsync();
+
+      await using SqliteCommand insertRow = legacyConnection.CreateCommand();
+      insertRow.CommandText = """
+        INSERT INTO records (startTimestamp, endTimestamp, elapsedMinutes)
+        VALUES (0, 60000, 1);
+        """;
+      await insertRow.ExecuteNonQueryAsync();
+    }
+
+    _database = new Database(_databasePath);
+    await _database.InitializeAsync();
+
+    IReadOnlyList<StopwatchRecord> records = await _database.GetAllRecordsAsync();
+    long userVersion = await ReadUserVersionAsync();
+
+    Assert.Equal(SchemaMigrations.Current, userVersion);
+    StopwatchRecord record = Assert.Single(records);
+    Assert.Equal(60000, record.EndTimestamp);
+  }
+
+  [Fact]
+  public async Task InitializeAsync_CalledTwice_IsIdempotent()
+  {
+    await _database.SaveRecordAsync(0, 1000, 60_000);
+
+    await _database.InitializeAsync();
+
+    IReadOnlyList<StopwatchRecord> records = await _database.GetAllRecordsAsync();
+    long userVersion = await ReadUserVersionAsync();
+    Assert.Equal(SchemaMigrations.Current, userVersion);
+    Assert.Single(records);
+  }
+
+  [Fact]
+  public async Task GetAllRecordsAsync_MapsEveryColumnToItsOwnMember()
+  {
+    await _database.SaveRecordAsync(startTimestamp: 111, endTimestamp: 999_222, elapsedMs: 180_000);
+
+    StopwatchRecord record = Assert.Single(await _database.GetAllRecordsAsync());
+
+    Assert.Equal(111, record.StartTimestamp);
+    Assert.Equal(999_222, record.EndTimestamp);
+    Assert.Equal(3, record.ElapsedMinutes);
+  }
+
   private async Task CorruptLapsJsonAsync()
   {
     await using SqliteConnection connection = new($"Data Source={_databasePath}");
@@ -164,5 +251,15 @@ public sealed class DatabaseTests : IAsyncLifetime
     await using SqliteCommand command = connection.CreateCommand();
     command.CommandText = "UPDATE paused_session SET lapsJson = 'not valid json' WHERE id = 1;";
     await command.ExecuteNonQueryAsync();
+  }
+
+  private async Task<long> ReadUserVersionAsync()
+  {
+    await using SqliteConnection connection = new($"Data Source={_databasePath}");
+    await connection.OpenAsync();
+    await using SqliteCommand command = connection.CreateCommand();
+    command.CommandText = "PRAGMA user_version;";
+    object? result = await command.ExecuteScalarAsync();
+    return result is long version ? version : 0;
   }
 }

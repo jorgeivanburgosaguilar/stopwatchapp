@@ -368,7 +368,11 @@ then exits immediately.
 ## 4. Data layer
 
 SQLite via `Microsoft.Data.Sqlite`, database file at `%LOCALAPPDATA%\StopwatchApp\stopwatch.db`,
-created on first run if it doesn't exist.
+created on first run if it doesn't exist. Rows are mapped via **Dapper** — by column name, against
+the model records' own positional constructors — not hand-written ordinal `reader.Get*` calls.
+Dapper sits on top of `Microsoft.Data.Sqlite`'s `SqliteConnection`, not in place of it: no design-time
+tool, no generated code. Parameters use `@name`, not the `$name` form the original S3 implementation
+used (Dapper doesn't recognize `$`).
 
 ```sql
 CREATE TABLE IF NOT EXISTS records (
@@ -388,6 +392,11 @@ CREATE TABLE IF NOT EXISTS paused_session (
   pausedAt         INTEGER NOT NULL
 );
 ```
+
+This DDL is migration 1 in `SchemaMigrations.cs` (S3a), applied and stamped via `PRAGMA user_version`
+rather than run unconditionally on every startup — see `AGENTS.md` §9 "Schema versioning" for the
+full rule set (append-only migrations, why v1 alone keeps `IF NOT EXISTS`, the `user_version`
+interpolation caveat).
 
 API surface — deliberately minimal. **No update, no delete-by-id, no range query:**
 
@@ -419,6 +428,8 @@ Restore runs once at startup, after the database connection opens: if a paused s
 UI shows the frozen elapsed time, a `Continue` button, the restored laps, and the "resumed from a
 pause" note (§2.6). **Time spent away while the app was closed is never counted** — resuming
 re-anchors `StartTime` from the current clock, exactly as an in-app pause/resume does.
+`StopwatchTimer.RestoreAsync` (S4) is what runs this: it loads `Records` first (nothing else in its
+fixed interface does), then checks for a saved paused session and restores it if present.
 
 ---
 
@@ -436,7 +447,8 @@ log for anything discovered or decided while executing a stage — check it alon
 | S1 TimeFormat | ✅ Done | 2026-09-10 | |
 | S2 Palette | ✅ Done | 2026-09-10 | |
 | S3 Database | ✅ Done | 2026-09-10 | + `SqliteConnection.ClearPool` fix (see `AGENTS.md` §17) |
-| S4 StopwatchTimer | ⬜ Not started | — | |
+| S3a Dapper + schema versioning | ✅ Done | 2026-09-10 | + `InitializeAsync` double-call fix (see `AGENTS.md` §17) |
+| S4 StopwatchTimer | ✅ Done | 2026-09-10 | |
 | S5 StopwatchControl | ⬜ Not started | — | |
 | S6 RecordsListControl + ClearRecordsDialog | ⬜ Not started | — | |
 | S7 MainForm | ⬜ Not started | — | |
@@ -464,7 +476,8 @@ StopwatchApp/
     StopwatchTimer.cs      tick loop + transitions (§2.2-2.3), UI-free and unit-testable
     TrayIconService.cs     NotifyIcon, rendered icon (§3.1), context menu (§3.2)
     HotkeyService.cs       RegisterHotKey P/Invoke (§3.4)
-    Database.cs            SQLite access (§4)
+    Database.cs            SQLite access via Dapper (§4)
+    SchemaMigrations.cs    versioned schema steps, PRAGMA user_version (§4)
   Formatting/
     TimeFormat.cs           the four formatters (§2.5)
   Theme/
@@ -474,7 +487,7 @@ StopwatchApp.Tests/        xUnit — formatters, transitions, database round-tri
 
 Each stage below is sized to be **one agent session**: a self-contained unit of work with a fixed
 public interface, an explicit dependency list, and a done-condition. Every stage ends with the
-`AGENTS.md` §4 post-change checklist — `dotnet format` → `dotnet format --verify-no-changes` →
+`AGENTS.md` §4 post-change checklist — `csharpier format .` → `csharpier check .` →
 `dotnet build -c Release` (zero warnings) → `dotnet test` (all green) — before it counts as done.
 Stages with no dependency edge between them may be dispatched to parallel agents; run them
 sequentially if only one agent is available.
@@ -486,6 +499,9 @@ S0 scaffold
  ├── S1 TimeFormat ────┐
  ├── S2 Palette ───────┤
  └── S3 Database ──┐   │
+                   ▼   │
+              S3a Dapper + schema versioning
+                   │   │
                    ▼   │
               S4 StopwatchTimer
                    │   │
@@ -508,6 +524,7 @@ S0 scaffold
 ```
 
 Parallel waves: **{S1, S2, S3}** after S0 · **{S5, S6}** after S4 · **{S8, S10, S11}** after S7.
+S3a sits on the critical path between S3 and S4 — it is not part of a parallel wave.
 
 ### Integration seams (fixed here so parallel stages don't diverge)
 
@@ -636,15 +653,62 @@ Parallel waves: **{S1, S2, S3}** after S0 · **{S5, S6}** after S4 · **{S8, S10
   returns `null` ... with no exception thrown."
 - **Out of scope:** any caller — `StopwatchTimer` (S4) is the only consumer, wired next.
 
-### S4 — `StopwatchTimer`
+### S3a — Dapper + schema versioning ✅ Done
 
-- **Depends on:** S3 (`IStopwatchStore`).
-- **Files:** `StopwatchApp/Services/StopwatchTimer.cs`, `StopwatchApp.Tests/StopwatchTimerTests.cs`.
+- **Depends on:** S3.
+- **Files:** `StopwatchApp/Services/SchemaMigrations.cs` (new); `StopwatchApp/Services/Database.cs`
+  (converted to Dapper); `StopwatchApp/AssemblyInfo.cs` (new — `InternalsVisibleTo`);
+  `StopwatchApp/StopwatchApp.csproj` (+`Dapper` package reference);
+  `StopwatchApp.Tests/DatabaseTests.cs` (+4 tests).
+- **Why:** `Database.cs` mapped rows by ordinal (`reader.GetInt64(0..3)`) and ran its two
+  `CREATE TABLE IF NOT EXISTS` statements unconditionally, with no schema-evolution path. An
+  ORM (EF Core) was evaluated and rejected at this scale — 2 tables, 6 fixed queries, no
+  joins/relationships/transactions, `IStopwatchStore` is fixed architecture (§3.1's component
+  contracts) — and its generated migrations would fail this repo's `CS1591`/`TreatWarningsAsErrors`/
+  `csharpier check .` gates. Adopted Dapper (name-based mapping, no design-time tooling) plus a
+  hand-written `PRAGMA user_version` migration runner instead. See `AGENTS.md` §17, dated 2026-09-10,
+  for the full record.
+- **Build:** `SchemaMigrations.All` — an ordered, append-only `IReadOnlyList<Migration>`; migration 1
+  is §4's DDL verbatim (keeps `IF NOT EXISTS` so a pre-existing, unstamped database adopts it as its
+  v1 baseline without data loss). `Database.InitializeAsync` reads `PRAGMA user_version`, applies
+  every not-yet-applied migration in order inside its own transaction, then stamps the version — and
+  is idempotent: a second call does not reopen the connection. The six `IStopwatchStore` methods move
+  to Dapper's `ExecuteAsync`/`QueryAsync`/`QuerySingleOrDefaultAsync`, mapping by column name against
+  the existing model records; `PausedSession.Laps` still round-trips through `lapsJson` via a private
+  `PausedSessionRow` (not part of the public model). SQL parameter placeholders move from `$name` to
+  `@name` (Dapper doesn't recognize `$`). Every method keeps its try/catch swallow and the class-scoped
+  `CA1031` suppression, unchanged (§4's explicit, commented design).
+- **Public interface:** unchanged — `IStopwatchStore` and the three model records are exactly as S3
+  left them. `Database`'s public members (`Database(string)`, `DefaultDatabasePath`, `InitializeAsync`,
+  `DisposeAsync`) are also unchanged; `SchemaMigrations`/`Migration`/`PausedSessionRow` are `internal`
+  or `private`.
+- **Done when:** all 9 of S3's original round-trip tests pass unmodified, plus: a fresh database
+  stamps `SchemaMigrations.Current`; a database built the pre-versioning way (tables present,
+  `user_version` left at 0, one row inserted) opens through `Database` with the row intact and ends
+  up stamped current; calling `InitializeAsync()` twice is a no-op the second time; a saved record's
+  four columns each round-trip to the correct member (not just two, so a column transposition would
+  fail this test even though it passed S3's narrower assertions).
+- **Owns acceptance criteria:** "A database created by an earlier build (tables present, no
+  `user_version` stamp) opens without data loss and ends up stamped at the current schema version."
+- **Out of scope:** any new table or column — none is planned through S13; `IStopwatchStore`'s
+  surface; any caller — still unconsumed outside the test project, exactly as S3 left it.
+
+### S4 — `StopwatchTimer` ✅ Done
+
+- **Depends on:** S3a (`IStopwatchStore` — unchanged by S3a, but S3a is the version of `Database.cs`
+  to build against).
+- **Files:** `StopwatchApp/Services/StopwatchTimer.cs`, `StopwatchApp.Tests/StopwatchTimerTests.cs`,
+  `StopwatchApp.Tests/FakeStopwatchStore.cs` (new — an in-memory `IStopwatchStore` so the state
+  machine is tested without a temp SQLite database); `StopwatchApp.Tests/StopwatchApp.Tests.csproj`
+  (+`Microsoft.Extensions.TimeProvider.Testing` 10.10.0, for `FakeTimeProvider`).
 - **Build:** the full state model (§2.1) and transitions (§2.3) exactly as specified, including
   the intentional behaviors in §2.4 — reproduce the pseudocode logic verbatim, do not
   "improve" it. Constructor takes `IStopwatchStore` and `TimeProvider`. Exposes `OnStart`,
   `OnPause`, `OnTick`, `OnStop` events with no-op defaults (§2.7), plus a `RecordsChanged` event
-  per the "records ownership" integration seam above.
+  per the "records ownership" integration seam above. `Tick()` no-ops while not running (keeps
+  `ElapsedMs` frozen while paused and satisfies §2.7's "`OnTick` never fires while paused or
+  stopped"). `RestoreAsync` loads `Records` before checking for a saved paused session — see
+  `AGENTS.md` §17, dated 2026-09-10, for the full rationale on both.
 - **Public interface:**
   ```csharp
   public sealed class StopwatchTimer
@@ -866,6 +930,8 @@ a running window (tray, hotkeys). Each bullet is tagged with the §5 stage that 
   0, 1, 2 (by insertion) read back as 2, 1, 0 (newest first).
 - **[S3]** A corrupt or missing saved-session row returns `null` from `LoadPausedSessionAsync()`
   with no exception thrown.
+- **[S3a]** A database created by an earlier build (tables present, no `user_version` stamp) opens
+  without data loss and ends up stamped at the current schema version.
 - **[S8/S9]** Tray: the icon updates while running and reflects the current hour/minute; the
   tooltip shows the full `HH:MM:SS`; both close and minimize hide the window and remove its
   taskbar button; Exit terminates the process with no icon left behind in the tray.

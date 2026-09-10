@@ -1,5 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
+using Dapper;
 using Microsoft.Data.Sqlite;
 using StopwatchApp.Models;
 
@@ -7,6 +8,8 @@ namespace StopwatchApp.Services;
 
 /// <summary>
 /// SQLite-backed implementation of <see cref="IStopwatchStore"/>. See AGENTS.md §9 for the schema.
+/// Rows are mapped via Dapper, by column name, against the model records' constructors — see
+/// <see cref="SchemaMigrations"/> for how the schema itself is versioned and applied.
 /// </summary>
 [SuppressMessage(
   "Design",
@@ -40,44 +43,47 @@ public sealed class Database : IStopwatchStore, IAsyncDisposable
     );
 
   /// <summary>
-  /// Opens the database connection and creates the schema if it does not already exist. Call once
-  /// at startup, after construction; idempotent across repeated calls.
+  /// Opens the database connection and brings the schema up to <see cref="SchemaMigrations.Current"/>
+  /// by applying every not-yet-applied entry in <see cref="SchemaMigrations.All"/>, in order. Call
+  /// once at startup, after construction; idempotent across repeated calls — a database already at
+  /// the current version applies nothing.
   /// </summary>
   public async Task InitializeAsync()
   {
-    string? directory = Path.GetDirectoryName(_databasePath);
-    if (!string.IsNullOrEmpty(directory))
+    if (_connection is null)
     {
-      Directory.CreateDirectory(directory);
+      string? directory = Path.GetDirectoryName(_databasePath);
+      if (!string.IsNullOrEmpty(directory))
+      {
+        Directory.CreateDirectory(directory);
+      }
+
+      _connection = new SqliteConnection($"Data Source={_databasePath}");
+      await _connection.OpenAsync().ConfigureAwait(false);
     }
 
-    _connection = new SqliteConnection($"Data Source={_databasePath}");
-    await _connection.OpenAsync().ConfigureAwait(false);
+    long appliedVersion = await _connection
+      .ExecuteScalarAsync<long>("PRAGMA user_version;")
+      .ConfigureAwait(false);
 
-    await using SqliteCommand createRecords = _connection.CreateCommand();
-    createRecords.CommandText = """
-      CREATE TABLE IF NOT EXISTS records (
-        id             INTEGER PRIMARY KEY AUTOINCREMENT,
-        startTimestamp INTEGER NOT NULL,
-        endTimestamp   INTEGER NOT NULL,
-        elapsedMinutes INTEGER NOT NULL
-      );
-      """;
-    await createRecords.ExecuteNonQueryAsync().ConfigureAwait(false);
+    foreach (Migration migration in SchemaMigrations.All)
+    {
+      if (migration.Version <= appliedVersion)
+      {
+        continue;
+      }
 
-    await using SqliteCommand createPausedSession = _connection.CreateCommand();
-    createPausedSession.CommandText = """
-      CREATE TABLE IF NOT EXISTS paused_session (
-        id               INTEGER PRIMARY KEY CHECK (id = 1),
-        elapsedTime      INTEGER NOT NULL,
-        sessionStartTime INTEGER NOT NULL,
-        lapsJson         TEXT    NOT NULL,
-        lastLapElapsed   INTEGER NOT NULL,
-        lastLapTimestamp INTEGER NOT NULL,
-        pausedAt         INTEGER NOT NULL
-      );
-      """;
-    await createPausedSession.ExecuteNonQueryAsync().ConfigureAwait(false);
+      await using SqliteTransaction transaction = (SqliteTransaction)
+        await _connection.BeginTransactionAsync().ConfigureAwait(false);
+      await _connection.ExecuteAsync(migration.Sql, transaction: transaction).ConfigureAwait(false);
+      // PRAGMA user_version cannot be parameterized (SQLite does not accept a bound parameter in
+      // pragma position); migration.Version is a hardcoded long from SchemaMigrations, never
+      // user input, so this interpolation carries no injection surface.
+      await _connection
+        .ExecuteAsync($"PRAGMA user_version = {migration.Version};", transaction: transaction)
+        .ConfigureAwait(false);
+      await transaction.CommitAsync().ConfigureAwait(false);
+    }
   }
 
   /// <inheritdoc />
@@ -87,20 +93,24 @@ public sealed class Database : IStopwatchStore, IAsyncDisposable
     {
       SqliteConnection connection = RequireConnection();
 
-      await using SqliteCommand insert = connection.CreateCommand();
-      insert.CommandText = """
-        INSERT INTO records (startTimestamp, endTimestamp, elapsedMinutes)
-        VALUES ($startTimestamp, $endTimestamp, $elapsedMinutes);
-        """;
-      insert.Parameters.AddWithValue("$startTimestamp", startTimestamp);
-      insert.Parameters.AddWithValue("$endTimestamp", endTimestamp);
-      insert.Parameters.AddWithValue("$elapsedMinutes", elapsedMs / 60000);
-      await insert.ExecuteNonQueryAsync().ConfigureAwait(false);
+      await connection
+        .ExecuteAsync(
+          """
+          INSERT INTO records (startTimestamp, endTimestamp, elapsedMinutes)
+          VALUES (@startTimestamp, @endTimestamp, @elapsedMinutes);
+          """,
+          new
+          {
+            startTimestamp,
+            endTimestamp,
+            elapsedMinutes = elapsedMs / 60000,
+          }
+        )
+        .ConfigureAwait(false);
 
-      await using SqliteCommand lastId = connection.CreateCommand();
-      lastId.CommandText = "SELECT last_insert_rowid();";
-      object? result = await lastId.ExecuteScalarAsync().ConfigureAwait(false);
-      return result is long id ? id : 0;
+      return await connection
+        .ExecuteScalarAsync<long>("SELECT last_insert_rowid();")
+        .ConfigureAwait(false);
     }
     catch (Exception)
     {
@@ -115,29 +125,16 @@ public sealed class Database : IStopwatchStore, IAsyncDisposable
     {
       SqliteConnection connection = RequireConnection();
 
-      await using SqliteCommand command = connection.CreateCommand();
-      command.CommandText = """
-        SELECT id, startTimestamp, endTimestamp, elapsedMinutes
-        FROM records
-        ORDER BY id DESC;
-        """;
-
-      List<StopwatchRecord> records = [];
-      await using SqliteDataReader reader = await command
-        .ExecuteReaderAsync()
+      IEnumerable<StopwatchRecord> records = await connection
+        .QueryAsync<StopwatchRecord>(
+          """
+          SELECT id, startTimestamp, endTimestamp, elapsedMinutes
+          FROM records
+          ORDER BY id DESC;
+          """
+        )
         .ConfigureAwait(false);
-      while (await reader.ReadAsync().ConfigureAwait(false))
-      {
-        records.Add(
-          new StopwatchRecord(
-            reader.GetInt64(0),
-            reader.GetInt64(1),
-            reader.GetInt64(2),
-            reader.GetInt64(3)
-          )
-        );
-      }
-      return records;
+      return records.AsList();
     }
     catch (Exception)
     {
@@ -151,9 +148,7 @@ public sealed class Database : IStopwatchStore, IAsyncDisposable
     try
     {
       SqliteConnection connection = RequireConnection();
-      await using SqliteCommand command = connection.CreateCommand();
-      command.CommandText = "DELETE FROM records;";
-      await command.ExecuteNonQueryAsync().ConfigureAwait(false);
+      await connection.ExecuteAsync("DELETE FROM records;").ConfigureAwait(false);
     }
     catch (Exception)
     {
@@ -169,27 +164,32 @@ public sealed class Database : IStopwatchStore, IAsyncDisposable
       SqliteConnection connection = RequireConnection();
       string lapsJson = JsonSerializer.Serialize(session.Laps);
 
-      await using SqliteCommand command = connection.CreateCommand();
-      command.CommandText = """
-        INSERT INTO paused_session
-          (id, elapsedTime, sessionStartTime, lapsJson, lastLapElapsed, lastLapTimestamp, pausedAt)
-        VALUES
-          (1, $elapsedTime, $sessionStartTime, $lapsJson, $lastLapElapsed, $lastLapTimestamp, $pausedAt)
-        ON CONFLICT(id) DO UPDATE SET
-          elapsedTime = excluded.elapsedTime,
-          sessionStartTime = excluded.sessionStartTime,
-          lapsJson = excluded.lapsJson,
-          lastLapElapsed = excluded.lastLapElapsed,
-          lastLapTimestamp = excluded.lastLapTimestamp,
-          pausedAt = excluded.pausedAt;
-        """;
-      command.Parameters.AddWithValue("$elapsedTime", session.ElapsedTime);
-      command.Parameters.AddWithValue("$sessionStartTime", session.SessionStartTime);
-      command.Parameters.AddWithValue("$lapsJson", lapsJson);
-      command.Parameters.AddWithValue("$lastLapElapsed", session.LastLapElapsed);
-      command.Parameters.AddWithValue("$lastLapTimestamp", session.LastLapTimestamp);
-      command.Parameters.AddWithValue("$pausedAt", session.PausedAt);
-      await command.ExecuteNonQueryAsync().ConfigureAwait(false);
+      await connection
+        .ExecuteAsync(
+          """
+          INSERT INTO paused_session
+            (id, elapsedTime, sessionStartTime, lapsJson, lastLapElapsed, lastLapTimestamp, pausedAt)
+          VALUES
+            (1, @elapsedTime, @sessionStartTime, @lapsJson, @lastLapElapsed, @lastLapTimestamp, @pausedAt)
+          ON CONFLICT(id) DO UPDATE SET
+            elapsedTime = excluded.elapsedTime,
+            sessionStartTime = excluded.sessionStartTime,
+            lapsJson = excluded.lapsJson,
+            lastLapElapsed = excluded.lastLapElapsed,
+            lastLapTimestamp = excluded.lastLapTimestamp,
+            pausedAt = excluded.pausedAt;
+          """,
+          new
+          {
+            elapsedTime = session.ElapsedTime,
+            sessionStartTime = session.SessionStartTime,
+            lapsJson,
+            lastLapElapsed = session.LastLapElapsed,
+            lastLapTimestamp = session.LastLapTimestamp,
+            pausedAt = session.PausedAt,
+          }
+        )
+        .ConfigureAwait(false);
     }
     catch (Exception)
     {
@@ -204,41 +204,33 @@ public sealed class Database : IStopwatchStore, IAsyncDisposable
     {
       SqliteConnection connection = RequireConnection();
 
-      await using SqliteCommand command = connection.CreateCommand();
-      command.CommandText = """
-        SELECT elapsedTime, sessionStartTime, lapsJson, lastLapElapsed, lastLapTimestamp, pausedAt
-        FROM paused_session
-        WHERE id = 1;
-        """;
-
-      await using SqliteDataReader reader = await command
-        .ExecuteReaderAsync()
+      PausedSessionRow? row = await connection
+        .QuerySingleOrDefaultAsync<PausedSessionRow>(
+          """
+          SELECT elapsedTime, sessionStartTime, lapsJson, lastLapElapsed, lastLapTimestamp, pausedAt
+          FROM paused_session
+          WHERE id = 1;
+          """
+        )
         .ConfigureAwait(false);
-      if (!await reader.ReadAsync().ConfigureAwait(false))
+      if (row is null)
       {
         return null;
       }
 
-      long elapsedTime = reader.GetInt64(0);
-      long sessionStartTime = reader.GetInt64(1);
-      string lapsJson = reader.GetString(2);
-      long lastLapElapsed = reader.GetInt64(3);
-      long lastLapTimestamp = reader.GetInt64(4);
-      long pausedAt = reader.GetInt64(5);
-
-      List<Lap>? laps = JsonSerializer.Deserialize<List<Lap>>(lapsJson);
+      List<Lap>? laps = JsonSerializer.Deserialize<List<Lap>>(row.LapsJson);
       if (laps is null)
       {
         return null;
       }
 
       return new PausedSession(
-        elapsedTime,
-        sessionStartTime,
+        row.ElapsedTime,
+        row.SessionStartTime,
         laps,
-        lastLapElapsed,
-        lastLapTimestamp,
-        pausedAt
+        row.LastLapElapsed,
+        row.LastLapTimestamp,
+        row.PausedAt
       );
     }
     catch (Exception)
@@ -255,9 +247,9 @@ public sealed class Database : IStopwatchStore, IAsyncDisposable
     try
     {
       SqliteConnection connection = RequireConnection();
-      await using SqliteCommand command = connection.CreateCommand();
-      command.CommandText = "DELETE FROM paused_session WHERE id = 1;";
-      await command.ExecuteNonQueryAsync().ConfigureAwait(false);
+      await connection
+        .ExecuteAsync("DELETE FROM paused_session WHERE id = 1;")
+        .ConfigureAwait(false);
     }
     catch (Exception)
     {
@@ -284,4 +276,18 @@ public sealed class Database : IStopwatchStore, IAsyncDisposable
   private SqliteConnection RequireConnection() =>
     _connection
     ?? throw new InvalidOperationException("Database.InitializeAsync must be called before use.");
+
+  /// <summary>
+  /// The raw <c>paused_session</c> row shape, used only to receive Dapper's column mapping before
+  /// <see cref="LapsJson"/> is deserialized into <see cref="PausedSession.Laps"/>. Not part of the
+  /// public data model — <see cref="PausedSession"/> is.
+  /// </summary>
+  private sealed record PausedSessionRow(
+    long ElapsedTime,
+    long SessionStartTime,
+    string LapsJson,
+    long LastLapElapsed,
+    long LastLapTimestamp,
+    long PausedAt
+  );
 }

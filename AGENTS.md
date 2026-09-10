@@ -62,7 +62,8 @@ StopwatchApp/
     TrayIconService.cs     NotifyIcon, rendered icon, context menu (§10)
     HotkeyService.cs       RegisterHotKey P/Invoke (§10)
     IStopwatchStore.cs     the data-access interface (§3.1/§9)
-    Database.cs            SQLite access (§9)
+    Database.cs            SQLite access via Dapper (§9)
+    SchemaMigrations.cs    versioned schema steps, PRAGMA user_version (§9)
   Formatting/
     TimeFormat.cs          the four formatters (§8.4)
   Theme/
@@ -142,6 +143,9 @@ second; `StopwatchTimer` itself owns no WinForms `Timer`. This split is what mak
 (both through `IStopwatchStore`), and raises `RecordsChanged` on every change. `RecordsListControl`
 only renders from lists pushed to it and raises `ClearAllRequested`; it never reads
 `IStopwatchStore` itself. `MainForm` wires the two together and stays a thin orchestrator.
+`RestoreAsync` reloads `Records` (in addition to restoring a paused session, if any) so the list is
+populated before the caller ever reads it — a fresh `StopwatchTimer` has no other point at which
+`Records` is first loaded.
 
 **Other fixed shapes**, so they aren't re-derived differently by different agents:
 
@@ -557,7 +561,12 @@ Four events with no-op defaults so the control works standalone:
 ## 9. Data layer
 
 SQLite via `Microsoft.Data.Sqlite`, database file at `%LOCALAPPDATA%\StopwatchApp\stopwatch.db`,
-created on first run if it doesn't exist.
+created on first run if it doesn't exist. Rows are mapped via **Dapper** — by column name, against
+the model records' own positional constructors — not by hand-written ordinal `reader.Get*` calls.
+Dapper is a thin extension-method layer over `Microsoft.Data.Sqlite`'s `SqliteConnection`; it does
+not replace the provider, add a design-time tool, or generate any code, so it carries no build-gate
+cost. Parameters use SQLite's `@name` form (Dapper does not recognize the `$name` form used before
+this layer was introduced).
 
 ```sql
 CREATE TABLE IF NOT EXISTS records (
@@ -577,6 +586,31 @@ CREATE TABLE IF NOT EXISTS paused_session (
   pausedAt         INTEGER NOT NULL
 );
 ```
+
+This DDL is now **migration 1** in `SchemaMigrations.cs`, not code run unconditionally on every
+startup — see "Schema versioning" below.
+
+### Schema versioning
+
+`Database.InitializeAsync` brings the database up to date using SQLite's `PRAGMA user_version` as a
+version stamp, against the ordered, append-only list in `SchemaMigrations.All`:
+
+- Each entry is a `Migration(Version, Sql)`. On startup, every migration whose `Version` exceeds the
+  database's current `user_version` runs, in order, each inside its own transaction, then stamps
+  `user_version` to that migration's version.
+- **Never edit a shipped migration.** A schema change is always a new entry appended with the next
+  version number — editing an existing one silently no-ops on any database that already recorded
+  that version as applied.
+- **Migration 1 keeps `IF NOT EXISTS`; migration 2 onward does not.** Migration 1 reproduces the DDL
+  above verbatim so a database that predates schema versioning (already has both tables, but
+  `user_version = 0`) adopts them as its v1 baseline instead of failing on a duplicate table. Once
+  the version stamp exists, every later migration is guaranteed to run exactly once, so plain
+  `CREATE TABLE` / `ALTER TABLE` is correct and `IF NOT EXISTS` would only hide an ordering bug.
+- `PRAGMA user_version = N` cannot be parameterized; `N` always comes from the hardcoded `Version` on
+  a `Migration`, never user input, so the interpolated statement carries no injection surface (keep
+  the comment next to it saying so — this is exactly the shape `CA2100` flags).
+- `InitializeAsync` is idempotent: a second call against an already-open connection does not reopen
+  it, and a database already at `SchemaMigrations.Current` applies nothing.
 
 API surface — deliberately minimal, and it **is** `IStopwatchStore` (§3.1), which `Database`
 implements. **No update, no delete-by-id, no range query:**
@@ -731,6 +765,10 @@ xUnit, in a `StopwatchApp.Tests` project.
 - Every test must contain at least one assertion.
 - Database tests run against a temporary file-backed database created and deleted per test class —
   never against the real `%LOCALAPPDATA%` file.
+- Anything that depends only on `IStopwatchStore` (e.g. `StopwatchTimer`) is tested against
+  `StopwatchApp.Tests/FakeStopwatchStore.cs`, an in-memory fake, not a real `Database` — no temp
+  file, no SQLite, faster and simpler than round-tripping through disk for pure state-machine
+  behavior. Reuse it rather than adding a second fake.
 - §14's acceptance criteria are the test list. Implement those; don't invent a parallel suite that
   drifts from the spec.
 
@@ -758,6 +796,8 @@ xUnit, in a `StopwatchApp.Tests` project.
   (by insertion) read back as 2, 1, 0 (newest first).
 - A corrupt or missing saved-session row returns `null` from `LoadPausedSessionAsync()` with no
   exception thrown.
+- A database created by an earlier build (tables present, no `user_version` stamp) opens without
+  data loss and ends up stamped at the current schema version.
 - Tray: the icon updates while running and reflects the current hour/minute; the tooltip shows the
   full `HH:MM:SS`; both close and minimize hide the window and remove its taskbar button; Exit
   terminates the process with no icon left behind in the tray.
@@ -786,6 +826,8 @@ Rules:
   single-file, self-contained build (`-p:PublishSingleFile=true --self-contained true`) is a
   documented future option, not the current one — note in any future packaging PR that switching
   changes the runtime requirement (no separate Desktop Runtime install needed, larger output).
+  Dapper maps rows via runtime IL emit: single-file/self-contained publishing is unaffected, but
+  `PublishTrimmed` or NativeAOT (neither in scope) would need `Dapper.AOT` instead.
 - `bin/`, `obj/`, and `publish/` are git-ignored. The runtime `.db` file is user data and must
   never be committed.
 - No code signing (personal-use app). Windows SmartScreen may warn on first run for an unsigned,
@@ -856,3 +898,43 @@ that now carries the actual rule.
   field but isn't itself `IDisposable`/`IAsyncDisposable` — disposal happens through xUnit's
   `IAsyncLifetime.DisposeAsync` convention instead, which the analyzer doesn't recognize. Suppressed
   once, class-scoped, with a justification citing this.
+- **2026-09-10 — S3a: Dapper adopted, EF Core rejected.** Audited whether the hand-rolled
+  `Database.cs` (287 lines, ordinal `reader.Get*` mapping, no schema versioning) should move to a
+  dependency. EF Core was rejected at this scale: 2 tables, 6 fixed queries, no joins/relationships/
+  transactions, and `IStopwatchStore` is fixed architecture (§3.1) that no ORM would change — plus
+  its generated `Migrations/*.cs` fails `CS1591` under `GenerateDocumentationFile` +
+  `TreatWarningsAsErrors`, and fails `csharpier check .`. Adopted **Dapper** instead (name-based
+  column→constructor-parameter mapping, no design-time tooling, no generated code — see §9) plus a
+  hand-written `PRAGMA user_version` migration runner (`Services/SchemaMigrations.cs`) for the one
+  genuine gap an ORM doesn't fix by default: there was no schema-evolution path at all. SQL parameter
+  placeholders moved from SQLite's `$name` form (unrecognized by Dapper) to `@name`; the §9 DDL
+  itself is untouched and is now migration 1. `IStopwatchStore`'s six-method surface did not change.
+- **2026-09-10 — `SchemaMigrations` needs `InternalsVisibleTo`.** Kept `internal` (matching the
+  `Program` precedent, §17 above) to avoid the `CS1591` burden a `public` type would carry under
+  `GenerateDocumentationFile`, but `StopwatchApp.Tests` is a separate assembly and can't see
+  `internal` types without it. Added `[assembly: InternalsVisibleTo("StopwatchApp.Tests")]` in a new
+  `StopwatchApp/AssemblyInfo.cs`.
+- **2026-09-10 — `InitializeAsync` double-call bug found and fixed while writing S3a's idempotency
+  test.** The original implementation unconditionally did `_connection = new SqliteConnection(...)`
+  on every call; calling `InitializeAsync()` twice opened a second connection without disposing the
+  first, leaking a handle and leaving the file locked (surfaced as an `IOException` in test cleanup).
+  Fixed by only opening a connection when `_connection is null`; a second call now just re-checks
+  `PRAGMA user_version` against `SchemaMigrations.All` and applies nothing, since it's already
+  current.
+- **2026-09-10 — S4: `StopwatchTimer` built against `FakeStopwatchStore`, not a real `Database`.**
+  Added `Microsoft.Extensions.TimeProvider.Testing` 10.10.0 to `StopwatchApp.Tests.csproj` for
+  `FakeTimeProvider` (namespace `Microsoft.Extensions.Time.Testing`, confirmed via Context7 against
+  `/dotnet/extensions`). Since `StopwatchTimer` depends only on `IStopwatchStore` (§3.1), tests use a
+  new in-memory `FakeStopwatchStore` instead of a temp-file `Database` — no SQLite in the state-
+  machine test suite at all. See §13.
+- **2026-09-10 — `RestoreAsync` also reloads `Records`.** §3.1's public surface names `RestoreAsync`
+  only for restoring a paused session, but "records ownership" (§3.1) already commits
+  `StopwatchTimer` to owning the records list, and nothing else in the fixed interface ever
+  populates it — so a freshly constructed `StopwatchTimer` would otherwise expose an empty
+  `Records` list forever until the first `StopAsync`. `RestoreAsync` now loads `Records` first,
+  then checks for a saved paused session. See §3.1.
+- **2026-09-10 — `Tick()` is a no-op while not running.** §8.2's tick pseudocode has no explicit
+  guard, but §8.6 requires `OnTick` to never fire "while paused or stopped," and `ElapsedMs` must
+  stay frozen at its last value while paused (§8.3's `Pause()` comment) — computing
+  `Now - StartTime` unconditionally would silently overwrite the frozen value if the UI timer (S5)
+  ever ticked while not running. `StopwatchTimer.Tick()` returns immediately when `!IsRunning`.
