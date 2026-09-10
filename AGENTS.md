@@ -115,6 +115,7 @@ public sealed class StopwatchTimer
     public Task PauseAsync();
     public void Lap();
     public Task StopAsync();
+    public Task ClearRecordsAsync();
     public void Tick();                 // called once/second by the UI-side Timer
     public Task RestoreAsync();         // startup: loads a saved paused session, if any
 
@@ -990,3 +991,15 @@ that now carries the actual rule.
   exposes a `bool Dark` property (default `false`, `[DesignerSerializationVisibility(Hidden)]` to
   satisfy `WFO1000`) that reapplies that one color; wiring it to the live OS setting is S12's job,
   not this stage's. See §3.1.
+- **2026-09-10 — S7: records clearing stays owned by `StopwatchTimer`.** `IStopwatchStore` exposes
+  `ClearAllRecordsAsync`, but the timer owns its in-memory `Records` cache and the only pre-S7
+  reload path (`RestoreAsync`) also applies a paused-session snapshot. `MainForm` must therefore
+  call `StopwatchTimer.ClearRecordsAsync()`, which clears the store, reloads the cache through the
+  timer's private reload path, and raises `RecordsChanged`; it must not mutate the cache or reuse
+  `RestoreAsync` as a records reload.
+- **2026-09-10 — S7: `StopwatchControl.StateChanged` is the parent notification boundary.**
+  `StopwatchTimer` has no lap-specific event, while `RecordsListControl` needs a pushed update as
+  soon as the user clicks Lap. The control raises `StateChanged` after Start, Pause, Lap, Stop, and
+  Restore display updates; `MainForm` uses it only to push the timer's current laps into the list.
+  `RecordsChanged` remains the sole notification for the records list and is marshaled through
+  `Control.Invoke`, because service continuations may run off the UI thread.

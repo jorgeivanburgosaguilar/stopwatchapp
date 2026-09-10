@@ -813,19 +813,26 @@ S3a sits on the critical path between S3 and S4 — it is not part of a parallel
 - **Out of scope:** wiring the `Clear All` confirmation to `IStopwatchStore.ClearAllRecordsAsync`
   — that call happens in S7 (`MainForm`), which owns both controls.
 
-### S7 — `MainForm` orchestration
+### S7 — `MainForm` orchestration ✅ Done
 
 - **Depends on:** S5, S6.
-- **Files:** `StopwatchApp/MainForm.cs` (replaces the S0 stub).
+- **Files:** `StopwatchApp/MainForm.cs` (replaces the S0 stub),
+  `StopwatchApp/Controls/StopwatchControl.cs`, `StopwatchApp/Services/StopwatchTimer.cs`, and
+  `StopwatchApp.Tests/StopwatchTimerTests.cs`.
 - **Build:** constructs `Database`, `StopwatchControl`, `RecordsListControl`, wires
   `RecordsChanged`/`ClearAllRequested` events between them and `IStopwatchStore`, and calls
   `StopwatchTimer.RestoreAsync()` once at startup (after the DB connection opens) to show the
   frozen elapsed time, `Continue` button, restored laps, and "resumed from a pause" note if a
   saved session exists. **No business logic lives here** — pure wiring, per `AGENTS.md` §3/§5.
-- **Public interface:** none new — `MainForm : Form`, default constructor.
+- **Public interface:** `MainForm : Form` retains its default constructor. To preserve the timer's
+  ownership of its records cache after Clear All, `StopwatchTimer.ClearRecordsAsync()` clears the
+  store then reloads `Records` and raises `RecordsChanged`. `StopwatchControl.StateChanged` lets
+  `MainForm` refresh the laps panel immediately after Start, Pause, Lap, Stop, or restoration.
 - **Done when:** the form runs standalone (`dotnet run`), shows the idle state correctly, a
   Start→Pause→app-restart→relaunch cycle shows Continue with laps intact, and Clear All actually
-  empties the SQLite table.
+  empties the SQLite table. The automated gate is verified: `csharpier check .`,
+  `dotnet build -c Release` (zero warnings/errors), and `dotnet test` (43 passing). The interactive
+  desktop checks remain to be performed manually before shipping.
 - **Owns acceptance criteria:** "Laps and Continue survive an app restart after Pause" (the
   full round-trip, end to end — S4 owns the state-machine half, this owns the wiring proof).
 - **Out of scope:** tray, hotkeys, single-instance, window-hide-to-tray — the form at this stage

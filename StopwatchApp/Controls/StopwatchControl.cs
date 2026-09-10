@@ -61,6 +61,7 @@ public sealed class StopwatchControl : UserControl
     {
       Timer.Start();
       UpdateDisplay();
+      StateChanged?.Invoke();
     };
 
     _pauseButton = CreateButton("Pause", Palette.PauseButton);
@@ -71,6 +72,7 @@ public sealed class StopwatchControl : UserControl
       // thread PauseAsync's own internals (which do use ConfigureAwait(false)) complete on.
       await Timer.PauseAsync();
       UpdateDisplay();
+      StateChanged?.Invoke();
     };
 
     _lapButton = CreateButton("Lap", Palette.LapButton);
@@ -78,6 +80,7 @@ public sealed class StopwatchControl : UserControl
     {
       Timer.Lap();
       UpdateDisplay();
+      StateChanged?.Invoke();
     };
 
     _stopButton = CreateButton("Stop", Palette.StopButton);
@@ -85,6 +88,7 @@ public sealed class StopwatchControl : UserControl
     {
       await Timer.StopAsync();
       UpdateDisplay();
+      StateChanged?.Invoke();
     };
 
     FlowLayoutPanel buttonRow = new()
@@ -117,6 +121,12 @@ public sealed class StopwatchControl : UserControl
   public StopwatchTimer Timer { get; }
 
   /// <summary>
+  /// Fires after a user action or restoration changes stopwatch state that a parent control may
+  /// render elsewhere, such as the current laps list.
+  /// </summary>
+  public event Action? StateChanged;
+
+  /// <summary>
   /// Gets or sets whether the control renders its palette-driven surfaces in dark mode. Defaults
   /// to <see langword="false"/>; wiring this to the OS setting is S12's job (AGENTS.md §11/§17).
   /// </summary>
@@ -139,6 +149,7 @@ public sealed class StopwatchControl : UserControl
   {
     await Timer.RestoreAsync();
     UpdateDisplay();
+    StateChanged?.Invoke();
   }
 
   /// <inheritdoc />

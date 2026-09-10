@@ -202,6 +202,17 @@ public sealed class StopwatchTimer
   }
 
   /// <summary>
+  /// Clears every persisted record and reloads the timer-owned records list. The resulting
+  /// <see cref="RecordsChanged"/> event lets UI owners refresh their rendered records without
+  /// reaching into the store directly.
+  /// </summary>
+  public async Task ClearRecordsAsync()
+  {
+    await _store.ClearAllRecordsAsync().ConfigureAwait(false);
+    await ReloadRecordsAsync().ConfigureAwait(false);
+  }
+
+  /// <summary>
   /// The tick body: recomputes <see cref="ElapsedMs"/> from the wall clock and raises
   /// <see cref="OnTick"/> at 5-second boundaries. No-op while not running. Called once a second by
   /// the UI-side <see cref="System.Windows.Forms.Timer"/> (owned by <c>StopwatchControl</c>, not

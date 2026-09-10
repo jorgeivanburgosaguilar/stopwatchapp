@@ -297,6 +297,23 @@ public sealed class StopwatchTimerTests
   }
 
   [Fact]
+  public async Task ClearRecordsAsync_ClearsTheStoreReloadsRecordsAndFiresRecordsChanged()
+  {
+    FakeStopwatchStore store = new();
+    await store.SaveRecordAsync(0, 60_000, 60_000);
+    StopwatchTimer timer = new(store, new FakeTimeProvider());
+    int recordsChangedCount = 0;
+    timer.RecordsChanged += () => recordsChangedCount++;
+    await timer.RestoreAsync();
+
+    await timer.ClearRecordsAsync();
+
+    Assert.Empty(await store.GetAllRecordsAsync());
+    Assert.Empty(timer.Records);
+    Assert.Equal(2, recordsChangedCount);
+  }
+
+  [Fact]
   public async Task StopAsync_SessionUnderOneMinute_StoresZeroElapsedMinutes()
   {
     FakeStopwatchStore store = new();
