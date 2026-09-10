@@ -450,7 +450,7 @@ log for anything discovered or decided while executing a stage — check it alon
 | S3a Dapper + schema versioning | ✅ Done | 2026-09-10 | + `InitializeAsync` double-call fix (see `AGENTS.md` §17) |
 | S4 StopwatchTimer | ✅ Done | 2026-09-10 | |
 | S5 StopwatchControl | ⬜ Not started | — | |
-| S6 RecordsListControl + ClearRecordsDialog | ⬜ Not started | — | |
+| S6 RecordsListControl + ClearRecordsDialog | ✅ Done | 2026-09-10 | |
 | S7 MainForm | ⬜ Not started | — | |
 | S8 TrayIconService | ⬜ Not started | — | |
 | S9 Window-to-tray | ⬜ Not started | — | |
@@ -770,18 +770,24 @@ S3a sits on the critical path between S3 and S4 — it is not part of a parallel
   and while paused).
 - **Out of scope:** records/laps list rendering (S6), tray (S8).
 
-### S6 — `RecordsListControl` + `ClearRecordsDialog`
+### S6 — `RecordsListControl` + `ClearRecordsDialog` ✅ Done
 
 - **Depends on:** S1 (`TimeFormat`), S2 (`Palette`), S3 (models).
-- **Files:** `StopwatchApp/Controls/RecordsListControl.cs`, `StopwatchApp/Controls/ClearRecordsDialog.cs`.
+- **Files:** `StopwatchApp/Controls/RecordsListControl.cs`, `StopwatchApp/Controls/ClearRecordsDialog.cs`,
+  `StopwatchApp.Tests/RecordsListControlTests.cs` (covers the two pure row-formatting helpers).
 - **Build:** records panel (always shown, newest first, scrollable, `No records yet` empty state),
   laps panel (shown only when `Laps.Count > 0`), the exact row templates from §2.6 (with emoji),
   the `Clear All Records` button (visible only when `Records.Count > 0`), and the confirm dialog
-  with the exact title/body/button text from §2.6.
-- **Public interface:** two `UserControl`/`Form` types; `RecordsListControl` takes
-  `IReadOnlyList<StopwatchRecord>` and `IReadOnlyList<Lap>` to render (pushed from `MainForm`/
-  `StopwatchControl`, not pulled) and raises a `ClearAllRequested` event; `ClearRecordsDialog`
-  exposes a static `ShowConfirm(IWin32Window owner) : bool` (or `DialogResult`) helper.
+  with the exact title/body/button text from §2.6. Built entirely from stock WinForms controls
+  (`ListBox`/`Label`/`Button`), which already follow `Application.SetColorMode` for free — the one
+  manually-colored surface is the empty-state label, driven by a `bool Dark` property (default
+  `false`; S12 wires it to the live OS setting). See `AGENTS.md` §17, dated 2026-09-10, for this
+  and for the `ClearRecordsDialog.ShowConfirm` `DialogResult` mapping.
+- **Public interface:** two `UserControl`/`Form` types; `RecordsListControl` exposes
+  `UpdateRecords(IReadOnlyList<StopwatchRecord>)` and `UpdateLaps(IReadOnlyList<Lap>)` to push data
+  in (pushed from `MainForm`/`StopwatchControl`, not pulled) and raises a `ClearAllRequested` event;
+  `ClearRecordsDialog.ShowConfirm(IWin32Window owner)` returns `DialogResult.Yes` for "Clear All",
+  `DialogResult.Cancel` otherwise.
 - **Done when:** `Clear All Records` button visibility toggles correctly with an empty vs.
   non-empty list, in isolation from live timer state (feed it a fixed list in a manual check).
 - **Owns acceptance criteria:** "Clear-all: button hidden with zero records, Cancel leaves records

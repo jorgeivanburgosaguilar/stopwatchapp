@@ -168,6 +168,16 @@ public static class Palette               // §11 — light/dark + button color 
 public static class ClearRecordsDialog    // §8.5 — the confirm dialog
 {
     public static DialogResult ShowConfirm(IWin32Window owner);
+    // Returns DialogResult.Yes for "Clear All", DialogResult.Cancel for "Cancel" or closing the
+    // dialog (Escape/X) — CancelButton is wired so both of the latter map to Cancel.
+}
+
+public sealed class RecordsListControl : UserControl   // §8.5 — records/laps panels
+{
+    // Data is pushed in, never pulled: UpdateRecords(IReadOnlyList<StopwatchRecord>) and
+    // UpdateLaps(IReadOnlyList<Lap>) each replace the displayed rows and toggle the relevant
+    // empty-state/visibility rules from §8.5. Raises `event Action? ClearAllRequested`; never
+    // reads IStopwatchStore itself.
 }
 ```
 
@@ -938,3 +948,17 @@ that now carries the actual rule.
   stay frozen at its last value while paused (§8.3's `Pause()` comment) — computing
   `Now - StartTime` unconditionally would silently overwrite the frozen value if the UI timer (S5)
   ever ticked while not running. `StopwatchTimer.Tick()` returns immediately when `!IsRunning`.
+- **2026-09-10 — S6: `ClearRecordsDialog.ShowConfirm`'s `DialogResult` mapping.** §3.1 fixes the
+  method's signature but not its return value. Settled: `DialogResult.Yes` means "Clear All" was
+  clicked; `DialogResult.Cancel` covers the "Cancel" button, Escape, and the dialog's close button
+  (all wired to the same `CancelButton`). No `AcceptButton` is set, so pressing Enter never
+  triggers the destructive action by default. `MainForm` (S7) must check for `DialogResult.Yes`
+  specifically, not merely "not Cancel." See §3.1.
+- **2026-09-10 — S6: `RecordsListControl` uses stock controls, not owner-drawn rows.** §7 requires
+  manually-drawn surfaces to read `Theme/Palette.cs`; stock `ListBox`/`Label`/`Button` already
+  follow `Application.SetColorMode(SystemColorMode.System)` for free, so no owner-draw was added.
+  The one exception is the "No records yet" empty-state label, whose muted tone the OS theme
+  doesn't supply on its own — it's colored from `Palette.EmptyStateText`. `RecordsListControl`
+  exposes a `bool Dark` property (default `false`, `[DesignerSerializationVisibility(Hidden)]` to
+  satisfy `WFO1000`) that reapplies that one color; wiring it to the live OS setting is S12's job,
+  not this stage's. See §3.1.
