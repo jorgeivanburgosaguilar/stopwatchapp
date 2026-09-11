@@ -311,17 +311,30 @@ Button colors (base / hover / pressed), same in both themes:
 
 ### 3.1 Tray icon rendering
 
-Render a 32×32 icon with GDI+ and convert it to an `HICON`: two stacked rows of two digits — hours
-on top, minutes below — so the digits stay legible when Windows scales the icon down to 16 px for
-display. Update the icon at most once per second, and only when the displayed minute actually
-changes (don't regenerate the bitmap every tick if the visible value hasn't changed).
+Render a 32×32 icon with GDI+ and convert it to an `HICON`. **Two layouts, chosen by elapsed hours**
+(added S11c, 2026-09-11 — see `AGENTS.md` §17 for why: a two-separate-`NotifyIcon`-instances "wide"
+layout was considered and rejected, since Windows gives no guarantee the two stay adjacent and lets a
+user hide either one independently via its own tray-icon settings, which would silently break it):
+
+- **Elapsed hours == 0** (the common case for a stopwatch): a single large two-digit **MM** readout,
+  centered and sized to fill as much of the 32×32 canvas as legibility at the 16 px scaled-down
+  display size allows — noticeably bigger than the stacked layout below, since only one row of digits
+  needs the space.
+- **Elapsed hours ≥ 1**: the original two stacked rows of two digits — hours on top, minutes below —
+  so both values keep fitting once neither is optional.
+
+Update the icon at most once per second, and only when the displayed value **or the active layout**
+actually changes (don't regenerate the bitmap every tick if neither changed) — the layout switch
+itself always coincides with a minute-digit change (`:59` → `:00` at the hour boundary), but track
+both explicitly rather than relying on that coincidence.
 
 **Call `DestroyIcon` on the previous handle every time you replace it.** Forgetting this is the
 single most common bug in this pattern and leaks GDI handles until the process is killed.
 
 The tooltip text is `FormatTime(ElapsedMs)` — the full `HH:MM:SS` value — plain text, no prefix, no
-emoji. Idle, paused, and running states may differ in icon tint but must keep the same digit
-layout.
+emoji, regardless of which icon layout is active. Idle, paused, and running states may differ in
+icon tint but never in which of the two layouts above is showing — that choice depends only on
+elapsed hours, not on run state.
 
 ### 3.2 Tray context menu
 
@@ -507,6 +520,7 @@ log for anything discovered or decided while executing a stage — check it alon
 | S11 Single-instance | ✅ Done | 2026-09-11 | `FindWindow`-targeted `PostMessage`, not `HWND_BROADCAST` (see `AGENTS.md` §17) |
 | S11a Visual design refresh | ✅ Done | 2026-09-11 | Owner-drawn rounded buttons/rows + card borders as the GDI+ elevation stand-in; `TrayIconService` needed no edit (see `AGENTS.md` §17) |
 | S11b Window position memory | ✅ Done | 2026-09-11 | `window_position` migration 2 + `_shownAtLocation` baseline in `MainForm` (see `AGENTS.md` §17, dated 2026-09-11) |
+| S11c Tray icon: large minutes under an hour | ⬜ Not started | — | Added post-hoc at user request (see `AGENTS.md` §17, dated 2026-09-11) |
 | S12 Theme/DPI/version polish | ⬜ Not started | — | |
 | S13 Publish | ⬜ Not started | — | |
 
@@ -572,15 +586,17 @@ S0 scaffold
                    ▼
         S11b Window position memory
                    ▼
+     S11c Tray icon: large minutes under an hour
+                   ▼
             S12 Theme/DPI/version polish
                    ▼
               S13 Publish
 ```
 
 Parallel waves: **{S1, S2, S3}** after S0 · **{S5, S6}** after S4 · **{S8, S10, S11}** after S7.
-S3a sits on the critical path between S3 and S4, and S11a/S11b between S11 and S12, the same way — a
-lettered stage inserted where a design/infra choice (or, for S11b, a user-requested scope addition)
-turned out to need its own pass; neither is
+S3a sits on the critical path between S3 and S4, and S11a/S11b/S11c between S11 and S12, the same
+way — a lettered stage inserted where a design/infra choice (or, for S11b/S11c, a user-requested
+scope addition) turned out to need its own pass; neither is
 part of a parallel wave.
 
 ### Integration seams (fixed here so parallel stages don't diverge)
@@ -1098,6 +1114,51 @@ part of a parallel wave.
   `paused_session`); any change to how the window hides to tray or restores from it (S9's mechanics are
   reused, not modified).
 
+### S11c — Tray icon: large minutes under an hour
+
+- **Depends on:** S8 (`TrayIconService` and `RenderIcon`, which this stage modifies), S11a (the
+  refreshed `Palette` tint accessors `RenderIcon` already reads — unchanged by this stage, just still
+  the dependency).
+- **Why:** added post-hoc at the repo owner's explicit request, dated 2026-09-11. The owner first
+  asked whether the tray icon could render wide like the Windows taskbar clock; that's genuinely
+  unsupported (see `AGENTS.md` §17's first 2026-09-11 entry) via the standard `Shell_NotifyIcon` API
+  every tray icon (including third-party libraries like `H.NotifyIcon`) is built on. The owner then
+  clarified the actual goal: not a clock-width readout, at most "two icons wide," specifically so
+  minute ticks read clearly in the tray. A two-separate-`NotifyIcon` approach was offered and
+  rejected — Windows gives no API to keep two icons adjacent, and the user can independently hide or
+  reorder either one via the OS's own tray-icon settings, which would silently break the "one widget"
+  effect. Settled instead on a single-icon change: since a stopwatch session under an hour is the
+  common case, drop the (in that case, always-`00`) hours row entirely and let the minutes digits use
+  the full 32×32 canvas — meaningfully larger and easier to read at a glance than the current stacked
+  layout, with no adjacency/ordering risk since it's still exactly one `NotifyIcon`. See `AGENTS.md`
+  §17's second 2026-09-11 entry and §10.1/§3.1 for the full spec.
+- **Files:** `StopwatchApp/Services/TrayIconService.cs` (`RenderIcon` and its dirty-check state),
+  possibly a small addition to `StopwatchApp.Tests/` if `RenderIcon`'s layout selection is pure enough
+  to unit test in isolation from GDI+ handle creation (agent's call — the existing icon-rendering code
+  was not previously unit tested, per §13's UI-free-testability rule not extending to raw GDI+ output).
+- **Build:** §3.1/§10.1 exactly — `RenderIcon` picks the large-MM-only layout when elapsed hours == 0,
+  else the existing two-stacked-rows layout; the once-per-second, changed-value-only regeneration rule
+  (§3.1/§10.1, from S8) extends to treat a layout switch as a change even where it happens to coincide
+  with a minute-digit change already — track the active layout explicitly in the dirty-check state,
+  don't rely on the coincidence. `DestroyIcon` on every handle replacement (unchanged rule, both
+  layouts). Icon tint by run state (idle/paused/running, from S8/S11a) is unchanged and orthogonal to
+  which layout is active. Tooltip text and format (`FormatTime`, full `HH:MM:SS`) is unchanged.
+- **Public interface:** none changed — `TrayIconService`'s constructor and public members (§3.1) are
+  exactly as S8 left them; this stage only changes `RenderIcon`'s internal drawing logic.
+- **Done when:** `csharpier check .` / `dotnet build -c Release` (zero warnings) / `dotnet test` (all
+  green, unchanged count unless the agent added `RenderIcon`-layout-selection tests per the Files note
+  above) pass. Manual (no interactive desktop available in an agent environment, same precedent as
+  S8/S9/S11a/S11b): start a session, confirm the tray icon shows large minute digits only while under
+  an hour elapsed and updates each time the displayed minute changes; let (or fast-forward, if a debug
+  hook exists — otherwise a long-running manual session) elapsed cross the 1-hour mark and confirm the
+  icon switches to the stacked HH-over-MM layout at that instant, not before or after; confirm the
+  tooltip still reads the full `HH:MM:SS` regardless of which layout is showing.
+- **Owns acceptance criteria:** extends the existing Tray bullet in `AGENTS.md` §14 (owned jointly by
+  S8/S9) with the two-layout behavior — see the updated bullet there.
+- **Out of scope:** the "two icons wide" literal approach (rejected, see Why above); any change to
+  icon tint, tooltip format, context menu, or double-click behavior (all S8/S9, unchanged); DPI-based
+  resizing of the icon itself (S12's job).
+
 ### S12 — Theme, DPI, and version polish pass
 
 - **Depends on:** S9, S10, S11 (i.e., after the whole feature set exists), and S11a — the light/dark
@@ -1167,6 +1228,9 @@ a running window (tray, hotkeys). Each bullet is tagged with the §5 stage that 
 - **[S8/S9]** Tray: the icon updates while running and reflects the current hour/minute; the
   tooltip shows the full `HH:MM:SS`; both close and minimize hide the window and remove its
   taskbar button; Exit terminates the process with no icon left behind in the tray.
+- **[S11c]** Tray icon layout: while elapsed hours == 0, the icon shows large minute-only digits;
+  once elapsed reaches 1 hour, it switches to the stacked hours-over-minutes layout at exactly that
+  boundary; the tooltip's full `HH:MM:SS` text is unaffected by which layout is showing.
 - **[S11b]** Window position: with no saved position, the window opens centered on the primary
   screen; after being dragged and then hidden-to-tray/exited, it reopens at that exact position
   instead of centering; a saved position that no longer intersects any connected screen falls back

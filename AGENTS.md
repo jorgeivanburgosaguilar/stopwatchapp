@@ -729,17 +729,26 @@ re-anchors `StartTime` from the current clock, exactly as an in-app pause/resume
 
 ### 10.1 Tray icon rendering
 
-Render a 32×32 icon with GDI+ and convert it to an `HICON`: two stacked rows of two digits — hours
-on top, minutes below — so digits stay legible when Windows scales down to 16 px. Update the icon
-at most once per second, and only when the displayed minute actually changes (don't regenerate the
-bitmap every tick if the visible value hasn't changed).
+Render a 32×32 icon with GDI+ and convert it to an `HICON`. **Two layouts, chosen by elapsed hours**
+(added S11c, 2026-09-11 — see §17 for why a two-`NotifyIcon`-instances "wide" layout was considered
+and rejected first):
+
+- **Elapsed hours == 0** (the common case): a single large two-digit **MM** readout, centered and
+  sized to fill as much of the 32×32 canvas as legibility at the 16 px scaled-down display size
+  allows.
+- **Elapsed hours ≥ 1**: the original two stacked rows of two digits — hours on top, minutes below.
+
+Update the icon at most once per second, and only when the displayed value **or the active layout**
+changes — track both explicitly in the dirty-check state rather than relying on the fact that a
+layout switch happens to coincide with a minute-digit change (`:59` → `:00` at the hour boundary).
 
 **Call `DestroyIcon` on the previous handle every time you replace it.** Forgetting this is the
 single most common bug in this pattern and leaks GDI handles until the process is killed.
 
 Tooltip text is `FormatTime(ElapsedMs)` — the full `HH:MM:SS` value — plain text, no prefix, no
-emoji. Idle, paused, and running states may differ in icon tint but must keep the same digit
-layout.
+emoji, regardless of which layout is active. Idle, paused, and running states may differ in icon
+tint but never in which of the two layouts above is showing — that choice depends only on elapsed
+hours, not run state.
 
 ### 10.2 Tray context menu
 
@@ -921,6 +930,9 @@ xUnit, in a `StopwatchApp.Tests` project.
 - Tray: the icon updates while running and reflects the current hour/minute; the tooltip shows the
   full `HH:MM:SS`; both close and minimize hide the window and remove its taskbar button; Exit
   terminates the process with no icon left behind in the tray.
+- Tray icon layout: while elapsed hours == 0, the icon shows large minute-only digits; once elapsed
+  reaches 1 hour, it switches to the stacked hours-over-minutes layout at exactly that boundary; the
+  tooltip's full `HH:MM:SS` text is unaffected by which layout is showing.
 - Keyboard shortcuts: with the main window focused, `Space` starts/pauses/continues, `Shift+Space`
   laps, and `Enter` stops, matching the mouse-click behavior of the same buttons; none of the three
   fires while the window is hidden to the tray or while `ClearRecordsDialog` is open.
@@ -1298,6 +1310,20 @@ that now carries the actual rule.
   exercise of the append-only `PRAGMA user_version` path S3a built (previously only migration 1
   existed). Full spec: §9 (data layer), §10.6 (behavior), §14 (acceptance criteria); roadmap stage:
   `plan-stopwatch-csharp-winforms-modern-dotnet.md` §5 "S11b — Window position memory".
+- **2026-09-11 — S11c added: tray icon switches to large minute-only digits under an hour.**
+  Follow-up to the "wide tray icon" question logged above. The repo owner clarified the actual ask
+  was not clock-width, at most "two icons wide" — the goal being legible minute-ticking in the tray,
+  not literal parity with the taskbar clock. A two-separate-`NotifyIcon`-instances layout (one icon
+  per digit pair) was offered as the closest technical match, but rejected: Windows has no API to
+  keep two tray icons adjacent, and a user can independently hide or reorder either one via the OS's
+  own tray-icon settings, silently breaking the "one widget" illusion — an unacceptable fragility for
+  a two-option choice the owner was asked to make explicitly. Settled instead on a single-icon change:
+  `TrayIconService.RenderIcon` now switches, at elapsed hours == 0, to a large two-digit MM-only
+  layout filling the full 32×32 canvas (meaningfully more legible than the existing stacked layout),
+  falling back to the original hours-over-minutes stacked layout once elapsed reaches 1 hour — no
+  adjacency risk since it stays exactly one `NotifyIcon`. Full spec: §10.1 (behavior); roadmap stage:
+  `plan-stopwatch-csharp-winforms-modern-dotnet.md` §5 "S11c — Tray icon: large minutes under an
+  hour".
 - **2026-09-11 — S11b: `window_position` upsert follows `paused_session`'s exact
   `INSERT ... ON CONFLICT(id) DO UPDATE SET` shape.** `Database.SaveWindowPositionAsync` mirrors
   `SavePausedSessionAsync` byte-for-byte in structure: a single `ExecuteAsync` with
