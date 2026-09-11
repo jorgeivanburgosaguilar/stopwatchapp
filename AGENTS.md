@@ -96,6 +96,11 @@ public interface IStopwatchStore
     Task SavePausedSessionAsync(PausedSession session);
     Task<PausedSession?> LoadPausedSessionAsync();
     Task ClearPausedSessionAsync();
+
+    // S11b — the single saved window position (§9/§10.6); same single-slot upsert pattern as
+    // paused_session above.
+    Task SaveWindowPositionAsync(int x, int y);
+    Task<(int X, int Y)?> LoadWindowPositionAsync();
 }
 ```
 
@@ -646,6 +651,17 @@ CREATE TABLE IF NOT EXISTS paused_session (
 This DDL is now **migration 1** in `SchemaMigrations.cs`, not code run unconditionally on every
 startup — see "Schema versioning" below.
 
+**Migration 2 (S11b)** adds a third table, single-slot like `paused_session`, holding the one
+remembered manual window position (§10.6):
+
+```sql
+CREATE TABLE window_position (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  x  INTEGER NOT NULL,
+  y  INTEGER NOT NULL
+);
+```
+
 ### Schema versioning
 
 `Database.InitializeAsync` brings the database up to date using SQLite's `PRAGMA user_version` as a
@@ -689,6 +705,12 @@ Task<PausedSession?> LoadPausedSessionAsync();
 
 Task ClearPausedSessionAsync();
   // DELETE FROM paused_session WHERE id = 1
+
+Task SaveWindowPositionAsync(int x, int y);
+  // upsert into the single-row window_position table (id = 1) — S11b
+
+Task<(int X, int Y)?> LoadWindowPositionAsync();
+  // returns null if no row exists, or if the row fails to deserialize — S11b
 ```
 
 Every storage method is wrapped in try/catch and **swallows errors**: a corrupt or unreadable saved
@@ -773,6 +795,34 @@ owner (the mechanism WinForms uses to drop its taskbar button), and Windows excl
 from `HWND_BROADCAST` delivery regardless of visibility — so a broadcast posted while the window is
 hidden is silently never delivered, in exactly the one state single-instance activation exists to
 handle. A direct, title-targeted `FindWindow` lookup is not subject to that exclusion.
+
+### 10.6 Window position memory
+
+Added post-hoc at the repo owner's explicit request, dated 2026-09-11 (see §17) — not part of the
+original spec. The window centers itself by default, but remembers the last position the user
+dragged it to and reopens there instead, until it's dragged again:
+
+```
+Open (first launch, tray Open/double-click, single-instance activation, or restore-from-minimize):
+  if a saved WindowPosition exists AND its bounds intersect at least one current screen's working area:
+    Location = (SavedX, SavedY)
+  else:
+    Location = centered on Screen.PrimaryScreen.WorkingArea
+    // also the fallback when a saved position no longer fits any connected monitor
+  _shownAtLocation = Location   // baseline for detecting a user-initiated move, see below
+
+Hide-to-tray (close or minimize) or Exit:
+  if Location != _shownAtLocation:              // the user dragged it since it was last shown
+    persist WindowPosition { X: Location.X, Y: Location.Y }
+  // unchanged → no write; an app that's never been dragged stays centered forever
+```
+
+Only `Location` is tracked — resizing alone never triggers a save. `_shownAtLocation` is plain
+in-memory `MainForm` state, reset every time the window is positioned by the block above, so repeated
+hide/show/drag cycles within one session are each compared against the position that cycle actually
+started from, not a stale one from app launch. A saved position is never trusted blindly — a saved
+position whose bounds don't intersect any currently-connected screen (e.g. a monitor was unplugged)
+falls back to centering rather than placing the window somewhere unreachable.
 
 ---
 
@@ -874,6 +924,10 @@ xUnit, in a `StopwatchApp.Tests` project.
 - Keyboard shortcuts: with the main window focused, `Space` starts/pauses/continues, `Shift+Space`
   laps, and `Enter` stops, matching the mouse-click behavior of the same buttons; none of the three
   fires while the window is hidden to the tray or while `ClearRecordsDialog` is open.
+- Window position: with no saved position, the window opens centered on the primary screen; after
+  being dragged and then hidden-to-tray/exited, it reopens at that exact position instead of
+  centering; a saved position that no longer intersects any connected screen falls back to
+  centering rather than opening off-screen; resizing alone (no drag) never triggers a save.
 
 Implement these as automated tests wherever the behavior is UI-free, and as a manual check where it
 genuinely requires a running window (tray, hotkeys).
@@ -1220,3 +1274,27 @@ that now carries the actual rule.
   unchanged input. Its two-stacked-digit-rows layout stays exactly as §10.1 specifies, per this
   stage's explicit out-of-scope note. No manual verification gap beyond what §4 item 5 already
   covers, since nothing in this file was touched.
+- **2026-09-11 — Wide, clock-style tray icon investigated and rejected — not a supported Windows
+  capability.** The repo owner asked whether the tray icon could render wide (multi-character) like
+  the Windows taskbar clock, instead of the current 32×32 two-stacked-digit-rows icon. Researched via
+  Context7 against `H.NotifyIcon` (`/havendv/h.notifyicon`), the most widely used .NET tray-icon
+  library (WPF/WinUI/MAUI/Console): its `TrayIcon` wrapper and `GeneratedIconSource` dynamic-icon
+  feature are built on the same `Shell_NotifyIcon` Win32 API this project's `TrayIconService` already
+  P/Invokes directly, and render text into a square icon bitmap — exactly what `RenderIcon` already
+  does. No wide/rectangular notification-area mode, clock-style widget, or supported multi-icon trick
+  exists in that ecosystem. The Windows taskbar clock is rendered by `explorer.exe`'s own taskband, a
+  first-party UI element with no public API surface — not a `Shell_NotifyIcon`, which is the only
+  mechanism available to third-party apps and which the shell always places in a fixed **square**
+  slot. Conclusion: §10.1's two-stacked-digit-rows design stays as the final tray rendering; no
+  further work planned here.
+- **2026-09-11 — S11b added: window centering + manual-position memory.** Repo owner requested,
+  independent of any implementation-time discovery: the window should always open centered, unless
+  the user has dragged it, in which case it should reopen at that exact position instead — until
+  moved again. Centers on `Screen.PrimaryScreen.WorkingArea` (not the screen under the cursor, for
+  deterministic/verifiable behavior); persists only on hide-to-tray/exit, not on every drag frame
+  (matches the existing `paused_session`-on-transition pattern rather than adding continuous
+  `Move`-event write traffic); a saved position that no longer intersects any connected screen falls
+  back to centering. New single-slot `window_position` table is schema migration 2 — the first real
+  exercise of the append-only `PRAGMA user_version` path S3a built (previously only migration 1
+  existed). Full spec: §9 (data layer), §10.6 (behavior), §14 (acceptance criteria); roadmap stage:
+  `plan-stopwatch-csharp-winforms-modern-dotnet.md` §5 "S11b — Window position memory".

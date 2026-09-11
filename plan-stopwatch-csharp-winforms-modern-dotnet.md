@@ -25,7 +25,7 @@ alone, without needing to consult any other project or source.
 | Behavior | Exact — every behavior below is the contract, including the ones that look odd (§2.4) |
 | Storage | **SQLite** (`Microsoft.Data.Sqlite`) at `%LOCALAPPDATA%\StopwatchApp\stopwatch.db` |
 | Tray icon | Runtime-rendered icon showing **hours over minutes**; tooltip = full `HH:MM:SS`, plain text, no emoji or label |
-| Window | **Both close and minimize hide to tray** (no taskbar button while hidden); Exit only from the tray menu |
+| Window | **Both close and minimize hide to tray** (no taskbar button while hidden); Exit only from the tray menu. Opens **centered** by default; reopens at the last **manually dragged** position instead, once one exists (§3.6, added S11b) |
 | Taskbar | **None** — no overlay badge, no thumbnail toolbar buttons, no progress bar, no title-bar clock |
 | Features in scope | Window-scoped keyboard shortcuts, single-instance enforcement, close-to-tray, tray context menu |
 | Features out of scope | Global/system-wide hotkeys, run-at-login/startup registration, crash recovery of a running (unpaused) session, idle detection, CSV/JSON export, cloud sync, telemetry |
@@ -366,6 +366,35 @@ already exists, it sends a registered window message (via `RegisterWindowMessage
 `PostMessage(HWND_BROADCAST, ...)`) asking the first instance to restore and activate its window,
 then exits immediately.
 
+### 3.6 Window position memory
+
+Added post-hoc (§5 S11b) at the user's request, dated 2026-09-11. The window centers itself by
+default every time it opens, but remembers the last position the user dragged it to and reopens
+there instead — until it's dragged again.
+
+```
+Open (first launch, tray Open/double-click, single-instance activation, or restore-from-minimize):
+  if a saved WindowPosition exists AND its bounds intersect at least one current screen's working area:
+    Location = (SavedX, SavedY)
+  else:
+    Location = centered on Screen.PrimaryScreen.WorkingArea
+    // also the fallback when a saved position no longer fits any connected monitor
+  _shownAtLocation = Location   // baseline for detecting a user-initiated move, see below
+
+Hide-to-tray (close or minimize) or Exit:
+  if Location != _shownAtLocation:              // the user dragged it since it was last shown
+    persist WindowPosition { X: Location.X, Y: Location.Y }
+  // unchanged → no write; an app that's never been dragged stays centered forever
+```
+
+Resizing does **not** count as a move — only `Location`, never `Size`, is tracked or persisted.
+`_shownAtLocation` is plain in-memory `MainForm` state, reset every time the window is positioned by
+the block above, so repeated hide/show/drag cycles within one session are each compared against the
+position that cycle actually started from, not a stale one from app launch. A saved position is
+never trusted blindly — display configurations change (a laptop undocked, a monitor unplugged), so a
+saved position whose bounds don't intersect any currently-connected screen falls back to centering
+rather than placing the window somewhere unreachable.
+
 ---
 
 ## 4. Data layer
@@ -401,6 +430,17 @@ rather than run unconditionally on every startup — see `AGENTS.md` §9 "Schema
 full rule set (append-only migrations, why v1 alone keeps `IF NOT EXISTS`, the `user_version`
 interpolation caveat).
 
+S11b (§3.6) adds a second table the same way, as migration 2 — the first real exercise of the
+append-only migration path S3a built:
+
+```sql
+CREATE TABLE window_position (
+  id INTEGER PRIMARY KEY CHECK (id = 1),  -- single slot, same pattern as paused_session
+  x  INTEGER NOT NULL,
+  y  INTEGER NOT NULL
+);
+```
+
 API surface — deliberately minimal. **No update, no delete-by-id, no range query:**
 
 ```csharp
@@ -421,6 +461,12 @@ Task<PausedSession?> LoadPausedSessionAsync();
 
 Task ClearPausedSessionAsync();
   // DELETE FROM paused_session WHERE id = 1
+
+Task SaveWindowPositionAsync(int x, int y);
+  // upsert into the single-row window_position table (id = 1) — S11b
+
+Task<(int X, int Y)?> LoadWindowPositionAsync();
+  // returns null if no row exists, or if the row fails to deserialize — S11b
 ```
 
 Every storage method is wrapped in try/catch and **swallows errors**: a corrupt or unreadable saved
@@ -460,6 +506,7 @@ log for anything discovered or decided while executing a stage — check it alon
 | S10 Keyboard shortcuts | ✅ Done | 2026-09-11 | Global hotkeys dropped for window-scoped shortcuts (see `AGENTS.md` §17) |
 | S11 Single-instance | ✅ Done | 2026-09-11 | `FindWindow`-targeted `PostMessage`, not `HWND_BROADCAST` (see `AGENTS.md` §17) |
 | S11a Visual design refresh | ✅ Done | 2026-09-11 | Owner-drawn rounded buttons/rows + card borders as the GDI+ elevation stand-in; `TrayIconService` needed no edit (see `AGENTS.md` §17) |
+| S11b Window position memory | ⬜ Not started | — | Added post-hoc at user request (see `AGENTS.md` §17, dated 2026-09-11) |
 | S12 Theme/DPI/version polish | ⬜ Not started | — | |
 | S13 Publish | ⬜ Not started | — | |
 
@@ -523,14 +570,17 @@ S0 scaffold
                    ▼
         S11a Visual design refresh
                    ▼
+        S11b Window position memory
+                   ▼
             S12 Theme/DPI/version polish
                    ▼
               S13 Publish
 ```
 
 Parallel waves: **{S1, S2, S3}** after S0 · **{S5, S6}** after S4 · **{S8, S10, S11}** after S7.
-S3a sits on the critical path between S3 and S4, and S11a between S11 and S12, the same way — a
-lettered stage inserted where a design/infra choice turned out to need its own pass; neither is
+S3a sits on the critical path between S3 and S4, and S11a/S11b between S11 and S12, the same way — a
+lettered stage inserted where a design/infra choice (or, for S11b, a user-requested scope addition)
+turned out to need its own pass; neither is
 part of a parallel wave.
 
 ### Integration seams (fixed here so parallel stages don't diverge)
@@ -1003,6 +1053,51 @@ part of a parallel wave.
 - **Out of scope:** any new feature, OS dark-mode/DPI wiring (S12's job — this stage produces the
   palette S12 then wires live), motion/animation (not part of this app's brief per §1).
 
+### S11b — Window position memory
+
+- **Depends on:** S9 (window-to-tray hide/show mechanics this stage extends), S3a (the
+  `PRAGMA user_version` migration path — this stage's new table is migration 2, the first real use of
+  that path beyond migration 1 itself). Independent of S11a's visual changes — touches a disjoint file
+  set (`MainForm.cs`, `IStopwatchStore`/`Database`/`SchemaMigrations`, not the controls S11a repainted)
+  and could have run in parallel with it; listed after S11a here only for roadmap reading order, since
+  S11a already landed by the time this stage was added.
+- **Why:** added post-hoc at the repo owner's explicit request (2026-09-11, not a gap found during
+  implementation) — the window should always open centered, *unless* the user has dragged it
+  somewhere, in which case it should reopen there instead. See `AGENTS.md` §17, dated 2026-09-11, and
+  §3.6/§10.6 for the full spec.
+- **Files:** `StopwatchApp/Services/SchemaMigrations.cs` (+migration 2), `StopwatchApp/Services/IStopwatchStore.cs`,
+  `StopwatchApp/Services/Database.cs` (+`SaveWindowPositionAsync`/`LoadWindowPositionAsync`),
+  `StopwatchApp/MainForm.cs` (positioning + persistence logic), `StopwatchApp.Tests/DatabaseTests.cs`
+  (+round-trip tests for the new table), `StopwatchApp.Tests/SchemaMigrationsTests.cs` if one doesn't
+  already exist, or the equivalent existing test file (+migration-2-applies-cleanly test).
+- **Build:** §3.6/§10.6 exactly — center on `Screen.PrimaryScreen.WorkingArea` when no valid saved
+  position exists (including when a saved position no longer intersects any connected screen); persist
+  `Location` only on hide-to-tray or `ExitApplication`, and only when it differs from the
+  `_shownAtLocation` baseline recorded the last time the window was positioned. `window_position` is
+  migration 2 in `SchemaMigrations.cs` — **no `IF NOT EXISTS`** (per `AGENTS.md` §9's rule: only
+  migration 1 needs it), appended after migration 1, never edited into it.
+- **Public interface:** `IStopwatchStore` gains exactly two methods (shown in §4 above);
+  `Database` implements both, wrapped in the same swallow-errors try/catch as every other storage
+  method (§9's deliberate, commented design). No existing `IStopwatchStore` member changes signature.
+  `MainForm` gains no new public members — the positioning logic is private, wired into the existing
+  show/hide/exit paths from S7/S9.
+- **Done when:** round-trip tests cover save → load → matches; a fresh database with no
+  `window_position` row centers the window; a database created before this migration (has `records`/
+  `paused_session` but no `window_position`, `user_version` at 1) opens without data loss and ends up
+  stamped at migration 2. Automated: `csharpier check .` / `dotnet build -c Release` (zero warnings) /
+  `dotnet test` (all green, including the new round-trip and migration tests). Manual (no interactive
+  desktop available in an agent environment, same precedent as S8/S9): launch, confirm the window
+  opens centered on first run, drag it, hide to tray, reopen — confirm it reopens at the dragged
+  position, not centered; drag again and repeat once more to confirm the baseline updates correctly
+  each cycle; disconnect/reconfigure a secondary monitor (or simulate via a very off-screen manual DB
+  edit) and confirm the app falls back to centering instead of opening unreachably off-screen.
+- **Owns acceptance criteria:** the window-position bullet added to `AGENTS.md` §14 by this stage (see
+  below) — not present before, since this feature didn't exist in the original spec.
+- **Out of scope:** remembering window *size* (only `Location` is tracked, per the user's explicit
+  "only if I move it" — resizing is untouched); per-monitor saved positions (one single-slot save, like
+  `paused_session`); any change to how the window hides to tray or restores from it (S9's mechanics are
+  reused, not modified).
+
 ### S12 — Theme, DPI, and version polish pass
 
 - **Depends on:** S9, S10, S11 (i.e., after the whole feature set exists), and S11a — the light/dark
@@ -1072,6 +1167,10 @@ a running window (tray, hotkeys). Each bullet is tagged with the §5 stage that 
 - **[S8/S9]** Tray: the icon updates while running and reflects the current hour/minute; the
   tooltip shows the full `HH:MM:SS`; both close and minimize hide the window and remove its
   taskbar button; Exit terminates the process with no icon left behind in the tray.
+- **[S11b]** Window position: with no saved position, the window opens centered on the primary
+  screen; after being dragged and then hidden-to-tray/exited, it reopens at that exact position
+  instead of centering; a saved position that no longer intersects any connected screen falls back
+  to centering rather than opening off-screen; resizing alone (no drag) never triggers a save.
 
 `[S13]` re-verifies every bullet above, once, against the published build — it owns none of them
 individually but is the final gate that confirms none regressed in packaging.
