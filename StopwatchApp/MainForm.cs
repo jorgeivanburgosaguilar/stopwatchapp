@@ -1,6 +1,8 @@
 using Microsoft.Data.Sqlite;
+using Microsoft.Win32;
 using StopwatchApp.Controls;
 using StopwatchApp.Services;
+using StopwatchApp.Theme;
 
 namespace StopwatchApp;
 
@@ -20,6 +22,7 @@ public sealed class MainForm : Form
   private readonly StopwatchControl _stopwatchControl;
   private readonly RecordsListControl _recordsListControl;
   private readonly TrayIconService _trayIconService;
+  private readonly Label _versionLabel;
   private readonly int _activateMessage;
 
   // S11b (AGENTS.md §10.6) — the position the window was last shown at, reset every time
@@ -49,18 +52,30 @@ public sealed class MainForm : Form
     _recordsListControl = new RecordsListControl();
     _trayIconService = new TrayIconService(_stopwatchControl, RestoreWindow, ExitApplication);
     _activateMessage = (int)Program.RegisterWindowMessage(Program.ActivateMessageName);
+    // S12 (AGENTS.md §6/§15/§17) — the version footer; <Version> in the .csproj flows through to
+    // Application.ProductVersion via the SDK's generated AssemblyInformationalVersionAttribute.
+    _versionLabel = new Label
+    {
+      Dock = DockStyle.Fill,
+      TextAlign = ContentAlignment.MiddleRight,
+      AutoSize = false,
+      Text = $"Stopwatch v{Application.ProductVersion}",
+      Padding = new Padding(0, Palette.SpacingXs, 0, 0),
+    };
 
     TableLayoutPanel layout = new()
     {
       Dock = DockStyle.Fill,
       ColumnCount = 1,
-      RowCount = 2,
+      RowCount = 3,
       Padding = new Padding(12),
     };
     layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
     layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+    layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
     layout.Controls.Add(_stopwatchControl, 0, 0);
     layout.Controls.Add(_recordsListControl, 0, 1);
+    layout.Controls.Add(_versionLabel, 0, 2);
     Controls.Add(layout);
 
     _stopwatchControl.Timer.RecordsChanged += RefreshRecords;
@@ -69,6 +84,11 @@ public sealed class MainForm : Form
     _stopwatchControl.Tick += RefreshTray;
     _recordsListControl.ClearAllRequested += ClearRecordsAsync;
     Load += InitializeAsync;
+
+    // S12 (AGENTS.md §7/§11/§17) — apply the OS's current effective dark/light state once at
+    // startup, then keep it live for the rest of the process by reacting to SystemEvents.
+    ApplyDarkMode();
+    SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
   }
 
   /// <inheritdoc />
@@ -125,6 +145,30 @@ public sealed class MainForm : Form
     }
 
     base.WndProc(ref m);
+  }
+
+  /// <inheritdoc />
+  protected override void OnDpiChanged(DpiChangedEventArgs e)
+  {
+    base.OnDpiChanged(e);
+    // TrayIconService.UpdateDisplay only redraws the icon when the displayed hour/minute/state/
+    // layout changes (AGENTS.md §10.1) — none of which a DPI change alone affects — so force a
+    // fresh render explicitly here instead (AGENTS.md §7/§17).
+    _trayIconService.RefreshIcon();
+  }
+
+  /// <inheritdoc />
+  protected override void Dispose(bool disposing)
+  {
+    if (disposing)
+    {
+      // SystemEvents is a static, process-wide event source: a missed unsubscribe here would leave
+      // it holding a reference to OnUserPreferenceChanged (and therefore to this form) past this
+      // form's own disposal (AGENTS.md §7/§17).
+      SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged;
+    }
+
+    base.Dispose(disposing);
   }
 
   private void HideToTray()
@@ -228,6 +272,39 @@ public sealed class MainForm : Form
     {
       await _database.SaveWindowPositionAsync(current.X, current.Y);
     }
+  }
+
+  /// <summary>
+  /// Applies the current effective OS dark/light state (AGENTS.md §7/§11/§17) to every theme-aware
+  /// surface: <see cref="StopwatchControl.DarkMode"/> and <see cref="RecordsListControl.Dark"/>
+  /// (whose setters already trigger their own repaint), <see cref="TrayIconService.DarkMode"/>, and
+  /// the version footer's muted-text color. Called once at startup and again on every live OS theme
+  /// change via <see cref="OnUserPreferenceChanged"/>.
+  /// </summary>
+  private void ApplyDarkMode()
+  {
+    bool dark = Application.IsDarkModeEnabled;
+    _stopwatchControl.DarkMode = dark;
+    _recordsListControl.Dark = dark;
+    _trayIconService.DarkMode = dark;
+    _versionLabel.ForeColor = Palette.MutedText(dark);
+  }
+
+  /// <summary>
+  /// Reacts to a live OS user-preference change (AGENTS.md §7/§17). The light/dark-mode toggle is
+  /// delivered under <see cref="UserPreferenceCategory.General"/> — it has no dedicated category of
+  /// its own — so every other category is ignored here. This fires on <c>SystemEvents</c>'s own
+  /// notification window's thread, not necessarily this form's UI thread, hence the
+  /// <see cref="InvokeOnUiThread"/> marshal.
+  /// </summary>
+  private void OnUserPreferenceChanged(object? sender, UserPreferenceChangedEventArgs e)
+  {
+    if (e.Category != UserPreferenceCategory.General)
+    {
+      return;
+    }
+
+    InvokeOnUiThread(ApplyDarkMode);
   }
 
   private async void InitializeAsync(object? sender, EventArgs e)

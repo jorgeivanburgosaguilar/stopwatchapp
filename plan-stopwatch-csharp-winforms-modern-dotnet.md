@@ -521,7 +521,7 @@ log for anything discovered or decided while executing a stage — check it alon
 | S11a Visual design refresh | ✅ Done | 2026-09-11 | Owner-drawn rounded buttons/rows + card borders as the GDI+ elevation stand-in; `TrayIconService` needed no edit (see `AGENTS.md` §17) |
 | S11b Window position memory | ✅ Done | 2026-09-11 | `window_position` migration 2 + `_shownAtLocation` baseline in `MainForm` (see `AGENTS.md` §17, dated 2026-09-11) |
 | S11c Tray icon: large minutes under an hour | ✅ Done | 2026-09-11 | Large-MM layout drawn by measured point, not centered RectangleF; `TrayIconLayout` tracked explicitly in the dirty-check tuple; follow-up: stacked layout's hours row is not zero-padded (`2`, not `02`) — a tray-icon-only exception (see `AGENTS.md` §17, dated 2026-09-11) |
-| S12 Theme/DPI/version polish | ⬜ Not started | — | |
+| S12 Theme/DPI/version polish | ✅ Done | 2026-09-11 | `Application.IsDarkModeEnabled` + `SystemEvents.UserPreferenceChanged` (`UserPreferenceCategory.General`) wired in `MainForm`; `DpiChanged` forces `TrayIconService.RefreshIcon()`; version footer label reads `Application.ProductVersion` (see `AGENTS.md` §17, dated 2026-09-11) |
 | S13 Publish | ⬜ Not started | — | |
 
 Project layout (unchanged by staging — every stage below adds to this tree):
@@ -1163,7 +1163,7 @@ part of a parallel wave.
   icon tint, tooltip format, context menu, or double-click behavior (all S8/S9, unchanged); DPI-based
   resizing of the icon itself (S12's job).
 
-### S12 — Theme, DPI, and version polish pass
+### S12 — Theme, DPI, and version polish pass ✅ Done
 
 - **Depends on:** S9, S10, S11 (i.e., after the whole feature set exists), and S11a — the light/dark
   detection this stage wires must apply to the refreshed palette S11a produces, not the one it

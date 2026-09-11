@@ -133,6 +133,21 @@ public sealed partial class TrayIconService : IDisposable
   }
 
   /// <summary>
+  /// Forces the tray icon bitmap to be re-rendered from its current display values, bypassing
+  /// <see cref="UpdateDisplay"/>'s once-per-second dirty-check. Used by <c>MainForm</c> on
+  /// <see cref="Form.DpiChanged"/> (AGENTS.md §7/§17): a DPI change alone never changes the
+  /// displayed hour/minute/state/layout, so <see cref="UpdateDisplay"/> would otherwise skip the
+  /// redraw entirely.
+  /// </summary>
+  public void RefreshIcon() =>
+    RenderIcon(
+      _lastRendered.Hours,
+      _lastRendered.Minutes,
+      _lastRendered.State,
+      _lastRendered.Layout
+    );
+
+  /// <summary>
   /// Pure layout selection (AGENTS.md §10.1/§17): a single large two-digit MM readout while the
   /// elapsed time is under an hour, else the original stacked hours-over-minutes rows. Elapsed hours
   /// rather than raw milliseconds is the input here because <see cref="UpdateDisplay"/> already
