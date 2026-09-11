@@ -9,6 +9,10 @@
     <Platform>x64</Platform>
     <Version>1.0.0</Version>
 
+    <!-- Required by LibraryImportAttribute-based source-generated interop (SYSLIB1062); see
+         TrayIconService's DestroyIcon P/Invoke and AGENTS.md §17. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
     <!-- WinForms application configuration (source-generates ApplicationConfiguration.Initialize) -->
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <ApplicationVisualStyles>true</ApplicationVisualStyles>

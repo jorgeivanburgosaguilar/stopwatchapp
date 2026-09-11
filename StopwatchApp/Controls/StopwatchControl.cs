@@ -39,6 +39,7 @@ public sealed class StopwatchControl : UserControl
       // (synchronous, no awaits) and refreshing controls here directly is safe.
       Timer.Tick();
       UpdateDisplay();
+      Tick?.Invoke();
     };
 
     _elapsedLabel = new Label
@@ -57,39 +58,20 @@ public sealed class StopwatchControl : UserControl
     };
 
     _primaryButton = CreateButton("Start", Palette.StartButton);
-    _primaryButton.Click += (_, _) =>
-    {
-      Timer.Start();
-      UpdateDisplay();
-      StateChanged?.Invoke();
-    };
+    _primaryButton.Click += (_, _) => StartTimer();
 
     _pauseButton = CreateButton("Pause", Palette.PauseButton);
-    _pauseButton.Click += async (_, _) =>
-    {
-      // The outer await here (no ConfigureAwait(false)) captures the UI SynchronizationContext,
-      // so UpdateDisplay() below is guaranteed to run back on the UI thread regardless of what
-      // thread PauseAsync's own internals (which do use ConfigureAwait(false)) complete on.
-      await Timer.PauseAsync();
-      UpdateDisplay();
-      StateChanged?.Invoke();
-    };
+    // The outer await here (no ConfigureAwait(false)) captures the UI SynchronizationContext, so
+    // PauseTimerAsync's own UpdateDisplay() call is guaranteed to run back on the UI thread
+    // regardless of what thread PauseAsync's internals (which do use ConfigureAwait(false))
+    // complete on.
+    _pauseButton.Click += async (_, _) => await PauseTimerAsync();
 
     _lapButton = CreateButton("Lap", Palette.LapButton);
-    _lapButton.Click += (_, _) =>
-    {
-      Timer.Lap();
-      UpdateDisplay();
-      StateChanged?.Invoke();
-    };
+    _lapButton.Click += (_, _) => AddLap();
 
     _stopButton = CreateButton("Stop", Palette.StopButton);
-    _stopButton.Click += async (_, _) =>
-    {
-      await Timer.StopAsync();
-      UpdateDisplay();
-      StateChanged?.Invoke();
-    };
+    _stopButton.Click += async (_, _) => await StopTimerAsync();
 
     FlowLayoutPanel buttonRow = new()
     {
@@ -127,6 +109,14 @@ public sealed class StopwatchControl : UserControl
   public event Action? StateChanged;
 
   /// <summary>
+  /// Fires once a second, at the end of the internal UI timer's <c>Tick</c> handler (so always on
+  /// the UI thread) — the same heartbeat that drives <see cref="StopwatchTimer.Tick"/> and
+  /// <see cref="UpdateDisplay"/>. Only fires while running; a parent needing to refresh during idle
+  /// or paused states should also subscribe to <see cref="StateChanged"/>.
+  /// </summary>
+  public event Action? Tick;
+
+  /// <summary>
   /// Gets or sets whether the control renders its palette-driven surfaces in dark mode. Defaults
   /// to <see langword="false"/>; wiring this to the OS setting is S12's job (AGENTS.md §11/§17).
   /// </summary>
@@ -148,6 +138,52 @@ public sealed class StopwatchControl : UserControl
   public async Task RestoreAsync()
   {
     await Timer.RestoreAsync();
+    UpdateDisplay();
+    StateChanged?.Invoke();
+  }
+
+  /// <summary>
+  /// Starts a fresh session, or resumes a paused one, and refreshes the display. The same action
+  /// the Start/Continue button performs — exposed so a caller outside this control's own buttons
+  /// (the tray menu, a global hotkey) can drive the same transition without leaving the window's
+  /// display stale (AGENTS.md §17).
+  /// </summary>
+  public void StartTimer()
+  {
+    Timer.Start();
+    UpdateDisplay();
+    StateChanged?.Invoke();
+  }
+
+  /// <summary>
+  /// Pauses the running session and refreshes the display. The same action the Pause button
+  /// performs — see <see cref="StartTimer"/> for why this is exposed.
+  /// </summary>
+  public async Task PauseTimerAsync()
+  {
+    await Timer.PauseAsync();
+    UpdateDisplay();
+    StateChanged?.Invoke();
+  }
+
+  /// <summary>
+  /// Records a lap and refreshes the display. The same action the Lap button performs — see
+  /// <see cref="StartTimer"/> for why this is exposed.
+  /// </summary>
+  public void AddLap()
+  {
+    Timer.Lap();
+    UpdateDisplay();
+    StateChanged?.Invoke();
+  }
+
+  /// <summary>
+  /// Stops the current session and refreshes the display. The same action the Stop button
+  /// performs — see <see cref="StartTimer"/> for why this is exposed.
+  /// </summary>
+  public async Task StopTimerAsync()
+  {
+    await Timer.StopAsync();
     UpdateDisplay();
     StateChanged?.Invoke();
   }
