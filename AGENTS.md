@@ -1149,3 +1149,74 @@ that now carries the actual rule.
   instance's window handle directly (unaffected by ownership) and `PostMessage` it there instead of
   broadcasting; `MainForm.WindowTitle` (`"Stopwatch"`) is now a shared `internal const` so both
   classes reference the same literal. See §10.5.
+- **2026-09-11 — S11a: `Palette.cs`'s spacing/radius/elevation additions, exact shape.** Extended
+  alongside the existing color tables per §3.1's "same per-role accessor shape": six `public const
+  int` spacing constants (`SpacingXs`=4, `SpacingSm`=8, `SpacingMd`=12, `SpacingLg`=16,
+  `SpacingXl`=24, `SpacingXxl`=32), three `public const int` corner radii (`ControlCornerRadius`=6,
+  `CardCornerRadius`=8, `DialogCornerRadius`=12), and three elevation accessors —
+  `Color ShadowResting(bool dark)`/`Color ShadowHover(bool dark)` (both `rgba`-derived per the S11a
+  comp: light ≈ `rgba(15,23,42,.07)`/`.14)`, dark ≈ `rgba(0,0,0,.5)`/`.55)`) and a non-parameterized
+  `Color TopEdgeHighlight` (the dark-mode mica top-edge line, `rgba(255,255,255,.08)`-ish). All new
+  color values are additive to §11's table, not a change to any existing hex value in it. See §11.
+- **2026-09-11 — S11a: GDI+ elevation translated as owner-drawn rounded outlines + existing
+  hover/pressed fills, not a rendered drop shadow.** Per the stage brief's explicit "don't
+  over-engineer a shadow renderer" guidance: no layered-window/blur shadow system was built.
+  Instead — (1) `StopwatchControl` and `RecordsListControl` each draw a 1px rounded-rect outline in
+  `Palette.ShadowResting(dark)` around their own bounds in `OnPaint` (the "card" resting-elevation
+  cue); (2) the four transport buttons and the two `ClearRecordsDialog` buttons get
+  `Palette.ControlCornerRadius` rounded corners; (3) button hover/pressed feedback continues to be
+  the pre-existing base/hover/pressed color swap (§11) — no separate shadow layer was added there,
+  since the brief names a background-color shift as an acceptable, cheaper substitute; (4) in dark
+  mode only, a hovered/pressed transport button additionally draws a 1px `Palette.TopEdgeHighlight`
+  line across its top edge (the "mica" cue) — `Palette.ShadowHover` is defined for symmetry with the
+  comp's token set but nothing in this pass currently renders it, since no owner-drawn surface here
+  has a distinct "raised" state beyond hover/pressed. See §11 and the `StopwatchControl`/
+  `RecordsListControl` `OnPaint` overrides.
+- **2026-09-11 — S11a: rounded-rectangle path math shared via a new internal
+  `StopwatchApp/Theme/RoundedRectangle.cs` helper.** Not in the stage's named file list, but a
+  single `internal static GraphicsPath Path(Rectangle, int radius)` avoids re-deriving the same
+  4-arc `GraphicsPath` construction independently in `StopwatchControl` (buttons + card border),
+  `RecordsListControl` (row cards + panel border), and `ClearRecordsDialog` (button corner
+  `Region`s) — the same "one body, not three copies" principle §17's S7 entries already apply
+  elsewhere in this codebase. `internal`, so it carries no `GenerateDocumentationFile` obligation
+  under §5's public-only XML-doc rule, though it is documented anyway.
+- **2026-09-11 — S11a: transport-button glyphs are `GraphicsPath`/`FillPolygon`-drawn shapes, not
+  embedded icon resources.** Implemented in a private nested `StopwatchControl.GlyphButton : Button`
+  (owner-painted via `ControlStyles.UserPaint`) that draws its state color fill, an optional dark-
+  mode top-edge highlight, a monochrome glyph (`Play`/`Pause`/`Flag`/`Stop`, one `private enum
+  Glyph` case each), and the unchanged button text — no new image assets, no font-icon dependency,
+  and the glyph color always matches the existing white `ForeColor` used in both themes. Button
+  labels, left-to-right order, and base/hover/pressed colors are byte-for-byte the §8.5/§11 values;
+  only the corner radius, spacing, and the addition of a glyph changed. `GlyphButton`'s
+  `GetPreferredSize` override must be `public` (`ButtonBase.GetPreferredSize` is `public virtual`;
+  C# forbids narrowing an override's accessibility even on a `private` nested class), which does not
+  widen `StopwatchControl`'s own public surface — verified via `git diff` showing that `public` only
+  on the nested type. See §3.1 (no public interface change) and §8.5.
+- **2026-09-11 — S11a: `RecordsListControl`'s two `ListBox`es switched to
+  `DrawMode.OwnerDrawFixed` with `SelectionMode.None`.** Needed to render each row as its own small
+  rounded card (`Palette.RowBackground`/`Palette.Border`, previously-unused accessors) with S11a's
+  spacing inset; `SelectionMode.None` was added alongside it because the stock selection highlight
+  has no counterpart in the custom-painted row and nothing in the app ever reads `SelectedIndex` —
+  this is an internal rendering detail, not a change to `RecordsListControl`'s public surface (still
+  just `UpdateRecords`/`UpdateLaps`/`ClearAllRequested`/`Dark`, per §3.1). Row text templates and the
+  "No records yet" empty state are byte-for-byte unchanged (§8.5); only the chrome around each row
+  differs. Both list boxes and the control's own `BackColor` are now driven by
+  `Palette.CardBackground(dark)` (previously the control had no explicit background), giving
+  `RecordsListControl` the same card treatment as `StopwatchControl`.
+- **2026-09-11 — S11a: `ClearRecordsDialog`'s outer frame is not manually rounded; only its two
+  buttons are.** `Palette.DialogCornerRadius` (12px) is defined for the comp's token set but not
+  rendered by this dialog: Windows 11's DWM already rounds top-level window frames by default, so a
+  manual `Region`/layered-window trick would duplicate what the OS already provides and risks the
+  exact flicker/perf cost the stage brief says to avoid. The `Clear All`/`Cancel` buttons instead get
+  a one-time `Region`-clipped rounded corner (`Palette.ControlCornerRadius`) computed after
+  `dialog.PerformLayout()`, since the dialog is shown once and never resized — cheaper than an
+  owner-drawn `OnPaint` loop for a static dialog. `ShowConfirm`'s signature and `DialogResult`
+  mapping are unchanged (§3.1). Neither button gained a `Palette` color triplet, since §11 assigns
+  colors only to the four transport buttons, not to this dialog's two buttons.
+- **2026-09-11 — S11a: `Services/TrayIconService.cs` needed no code change.** Its `RenderIcon` tint
+  already reads `Palette.Accent`/`Palette.PauseButton.Base`/`Palette.MutedText` (set in S8, §17
+  above), and this stage changes no existing `Palette` hex value — only adds new spacing/radius/
+  elevation members alongside them — so the tray icon's rendered color is unchanged output for
+  unchanged input. Its two-stacked-digit-rows layout stays exactly as §10.1 specifies, per this
+  stage's explicit out-of-scope note. No manual verification gap beyond what §4 item 5 already
+  covers, since nothing in this file was touched.

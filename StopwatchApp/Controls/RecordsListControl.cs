@@ -1,3 +1,4 @@
+using System.Drawing.Drawing2D;
 using StopwatchApp.Formatting;
 using StopwatchApp.Models;
 using StopwatchApp.Theme;
@@ -26,28 +27,40 @@ public sealed class RecordsListControl : UserControl
   public RecordsListControl()
   {
     Dock = DockStyle.Fill;
+    // S11a card treatment, matching StopwatchControl: an explicit palette background plus an
+    // inset so the rounded border drawn in OnPaint doesn't clip the content.
+    Padding = new Padding(Palette.SpacingLg);
+    DoubleBuffered = true;
 
     _lapsHeader = new Label
     {
       Text = "Laps",
       AutoSize = true,
-      Margin = new Padding(0, 0, 0, 4),
+      Margin = new Padding(0, 0, 0, Palette.SpacingXs),
     };
     _lapsListBox = new ListBox
     {
       Dock = DockStyle.Top,
       Height = 120,
       IntegralHeight = false,
-      Margin = new Padding(0, 0, 0, 8),
+      Margin = new Padding(0, 0, 0, Palette.SpacingSm),
+      BorderStyle = BorderStyle.None,
     };
+    ConfigureRowRendering(_lapsListBox);
 
     Label recordsHeader = new()
     {
       Text = "Records",
       AutoSize = true,
-      Margin = new Padding(0, 0, 0, 4),
+      Margin = new Padding(0, 0, 0, Palette.SpacingXs),
     };
-    _recordsListBox = new ListBox { Dock = DockStyle.Fill, IntegralHeight = false };
+    _recordsListBox = new ListBox
+    {
+      Dock = DockStyle.Fill,
+      IntegralHeight = false,
+      BorderStyle = BorderStyle.None,
+    };
+    ConfigureRowRendering(_recordsListBox);
     _emptyStateLabel = new Label
     {
       Text = "No records yet",
@@ -60,7 +73,7 @@ public sealed class RecordsListControl : UserControl
     {
       Text = "Clear All Records",
       AutoSize = true,
-      Margin = new Padding(0, 8, 0, 8),
+      Margin = new Padding(0, Palette.SpacingSm, 0, Palette.SpacingSm),
       Visible = false,
     };
     _clearAllButton.Click += (_, _) => ClearAllRequested?.Invoke();
@@ -183,8 +196,86 @@ public sealed class RecordsListControl : UserControl
     + $"⏱ {TimeFormat.FormatTimeOnly(record.StartTimestamp)}-{TimeFormat.FormatTimeOnly(record.EndTimestamp)} "
     + $"⏳ Duration: {TimeFormat.FormatElapsed(record.ElapsedMinutes)}";
 
+  /// <inheritdoc />
+  protected override void OnPaint(PaintEventArgs e)
+  {
+    base.OnPaint(e);
+    // Same low-risk "thin rounded outline" resting-elevation treatment as StopwatchControl's card
+    // (AGENTS.md §17) — kept as one technique reused via RoundedRectangle rather than reinvented.
+    e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+    Rectangle bounds = new(0, 0, Width - 1, Height - 1);
+    using GraphicsPath path = RoundedRectangle.Path(bounds, Palette.CardCornerRadius);
+    using Pen borderPen = new(Palette.ShadowResting(_dark), 1f);
+    e.Graphics.DrawPath(borderPen, path);
+  }
+
   private void ApplyTheme()
   {
+    Color cardBackground = Palette.CardBackground(_dark);
+    BackColor = cardBackground;
+    _lapsListBox.BackColor = cardBackground;
+    _recordsListBox.BackColor = cardBackground;
     _emptyStateLabel.ForeColor = Palette.EmptyStateText(_dark);
+    // Row colors are read from _dark at paint time (DrawRow below), so a theme flip just needs a
+    // repaint, not a rebuild of the (unchanged) row text.
+    _lapsListBox.Invalidate();
+    _recordsListBox.Invalidate();
+  }
+
+  /// <summary>
+  /// Switches a records/laps <see cref="ListBox"/> to the S11a row treatment: fixed-height owner
+  /// drawing so each row renders as a small rounded card (<see cref="Palette.RowBackground"/> fill,
+  /// <see cref="Palette.Border"/> outline) with its own inset spacing, instead of the plain
+  /// default-drawn text rows the control used before this stage. Selection is turned off — these
+  /// rows are a read-only log, and the stock selection highlight would clash with the custom paint.
+  /// </summary>
+  /// <param name="listBox">The list box to configure.</param>
+  private void ConfigureRowRendering(ListBox listBox)
+  {
+    listBox.SelectionMode = SelectionMode.None;
+    listBox.DrawMode = DrawMode.OwnerDrawFixed;
+    listBox.ItemHeight =
+      TextRenderer.MeasureText("Xg", listBox.Font).Height
+      + (Palette.SpacingSm * 2)
+      + Palette.SpacingXs;
+    listBox.DrawItem += (_, e) => DrawRow(listBox, e);
+  }
+
+  private void DrawRow(ListBox listBox, DrawItemEventArgs e)
+  {
+    if (e.Index < 0)
+    {
+      return;
+    }
+
+    e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+
+    // The card background (set on the list box itself in ApplyTheme) shows through as the gap
+    // between rounded row cards, so it only needs painting here, not a separate lookup.
+    using (SolidBrush gapBrush = new(listBox.BackColor))
+    {
+      e.Graphics.FillRectangle(gapBrush, e.Bounds);
+    }
+
+    Rectangle rowBounds = Rectangle.Inflate(e.Bounds, 0, -(Palette.SpacingXs / 2));
+    using GraphicsPath path = RoundedRectangle.Path(rowBounds, Palette.ControlCornerRadius);
+    using (SolidBrush rowBrush = new(Palette.RowBackground(_dark)))
+    {
+      e.Graphics.FillPath(rowBrush, path);
+    }
+    using (Pen borderPen = new(Palette.Border(_dark), 1f))
+    {
+      e.Graphics.DrawPath(borderPen, path);
+    }
+
+    Rectangle textBounds = Rectangle.Inflate(rowBounds, -Palette.SpacingSm, 0);
+    TextRenderer.DrawText(
+      e.Graphics,
+      listBox.Items[e.Index].ToString() ?? string.Empty,
+      listBox.Font,
+      textBounds,
+      Palette.Text(_dark),
+      TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.NoPadding
+    );
   }
 }

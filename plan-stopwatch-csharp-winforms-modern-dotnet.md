@@ -459,7 +459,7 @@ log for anything discovered or decided while executing a stage — check it alon
 | S9 Window-to-tray | ✅ Done | 2026-09-10 | |
 | S10 Keyboard shortcuts | ✅ Done | 2026-09-11 | Global hotkeys dropped for window-scoped shortcuts (see `AGENTS.md` §17) |
 | S11 Single-instance | ✅ Done | 2026-09-11 | `FindWindow`-targeted `PostMessage`, not `HWND_BROADCAST` (see `AGENTS.md` §17) |
-| S11a Visual design refresh | ⬜ Not started | — | |
+| S11a Visual design refresh | ✅ Done | 2026-09-11 | Owner-drawn rounded buttons/rows + card borders as the GDI+ elevation stand-in; `TrayIconService` needed no edit (see `AGENTS.md` §17) |
 | S12 Theme/DPI/version polish | ⬜ Not started | — | |
 | S13 Publish | ⬜ Not started | — | |
 

@@ -7,6 +7,62 @@ namespace StopwatchApp.Theme;
 /// </summary>
 public static class Palette
 {
+  /// <summary>Extra-small spacing unit, in pixels (S11a comp token).</summary>
+  public const int SpacingXs = 4;
+
+  /// <summary>Small spacing unit, in pixels (S11a comp token).</summary>
+  public const int SpacingSm = 8;
+
+  /// <summary>Medium spacing unit, in pixels (S11a comp token).</summary>
+  public const int SpacingMd = 12;
+
+  /// <summary>Large spacing unit, in pixels (S11a comp token).</summary>
+  public const int SpacingLg = 16;
+
+  /// <summary>Extra-large spacing unit, in pixels (S11a comp token).</summary>
+  public const int SpacingXl = 24;
+
+  /// <summary>2x-extra-large spacing unit, in pixels (S11a comp token).</summary>
+  public const int SpacingXxl = 32;
+
+  /// <summary>Corner radius for controls such as buttons and chips, in pixels (S11a comp token).</summary>
+  public const int ControlCornerRadius = 6;
+
+  /// <summary>Corner radius for cards/panels, in pixels (S11a comp token).</summary>
+  public const int CardCornerRadius = 8;
+
+  /// <summary>
+  /// Corner radius for dialogs, in pixels (S11a comp token). Informational only: on Windows 11 the
+  /// DWM already rounds top-level window frames by default, so <see cref="Controls.ClearRecordsDialog"/>
+  /// does not render this radius itself — see AGENTS.md §17.
+  /// </summary>
+  public const int DialogCornerRadius = 12;
+
+  /// <summary>
+  /// Gets the resting-elevation shadow tint used as a thin owner-drawn border/outline on
+  /// custom-painted cards and controls — the low-risk GDI+ translation of the comp's faint resting
+  /// shadow (approximately <c>rgba(15,23,42,.07)</c> light / <c>rgba(0,0,0,.5)</c> dark). See
+  /// AGENTS.md §17 for why this app does not render an actual blurred drop shadow.
+  /// </summary>
+  /// <param name="dark">Whether dark mode is active.</param>
+  public static Color ShadowResting(bool dark) =>
+    dark ? Color.FromArgb(128, 0x00, 0x00, 0x00) : Color.FromArgb(18, 0x0F, 0x17, 0x2A);
+
+  /// <summary>
+  /// Gets the hover/raised-elevation shadow tint (approximately <c>rgba(15,23,42,.14)</c> light /
+  /// <c>rgba(0,0,0,.55)</c> dark) — a bit more pronounced than <see cref="ShadowResting"/>.
+  /// </summary>
+  /// <param name="dark">Whether dark mode is active.</param>
+  public static Color ShadowHover(bool dark) =>
+    dark ? Color.FromArgb(140, 0x00, 0x00, 0x00) : Color.FromArgb(36, 0x0F, 0x17, 0x2A);
+
+  /// <summary>
+  /// Gets the dark-mode "mica-style" 1px lighter top-edge highlight drawn on a hovered/pressed
+  /// owner-drawn surface. Light mode has no equivalent comp token, so callers only use this while
+  /// dark mode is active.
+  /// </summary>
+  public static Color TopEdgeHighlight { get; } = Color.FromArgb(20, 0xFF, 0xFF, 0xFF);
+
   /// <summary>Gets the primary text color for the given theme.</summary>
   /// <param name="dark">Whether dark mode is active.</param>
   public static Color Text(bool dark) =>
