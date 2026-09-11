@@ -762,9 +762,17 @@ shortcut pressed in a state where it doesn't apply.
 ### 10.5 Single instance
 
 Named `System.Threading.Mutex` created at startup. If a second instance detects the mutex already
-exists, it sends a registered window message (via `RegisterWindowMessage` +
-`PostMessage(HWND_BROADCAST, ...)`) asking the first instance to restore and activate its window,
-then exits immediately — never runs a second copy.
+exists, it locates the first instance's window with `FindWindow` (matched by the fixed window
+title, `MainForm.WindowTitle`) and sends it a registered window message (via
+`RegisterWindowMessage` + `PostMessage`) asking it to restore and activate itself, then exits
+immediately — never runs a second copy.
+
+**Not `PostMessage(HWND_BROADCAST, ...)`**, despite that being the originally-planned mechanism
+(§17, dated 2026-09-11): once hidden to tray, §10.3's `ShowInTaskbar = false` gives the window an
+owner (the mechanism WinForms uses to drop its taskbar button), and Windows excludes owned windows
+from `HWND_BROADCAST` delivery regardless of visibility — so a broadcast posted while the window is
+hidden is silently never delivered, in exactly the one state single-instance activation exists to
+handle. A direct, title-targeted `FindWindow` lookup is not subject to that exclusion.
 
 ---
 
@@ -1118,3 +1126,26 @@ that now carries the actual rule.
   `Shift+Space` (Lap), `Enter` (Stop) — dispatched from `MainForm.ProcessCmdKey` through the same
   `StopwatchControl` action methods S8 already added for the tray menu. See §10.4 for the full
   spec and §3.1 for `MapShortcut`'s shape.
+- **2026-09-11 — S11: `user32.dll`'s bare `RegisterWindowMessage`/`PostMessage`/`FindWindow` names
+  aren't real export names.** A first `[LibraryImport("user32.dll")]` attempt using the bare
+  function names built clean but crashed every launch with
+  `EntryPointNotFoundException: Unable to find an entry point named 'RegisterWindowMessage'` — the
+  actual exports are the `...W` (wide-string) forms; the bare names are C-header macros, not
+  linkable symbols. Fixed with an explicit `EntryPoint = "RegisterWindowMessageW"` /
+  `"PostMessageW"` / `"FindWindowW"` on each `[LibraryImport]`, alongside
+  `StringMarshalling = StringMarshalling.Utf16` on the two that take a `string` parameter.
+- **2026-09-11 — S11: `HWND_BROADCAST` does not reach the window once hidden to tray; switched to a
+  `FindWindow`-targeted `PostMessage`.** The originally-specified §3.5/§10.5 mechanism
+  (`RegisterWindowMessage` + `PostMessage(HWND_BROADCAST, ...)`) worked when tested against a
+  visible window, but silently failed the moment the window was hidden to tray first — exactly the
+  scenario this feature exists to serve. Root cause, confirmed by driving both instances externally
+  via PowerShell P/Invoke (`EnumWindows` + `GetWindowThreadProcessId` to inspect the live
+  owner/visibility state of the actual window handle, which §10.3's handle-recreation note above
+  means is a *different* HWND than the one the form started with): `HWND_BROADCAST` is documented
+  to reach invisible windows only if they're *unowned*, and §10.3's `ShowInTaskbar = false` gives
+  the recreated handle an owner as part of how WinForms drops its taskbar button — so the broadcast
+  is accepted (`PostMessage` returns success) but never queued to that window at all. Fixed by
+  having the second instance call `FindWindow(null, MainForm.WindowTitle)` to get the first
+  instance's window handle directly (unaffected by ownership) and `PostMessage` it there instead of
+  broadcasting; `MainForm.WindowTitle` (`"Stopwatch"`) is now a shared `internal const` so both
+  classes reference the same literal. See §10.5.

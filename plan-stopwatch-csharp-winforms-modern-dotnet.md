@@ -458,7 +458,7 @@ log for anything discovered or decided while executing a stage — check it alon
 | S8 TrayIconService | ✅ Done | 2026-09-10 | |
 | S9 Window-to-tray | ✅ Done | 2026-09-10 | |
 | S10 Keyboard shortcuts | ✅ Done | 2026-09-11 | Global hotkeys dropped for window-scoped shortcuts (see `AGENTS.md` §17) |
-| S11 Single-instance | ⬜ Not started | — | |
+| S11 Single-instance | ✅ Done | 2026-09-11 | `FindWindow`-targeted `PostMessage`, not `HWND_BROADCAST` (see `AGENTS.md` §17) |
 | S11a Visual design refresh | ⬜ Not started | — | |
 | S12 Theme/DPI/version polish | ⬜ Not started | — | |
 | S13 Publish | ⬜ Not started | — | |
@@ -935,17 +935,31 @@ part of a parallel wave.
 - **Out of scope:** global/system-wide hotkeys (removed from the project entirely by this stage),
   user-configurable bindings, single-instance (S11).
 
-### S11 — Single-instance enforcement
+### S11 — Single-instance enforcement ✅ Done
 
 - **Depends on:** S7 (needs a window to restore/activate).
-- **Files:** edits to `StopwatchApp/Program.cs`.
-- **Build:** §3.5 — named `Mutex` at startup; a second instance detects the existing mutex, sends
-  a `RegisterWindowMessage` + `PostMessage(HWND_BROADCAST, ...)` asking the first instance to
-  restore/activate, then exits immediately.
-- **Public interface:** none new (logic lives in `Program.Main`, plus a `WndProc` handler in
-  `MainForm` for the registered message).
-- **Done when:** manual check — launching a second instance while one is running restores/activates
-  the first window and the second process exits with no second window ever appearing.
+- **Files:** `StopwatchApp/Program.cs`, `StopwatchApp/MainForm.cs`.
+- **Build:** §3.5/§10.5 — named `Mutex` at startup; a second instance detects the existing mutex,
+  locates the first instance's window via `FindWindow(null, MainForm.WindowTitle)`, and sends it a
+  `RegisterWindowMessage` + `PostMessage` asking it to restore/activate, then exits immediately.
+  **Not `PostMessage(HWND_BROADCAST, ...)`** as originally planned — see `AGENTS.md` §17, dated
+  2026-09-11, for why a broadcast silently never reaches the window once it's hidden to tray (the
+  exact scenario this feature exists to serve), and for the separate `EntryPoint` gotcha on the
+  three `user32.dll` P/Invokes (`RegisterWindowMessageW`/`PostMessageW`/`FindWindowW` — the bare
+  names aren't real exports and crash with `EntryPointNotFoundException`). `MainForm.WindowTitle`
+  is now a shared `internal const` ("Stopwatch") for the `FindWindow` lookup. `MainForm.WndProc` is
+  the receiving end, comparing `m.Msg` against the registered message id and calling the same
+  `RestoreWindow()` the tray's `Open` item uses.
+- **Public interface:** none new (logic lives in `Program.Main`, plus a `WndProc` override in
+  `MainForm` for the registered message, plus the `MainForm.WindowTitle`/`Program.
+  RegisterWindowMessage`/`Program.ActivateMessageName` internals the two classes share).
+- **Done when:** manually verified (driving both instances via PowerShell + P/Invoke, since no
+  interactive desktop session narrates itself) — launching a second instance while one is running
+  restores/activates the first window and the second process exits (code 0) with no second window
+  ever appearing, in both the normally-visible and the hidden-to-tray starting states. Automated
+  gate verified: `csharpier check .`, `dotnet build -c Release` (zero warnings), `dotnet test` (49
+  passing, unchanged — this stage added no automated tests, matching its no-new-public-interface
+  scope).
 - **Owns acceptance criteria:** none listed by number in §6 (single-instance has no dedicated §6
   bullet — verified manually as specified in §3.5).
 - **Out of scope:** hotkeys.

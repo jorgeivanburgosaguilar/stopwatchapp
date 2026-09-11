@@ -10,17 +10,24 @@ namespace StopwatchApp;
 /// </summary>
 public sealed class MainForm : Form
 {
+  /// <summary>
+  /// The window title, also used by <see cref="Program"/> to locate this window from a second
+  /// instance (AGENTS.md §10.5).
+  /// </summary>
+  internal const string WindowTitle = "Stopwatch";
+
   private readonly Database _database;
   private readonly StopwatchControl _stopwatchControl;
   private readonly RecordsListControl _recordsListControl;
   private readonly TrayIconService _trayIconService;
+  private readonly int _activateMessage;
 
   /// <summary>
   /// Initializes a new instance of the <see cref="MainForm"/> class.
   /// </summary>
   public MainForm()
   {
-    Text = "Stopwatch";
+    Text = WindowTitle;
     ClientSize = new Size(560, 600);
     MinimumSize = new Size(400, 400);
     StartPosition = FormStartPosition.CenterScreen;
@@ -32,6 +39,7 @@ public sealed class MainForm : Form
     };
     _recordsListControl = new RecordsListControl();
     _trayIconService = new TrayIconService(_stopwatchControl, RestoreWindow, ExitApplication);
+    _activateMessage = (int)Program.RegisterWindowMessage(Program.ActivateMessageName);
 
     TableLayoutPanel layout = new()
     {
@@ -94,6 +102,20 @@ public sealed class MainForm : Form
 
     DispatchShortcut(shortcut.Value);
     return true;
+  }
+
+  /// <inheritdoc />
+  protected override void WndProc(ref Message m)
+  {
+    // A second instance detected our named mutex and posted this registered message instead of
+    // running its own copy (AGENTS.md §10.5/§3.5); restore and activate this window in response.
+    if (m.Msg == _activateMessage)
+    {
+      RestoreWindow();
+      return;
+    }
+
+    base.WndProc(ref m);
   }
 
   private void HideToTray()
