@@ -8,10 +8,11 @@ using StopwatchApp.Theme;
 namespace StopwatchApp.Services;
 
 /// <summary>
-/// Owns the <see cref="NotifyIcon"/>: a GDI+-rendered 32×32 icon showing hours over minutes, its
-/// tooltip, and its context menu (<c>Open</c>, the state-appropriate transition(s), <c>Exit</c>).
-/// See AGENTS.md §10.1/§10.2. Takes callbacks rather than a <c>MainForm</c> reference — parent/child
-/// communication happens through delegates, never a shared mutable reference (AGENTS.md §3).
+/// Owns the <see cref="NotifyIcon"/>: a GDI+-rendered 32×32 icon (large minute-only digits while
+/// elapsed hours == 0, else the original hours-over-minutes stacked layout), its tooltip, and its
+/// context menu (<c>Open</c>, the state-appropriate transition(s), <c>Exit</c>). See AGENTS.md
+/// §10.1/§10.2. Takes callbacks rather than a <c>MainForm</c> reference — parent/child communication
+/// happens through delegates, never a shared mutable reference (AGENTS.md §3).
 /// </summary>
 public sealed partial class TrayIconService : IDisposable
 {
@@ -28,7 +29,18 @@ public sealed partial class TrayIconService : IDisposable
   private bool _darkMode;
   private IntPtr _currentIconHandle;
   private Icon? _currentIcon;
-  private (int Hours, int Minutes, TrayState State) _lastRendered = (-1, -1, TrayState.Idle);
+
+  // The active layout is tracked explicitly here, alongside the rendered hour/minute/state, rather
+  // than inferred from the hour value each time. Crossing the 1-hour boundary always also changes
+  // the minute digits (`:59` → `:00`), so today the two conditions coincide — but a future change to
+  // either the layout-selection rule or the digit values shouldn't silently stop a layout switch
+  // from being treated as a change (AGENTS.md §10.1/§17).
+  private (int Hours, int Minutes, TrayState State, TrayIconLayout Layout) _lastRendered = (
+    -1,
+    -1,
+    TrayState.Idle,
+    TrayIconLayout.StackedHoursMinutes
+  );
 
   /// <summary>
   /// Initializes a new instance of the <see cref="TrayIconService"/> class and makes the tray icon
@@ -70,7 +82,12 @@ public sealed partial class TrayIconService : IDisposable
       }
 
       _darkMode = value;
-      RenderIcon(_lastRendered.Hours, _lastRendered.Minutes, _lastRendered.State);
+      RenderIcon(
+        _lastRendered.Hours,
+        _lastRendered.Minutes,
+        _lastRendered.State,
+        _lastRendered.Layout
+      );
     }
   }
 
@@ -94,7 +111,13 @@ public sealed partial class TrayIconService : IDisposable
       running ? TrayState.Running
       : paused ? TrayState.Paused
       : TrayState.Idle;
-    (int Hours, int Minutes, TrayState State) rendered = (hours, minutes, state);
+    TrayIconLayout layout = SelectLayout(hours);
+    (int Hours, int Minutes, TrayState State, TrayIconLayout Layout) rendered = (
+      hours,
+      minutes,
+      state,
+      layout
+    );
     if (rendered == _lastRendered)
     {
       return;
@@ -102,12 +125,32 @@ public sealed partial class TrayIconService : IDisposable
 
     bool stateChanged = state != _lastRendered.State;
     _lastRendered = rendered;
-    RenderIcon(hours, minutes, state);
+    RenderIcon(hours, minutes, state, layout);
     if (stateChanged)
     {
       RebuildStateMenuItems(state);
     }
   }
+
+  /// <summary>
+  /// Pure layout selection (AGENTS.md §10.1/§17): a single large two-digit MM readout while the
+  /// elapsed time is under an hour, else the original stacked hours-over-minutes rows. Elapsed hours
+  /// rather than raw milliseconds is the input here because <see cref="UpdateDisplay"/> already
+  /// derives <c>hours</c> the same way the tooltip's minute/hour digits are derived, so this and the
+  /// rendered digits can never disagree about where the hour boundary falls. Internal (not private)
+  /// so it can be unit tested without constructing a real <see cref="NotifyIcon"/>/HICON.
+  /// </summary>
+  internal static TrayIconLayout SelectLayout(int hours) =>
+    hours == 0 ? TrayIconLayout.LargeMinutes : TrayIconLayout.StackedHoursMinutes;
+
+  /// <summary>
+  /// Pure formatting rule for the stacked layout's hours row (AGENTS.md §10.1/§17): unlike every
+  /// other digit display in this app (e.g. <see cref="TimeFormat.FormatTime"/>, §8.4), the tray's
+  /// hours row is deliberately NOT zero-padded — a 1-digit hour count renders as <c>"2"</c>, not
+  /// <c>"02"</c>. No digit-count cap either, so a (hypothetical) 100+ hour session still renders its
+  /// true value. Internal (not private) so it can be unit tested without a real GDI+ handle.
+  /// </summary>
+  internal static string FormatHourText(int hours) => hours.ToString(CultureInfo.InvariantCulture);
 
   /// <inheritdoc />
   public void Dispose()
@@ -192,7 +235,7 @@ public sealed partial class TrayIconService : IDisposable
     return item;
   }
 
-  private void RenderIcon(int hours, int minutes, TrayState state)
+  private void RenderIcon(int hours, int minutes, TrayState state, TrayIconLayout layout)
   {
     Color tint = state switch
     {
@@ -200,25 +243,21 @@ public sealed partial class TrayIconService : IDisposable
       TrayState.Paused => Palette.PauseButton.Base,
       _ => Palette.MutedText(_darkMode),
     };
-    // Two digits per row is the fixed layout (AGENTS.md §10.1); an hour count of 100+ wraps at two
-    // digits here, but the tooltip set in UpdateDisplay carries the true, unrounded value.
-    string hourText = (hours % 100).ToString("D2", CultureInfo.InvariantCulture);
-    string minuteText = (minutes % 100).ToString("D2", CultureInfo.InvariantCulture);
 
     using Bitmap bitmap = new(32, 32);
     using (Graphics graphics = Graphics.FromImage(bitmap))
     {
       graphics.Clear(Color.Transparent);
       graphics.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
-      using Font font = new("Segoe UI", 13f, FontStyle.Bold, GraphicsUnit.Pixel);
       using SolidBrush brush = new(tint);
-      using StringFormat format = new()
+      if (layout == TrayIconLayout.LargeMinutes)
       {
-        Alignment = StringAlignment.Center,
-        LineAlignment = StringAlignment.Center,
-      };
-      graphics.DrawString(hourText, font, brush, new RectangleF(0, 0, 32, 16), format);
-      graphics.DrawString(minuteText, font, brush, new RectangleF(0, 16, 32, 16), format);
+        DrawLargeMinutes(graphics, brush, minutes);
+      }
+      else
+      {
+        DrawStackedHoursMinutes(graphics, brush, hours, minutes);
+      }
     }
 
     IntPtr newHandle = bitmap.GetHicon();
@@ -241,9 +280,85 @@ public sealed partial class TrayIconService : IDisposable
     }
   }
 
+  // Draws `text` centered within `bounds` by measuring it and computing an explicit origin point,
+  // instead of handing StringFormat.Alignment/LineAlignment a RectangleF (AGENTS.md §10.1/§17):
+  // whenever the measured text width can be close to or exceed the bounds' width — the large "MM"
+  // readout, or an hour count that isn't reliably two digits — that combination was observed
+  // (empirically, rendering to a Bitmap and inspecting pixel alpha) to silently drop a trailing
+  // character instead of overflowing/clipping evenly on both sides. Measuring first and drawing at a
+  // computed point sidesteps that rectangle-fit behavior entirely. `bounds` is used only for the
+  // centering math, not as a clip/wrap region.
+  private static void DrawCenteredByMeasuredPoint(
+    Graphics graphics,
+    Brush brush,
+    Font font,
+    string text,
+    RectangleF bounds
+  )
+  {
+    SizeF measured = graphics.MeasureString(
+      text,
+      font,
+      new SizeF(100, 100),
+      StringFormat.GenericDefault
+    );
+    PointF origin = new(
+      bounds.X + (bounds.Width - measured.Width) / 2f,
+      bounds.Y + (bounds.Height - measured.Height) / 2f
+    );
+    graphics.DrawString(text, font, brush, origin);
+  }
+
+  // A single large MM readout for the common under-an-hour case (AGENTS.md §10.1/§17): one row
+  // fills the whole 32×32 canvas instead of the stacked layout's two 16px-tall rows, since no hours
+  // row is needed while it would always read "00" anyway.
+  private static void DrawLargeMinutes(Graphics graphics, Brush brush, int minutes)
+  {
+    string minuteText = (minutes % 100).ToString("D2", CultureInfo.InvariantCulture);
+    using Font font = new("Segoe UI", 24f, FontStyle.Bold, GraphicsUnit.Pixel);
+    DrawCenteredByMeasuredPoint(graphics, brush, font, minuteText, new RectangleF(0, 0, 32, 32));
+  }
+
+  // The original two-stacked-rows layout (AGENTS.md §10.1), unchanged since S8 except for being
+  // pulled out of RenderIcon so it can be selected between. The hours row's formatting rule (NOT
+  // zero-padded, unlike the rest of this app — see AGENTS.md §17) lives in FormatHourText above. The
+  // minutes row is unaffected by that rule — still always two digits, zero-padded, and still
+  // rectangle-centered rather than measured-point-centered, since it's always exactly two glyphs.
+  private static void DrawStackedHoursMinutes(
+    Graphics graphics,
+    Brush brush,
+    int hours,
+    int minutes
+  )
+  {
+    string hourText = FormatHourText(hours);
+    string minuteText = (minutes % 100).ToString("D2", CultureInfo.InvariantCulture);
+    using Font font = new("Segoe UI", 13f, FontStyle.Bold, GraphicsUnit.Pixel);
+
+    DrawCenteredByMeasuredPoint(graphics, brush, font, hourText, new RectangleF(0, 0, 32, 16));
+
+    using StringFormat format = new()
+    {
+      Alignment = StringAlignment.Center,
+      LineAlignment = StringAlignment.Center,
+    };
+    graphics.DrawString(minuteText, font, brush, new RectangleF(0, 16, 32, 16), format);
+  }
+
   [LibraryImport("user32.dll")]
   [return: MarshalAs(UnmanagedType.Bool)]
   private static partial bool DestroyIcon(IntPtr hIcon);
+
+  /// <summary>
+  /// Which of the two tray-icon layouts is active (AGENTS.md §10.1/§17): a single large MM readout
+  /// under an hour elapsed, or the original two-stacked-rows HH-over-MM layout from an hour on.
+  /// Internal so <see cref="SelectLayout"/> is unit testable.
+  /// </summary>
+  internal enum TrayIconLayout
+  {
+    LargeMinutes,
+    StackedHoursMinutes,
+  }
 
   private enum TrayState
   {
