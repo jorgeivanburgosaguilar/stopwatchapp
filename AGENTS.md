@@ -383,7 +383,11 @@ Keep these set — they make lint and analyzers run on every `dotnet build` and 
 - High DPI is configured via the `.csproj` (`ApplicationHighDpiMode`), **not** an `app.config`
   `System.Windows.Forms.ApplicationConfigurationSection` block — that path is .NET Framework
   legacy and does not apply to this SDK-style project. Handle the form's `DpiChanged` event to
-  re-render the tray icon at the new size when DPI changes at runtime.
+  re-render the tray icon at the new size when DPI changes at runtime. Implemented in S12 —
+  `MainForm.OnDpiChanged` calls `TrayIconService.RefreshIcon()`; see §17, dated 2026-09-11.
+- Live OS dark/light-mode detection and reaction (`Application.IsDarkModeEnabled`,
+  `SystemEvents.UserPreferenceChanged`) is S12's job, implemented; see §17, dated 2026-09-11, for
+  the exact APIs and the category filter.
 - Call order in `Program.Main`:
   ```csharp
   ApplicationConfiguration.Initialize();
@@ -1439,3 +1443,72 @@ that now carries the actual rule.
   behavior documented in the first S11c entry above — the hours row now uses that same fix, not just
   the minutes readout. The minutes row keeps its original `RectangleF`/`StringFormat` centering since
   it's always exactly two fixed-width glyphs.
+- **2026-09-11 — S12: confirmed `Application.IsDarkModeEnabled` (public static bool,
+  `System.Windows.Forms.Application`) as the effective-dark-mode-state API, not a guess.** Context7
+  against `/dotnet/docs` had no definitive hit (per the stage brief), so it was confirmed instead by
+  loading the actual installed `System.Windows.Forms.dll` (`Microsoft.WindowsDesktop.App` shared
+  framework, `10.0.12`, matching this machine's installed SDK) via `System.Reflection` and listing
+  `Application`'s public static members directly: `IsDarkModeEnabled : System.Boolean` is present
+  alongside the already-known `ColorMode`/`SystemColorMode`. Also checked (same reflection pass)
+  whether the newer `.NET 11`-preview `Application.SystemVisualSettingsChanged` event
+  (found via a web search turning up `dotnet/core`'s 11.0 preview7 release notes) exists on this
+  project's actual `net10.0-windows` target — it does not (`Application`'s public static events on
+  10.0.12 are only `ApplicationExit`/`Idle`/`EnterThreadModal`/`LeaveThreadModal`/`ThreadException`/
+  `ThreadExit`), confirming §12.2's plain `SystemEvents.UserPreferenceChanged` approach (next entry)
+  is correct for this target framework, not a `.NET 11`-only shortcut. `MainForm.ApplyDarkMode()`
+  reads `Application.IsDarkModeEnabled` and assigns it to `StopwatchControl.DarkMode`,
+  `RecordsListControl.Dark`, and `TrayIconService.DarkMode` in one place, called once at startup and
+  again on every live change (next entry). See §7/§11 and `MainForm.cs`.
+- **2026-09-11 — S12: live theme-change reaction filters `SystemEvents.UserPreferenceChanged` on
+  `UserPreferenceCategory.General`.** Windows broadcasts the light/dark toggle as
+  `WM_SETTINGCHANGE` with `lParam` `"ImmersiveColorSet"`, which `Microsoft.Win32.SystemEvents`
+  surfaces as a `UserPreferenceChanged` event — but the toggle has no dedicated
+  `UserPreferenceCategory` of its own (the enum's 14 values are `Accessibility`/`Color`/`Desktop`/
+  `General`/`Icon`/`Keyboard`/`Menu`/`Mouse`/`Policy`/`Power`/`Screensaver`/`Window`/`Locale`/
+  `VisualStyle` — confirmed via Microsoft Learn's `UserPreferenceCategory` enum reference page, whose
+  official description of `General` is "user preferences that are not associated with any other
+  category"), and it lands there. Corroborated against an independent, code-bearing community source
+  (a WinForms/WPF dark-title-bar how-to) showing the identical
+  `if (e.Category == UserPreferenceCategory.General)` filter used for this exact purpose, since MS
+  Learn's own API docs don't call out the category-to-broadcast mapping explicitly. `MainForm`
+  subscribes `SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged` in its constructor;
+  the handler ignores every category except `General`, then re-runs `ApplyDarkMode()` — marshaled
+  through the existing `InvokeOnUiThread` helper (§5's cross-thread rule), since `SystemEvents`
+  raises its event from its own hidden notification window's thread, not necessarily this form's UI
+  thread.
+- **2026-09-11 — S12: `SystemEvents.UserPreferenceChanged` unsubscribed in `MainForm.Dispose(bool)`,
+  not `ExitApplication`/`FormClosing`.** `SystemEvents` is a static, process-wide event source, so a
+  missed unsubscribe leaks the handler (and, transitively, `MainForm` itself) past disposal.
+  `FormClosing`/`HideToTray` was ruled out — the normal close path is *cancelled* there (§10.3) so it
+  never actually disposes anything. `MainForm` didn't previously override `Dispose(bool)`; it now
+  does, unsubscribing only when `disposing` is `true`, then calling `base.Dispose(disposing)`. This
+  fires reliably because both real-exit paths already route through an *undispatched* `Close()`:
+  `ExitApplication`'s `Application.Exit()` re-closes every open form with `CloseReason.ApplicationExitCall`
+  (not `UserClosing`, so `OnFormClosing`'s cancel-and-hide branch doesn't intercept it — see §10.3),
+  and the DB-init-failure path's plain `Close()` (§17's earlier "M7 follow-up" entry) reports
+  `CloseReason.None`. Both fall through to `base.OnFormClosing`, a real close, and therefore
+  `Dispose(true)`.
+- **2026-09-11 — S12: `DpiChanged` forces a tray-icon redraw via a new `TrayIconService.RefreshIcon()`,
+  not by changing `RenderIcon`'s output size.** `MainForm` overrides `Form.OnDpiChanged` and calls
+  the new method. `TrayIconService.RenderIcon` already draws a fixed 32×32 canvas regardless of
+  caller — the shell (not this app) is what scales a `Shell_NotifyIcon` bitmap for the tray's actual
+  on-screen size at any DPI, and there is no supported per-monitor "tray icon size" API for a third-
+  party app to target (the same conclusion the "wide tray icon" investigation logged above reached
+  for a different question) — so "re-render at the new size" means forcing a fresh render, not
+  computing a new canvas size. `RefreshIcon()` re-invokes the private `RenderIcon` with
+  `_lastRendered`'s cached hours/minutes/state/layout, bypassing `UpdateDisplay`'s once-per-second
+  dirty-check, which would otherwise skip the redraw entirely since a DPI change alone never changes
+  any of those four tracked values. No change to `TrayIconService`'s constructor or any other public
+  member. See §7 and `TrayIconService.cs`/`MainForm.cs`.
+- **2026-09-11 — S12: version number surfaced as a right-aligned footer label in `MainForm`, reading
+  `Application.ProductVersion`.** Chosen over a tray "About" menu entry for visibility — a footer
+  label is on-screen whenever the main window is open, with no extra click, matching this stage's
+  "polish pass" spirit more than an easy-to-miss disabled menu item would. `Application.ProductVersion`
+  (not manual `Assembly`/`AssemblyInformationalVersionAttribute` reflection) was used as the more
+  idiomatic WinForms-native accessor: the SDK's `<Version>1.0.0</Version>` (§6) flows through to the
+  assembly's generated `AssemblyInformationalVersionAttribute("1.0.0")`, and `ProductVersion` reads
+  exactly that value from the running executable's own version resource — no reflection boilerplate
+  needed. Text is `"Stopwatch v{Application.ProductVersion}"`; color is `Palette.MutedText(dark)`,
+  refreshed by the same `ApplyDarkMode()` that drives the three `DarkMode`/`Dark` properties, so the
+  footer stays legible in both themes and across a live theme flip. No `Palette` change was needed —
+  `MutedText` already existed for exactly this kind of secondary text (§11).
