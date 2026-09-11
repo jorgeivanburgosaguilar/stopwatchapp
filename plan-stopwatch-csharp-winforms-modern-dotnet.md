@@ -456,6 +456,7 @@ log for anything discovered or decided while executing a stage — check it alon
 | S9 Window-to-tray | ✅ Done | 2026-09-10 | |
 | S10 HotkeyService | ⬜ Not started | — | |
 | S11 Single-instance | ⬜ Not started | — | |
+| S11a Visual design refresh | ⬜ Not started | — | |
 | S12 Theme/DPI/version polish | ⬜ Not started | — | |
 | S13 Publish | ⬜ Not started | — | |
 
@@ -518,13 +519,17 @@ S0 scaffold
    S9 Window-to-tray
         └──────────┴──────────┴──────────┘
                    ▼
+        S11a Visual design refresh
+                   ▼
             S12 Theme/DPI/version polish
                    ▼
               S13 Publish
 ```
 
 Parallel waves: **{S1, S2, S3}** after S0 · **{S5, S6}** after S4 · **{S8, S10, S11}** after S7.
-S3a sits on the critical path between S3 and S4 — it is not part of a parallel wave.
+S3a sits on the critical path between S3 and S4, and S11a between S11 and S12, the same way — a
+lettered stage inserted where a design/infra choice turned out to need its own pass; neither is
+part of a parallel wave.
 
 ### Integration seams (fixed here so parallel stages don't diverge)
 
@@ -922,9 +927,50 @@ S3a sits on the critical path between S3 and S4 — it is not part of a parallel
   bullet — verified manually as specified in §3.5).
 - **Out of scope:** hotkeys.
 
+### S11a — Visual design refresh
+
+- **Depends on:** S6, S7, S8 (needs the finished records/laps rendering, window layout, and tray
+  icon to redesign); scheduled after S9/S10/S11 so it reflects the complete feature set rather than
+  a partial one, and before S12 so S12 wires OS light/dark detection to the *final* palette rather
+  than to a placeholder that gets replaced right after.
+- **Files:** `StopwatchApp/Theme/Palette.cs` (extended with spacing/corner-radius/typography
+  constants alongside the existing color tables — same per-role accessor shape from §3.1, still
+  compared via `.ToArgb()`), `StopwatchApp/Controls/StopwatchControl.cs`,
+  `StopwatchApp/Controls/RecordsListControl.cs`, `StopwatchApp/Controls/ClearRecordsDialog.cs`,
+  `StopwatchApp/Services/TrayIconService.cs` (icon tint only — layout stays two-digit rows per
+  §10.1). Plus one artifact that never enters the repo: an HTML design comp, described below.
+- **Build:** two parts, in order.
+  1. **Design comp, via the `impeccable` skill.** WinForms has no browser-rendered surface, and
+     `impeccable` is built for frontend/web interfaces — it cannot edit this app's controls
+     directly. Use it instead to produce a static HTML/CSS mockup of the app's key states (idle,
+     running, paused, a records list with several rows, and the empty-records state) as a
+     throwaway reference, never shipped and never part of the .NET project. The goal is a concrete
+     design system to build toward: a type scale, a spacing scale, a corner-radius/elevation
+     language, and an iconography direction (e.g., glyph icons on the Start/Pause/Lap/Stop buttons
+     rather than plain colored rectangles) — aimed at a Windows 11 Fluent-adjacent look, not a
+     generic web-app look. Sign off on the comp before starting part 2; it is the spec for it.
+  2. **Translation to WinForms.** Re-derive `Palette.cs`'s color tables from the comp, add the new
+     spacing/corner-radius constants beside them, and rebuild each affected control's layout and
+     (where stock `Button`/`ListBox` chrome can't reach the comp — rounded corners, hover
+     elevation) owner-drawn painting to match. `TrayIconService.RenderIcon`'s tint pulls from the
+     same refreshed palette rather than being restyled independently (its digit-row layout is
+     fixed by §10.1 and out of scope for this stage).
+- **Public interface:** none new or changed — no control gains, loses, or changes the signature of
+  a method or event; this stage only changes how existing surfaces are drawn and spaced.
+- **Done when:** a side-by-side manual comparison against the design comp for idle/running/paused/
+  records states, in both light and dark mode, matches; `csharpier check .` / `dotnet build
+  -c Release` (zero warnings) / `dotnet test` (all green) still pass unchanged, since no control's
+  tested behavior changes, only its rendering.
+- **Owns acceptance criteria:** none listed by number in §6 — a look-and-feel pass with no
+  functional acceptance criterion, verified only by the manual comparison above.
+- **Out of scope:** any new feature, OS dark-mode/DPI wiring (S12's job — this stage produces the
+  palette S12 then wires live), motion/animation (not part of this app's brief per §1).
+
 ### S12 — Theme, DPI, and version polish pass
 
-- **Depends on:** S9, S10, S11 (i.e., after the whole feature set exists).
+- **Depends on:** S9, S10, S11 (i.e., after the whole feature set exists), and S11a — the light/dark
+  detection this stage wires must apply to the refreshed palette S11a produces, not the one it
+  replaces.
 - **Files:** touches across `Program.cs`, `MainForm.cs`, `StopwatchControl.cs`,
   `RecordsListControl.cs`, `TrayIconService.cs`.
 - **Build:** `Application.SetColorMode(SystemColorMode.System)` in `Program.Main` (after
