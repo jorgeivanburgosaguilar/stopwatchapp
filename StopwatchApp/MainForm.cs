@@ -80,6 +80,22 @@ public sealed class MainForm : Form
     }
   }
 
+  /// <inheritdoc />
+  protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+  {
+    // ProcessCmdKey runs before a focused control (e.g. a Button) gets to handle Space/Enter
+    // itself, so returning true here both dispatches the shortcut and stops it from also
+    // triggering whatever button currently has focus (AGENTS.md §10.4/§17).
+    StopwatchShortcut? shortcut = StopwatchControl.MapShortcut(keyData);
+    if (shortcut is null)
+    {
+      return base.ProcessCmdKey(ref msg, keyData);
+    }
+
+    DispatchShortcut(shortcut.Value);
+    return true;
+  }
+
   private void HideToTray()
   {
     Hide();
@@ -130,6 +146,33 @@ public sealed class MainForm : Form
     await _stopwatchControl.RestoreAsync();
     RefreshLists();
     RefreshTray();
+  }
+
+  private async void DispatchShortcut(StopwatchShortcut shortcut)
+  {
+    // No wrong-state guards needed: Timer.Lap() and the ElapsedMs > 0 && SessionStartMs > 0 check
+    // in Stop() already no-op when the shortcut doesn't apply to the current state (AGENTS.md
+    // §8.3/§8.5), and Start() already resumes when paused, so Toggle covers both start and
+    // continue with one branch.
+    switch (shortcut)
+    {
+      case StopwatchShortcut.Toggle:
+        if (_stopwatchControl.Timer.IsRunning)
+        {
+          await _stopwatchControl.PauseTimerAsync();
+        }
+        else
+        {
+          _stopwatchControl.StartTimer();
+        }
+        break;
+      case StopwatchShortcut.Lap:
+        _stopwatchControl.AddLap();
+        break;
+      case StopwatchShortcut.Stop:
+        await _stopwatchControl.StopTimerAsync();
+        break;
+    }
   }
 
   private async void ClearRecordsAsync()
