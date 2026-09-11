@@ -22,6 +22,11 @@ public sealed class MainForm : Form
   private readonly TrayIconService _trayIconService;
   private readonly int _activateMessage;
 
+  // S11b (AGENTS.md §10.6) — the position the window was last shown at, reset every time
+  // PositionWindowCentered/PositionWindowAsync places the window. Compared against the live
+  // Location on hide-to-tray/exit to detect a user-initiated drag.
+  private Point _shownAtLocation;
+
   /// <summary>
   /// Initializes a new instance of the <see cref="MainForm"/> class.
   /// </summary>
@@ -30,7 +35,11 @@ public sealed class MainForm : Form
     Text = WindowTitle;
     ClientSize = new Size(560, 600);
     MinimumSize = new Size(400, 400);
-    StartPosition = FormStartPosition.CenterScreen;
+    // Manual, not CenterScreen: S11b (AGENTS.md §10.6) owns initial placement so a saved manual
+    // position (loaded from the database once it's ready, in InitializeAsync below) can override
+    // the synchronous default center set here.
+    StartPosition = FormStartPosition.Manual;
+    PositionWindowCentered();
 
     _database = new Database(Database.DefaultDatabasePath);
     _stopwatchControl = new StopwatchControl(_database, TimeProvider.System)
@@ -122,13 +131,25 @@ public sealed class MainForm : Form
   {
     Hide();
     ShowInTaskbar = false;
+    // Fire-and-forget: Database.SaveWindowPositionAsync swallows its own errors (AGENTS.md §9), so
+    // there's nothing for this hide-to-tray path (itself synchronous, per AGENTS.md §10.3) to await
+    // or catch. Discarding to `_` deliberately, not leaving the call unobserved (CS4014).
+    _ = SaveWindowPositionIfChangedAsync();
   }
 
-  private void RestoreWindow()
+  private async void RestoreWindow()
   {
+    // WindowState is reset to Normal *before* positioning: Location reads/writes while
+    // WindowState is Minimized are unreliable (Windows tracks a minimized window's on-screen rect
+    // separately from its "restore" position), so PositionWindowAsync must run only once the form
+    // is guaranteed Normal. Safe on a hidden form — this just updates placement, nothing is drawn
+    // until Show() below.
+    WindowState = FormWindowState.Normal;
+    // Position before showing, per AGENTS.md §10.6's "Open" transitions — a tray Open/double-click,
+    // single-instance activation, or restore-from-minimize all route through here.
+    await PositionWindowAsync();
     Show();
     ShowInTaskbar = true;
-    WindowState = FormWindowState.Normal;
     Activate();
   }
 
@@ -138,8 +159,75 @@ public sealed class MainForm : Form
     // tray until the user hovers over its former location (AGENTS.md §10.3). Application.Exit()
     // is called only from here, the tray menu's Exit item, per the same section.
     _trayIconService.Dispose();
+    await SaveWindowPositionIfChangedAsync();
     await _database.DisposeAsync();
     Application.Exit();
+  }
+
+  /// <summary>
+  /// Sets <see cref="Form.Location"/> to the centered default (S11b, AGENTS.md §10.6) — used both
+  /// as the constructor's synchronous default (before the database is ready) and as
+  /// <see cref="PositionWindowAsync"/>'s fallback when no valid saved position exists.
+  /// </summary>
+  private void PositionWindowCentered()
+  {
+    Screen primary = Screen.PrimaryScreen ?? Screen.AllScreens[0];
+    Rectangle workingArea = primary.WorkingArea;
+    Location = new Point(
+      workingArea.X + (workingArea.Width - Width) / 2,
+      workingArea.Y + (workingArea.Height - Height) / 2
+    );
+    _shownAtLocation = Location;
+  }
+
+  /// <summary>
+  /// Positions the window for an "Open" transition (AGENTS.md §10.6): a saved position is used
+  /// only if its bounds intersect at least one currently-connected screen's working area; otherwise
+  /// (including when there is no saved position at all) the window is centered.
+  /// </summary>
+  private async Task PositionWindowAsync()
+  {
+    (int X, int Y)? saved = await _database.LoadWindowPositionAsync();
+    if (saved is { } position)
+    {
+      Rectangle bounds = new(position.X, position.Y, Width, Height);
+      if (Screen.AllScreens.Any(screen => screen.WorkingArea.IntersectsWith(bounds)))
+      {
+        Location = new Point(position.X, position.Y);
+        _shownAtLocation = Location;
+        return;
+      }
+    }
+
+    PositionWindowCentered();
+  }
+
+  /// <summary>
+  /// The window's location as it should be read for S11b persistence purposes: <see cref="Form.Location"/>
+  /// directly while <see cref="Form.WindowState"/> is <see cref="FormWindowState.Normal"/>, or
+  /// <see cref="Form.RestoreBounds"/>'s location otherwise. <c>Location</c> is unreliable while
+  /// minimized (Windows tracks a minimized window's actual on-screen rect separately from its
+  /// "restore" position, so it does not reflect where the window was before it was minimized) —
+  /// relevant here because <see cref="OnResize"/> calls <see cref="HideToTray"/> (and therefore this
+  /// save check) with <see cref="Form.WindowState"/> already <see cref="FormWindowState.Minimized"/>,
+  /// and <see cref="ExitApplication"/> can run while the window is still in that state if it was
+  /// minimized-to-tray and never reopened before Exit.
+  /// </summary>
+  private Point CurrentPersistableLocation =>
+    WindowState == FormWindowState.Normal ? Location : RestoreBounds.Location;
+
+  /// <summary>
+  /// Persists the window's current location only if it differs from <see cref="_shownAtLocation"/>
+  /// — i.e. only if the user dragged the window since it was last positioned (AGENTS.md §10.6). An
+  /// app that's never been dragged never writes to <c>window_position</c>.
+  /// </summary>
+  private async Task SaveWindowPositionIfChangedAsync()
+  {
+    Point current = CurrentPersistableLocation;
+    if (current != _shownAtLocation)
+    {
+      await _database.SaveWindowPositionAsync(current.X, current.Y);
+    }
   }
 
   private async void InitializeAsync(object? sender, EventArgs e)
@@ -164,6 +252,10 @@ public sealed class MainForm : Form
       Close();
       return;
     }
+
+    // S11b (AGENTS.md §10.6) — first launch's "Open" transition; overrides the constructor's
+    // synchronous centered default if a valid saved position exists.
+    await PositionWindowAsync();
 
     await _stopwatchControl.RestoreAsync();
     RefreshLists();

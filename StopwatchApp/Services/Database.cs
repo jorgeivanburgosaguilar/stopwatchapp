@@ -258,6 +258,63 @@ public sealed class Database : IStopwatchStore, IAsyncDisposable
   }
 
   /// <inheritdoc />
+  public async Task SaveWindowPositionAsync(int x, int y)
+  {
+    try
+    {
+      SqliteConnection connection = RequireConnection();
+
+      await connection
+        .ExecuteAsync(
+          """
+          INSERT INTO window_position (id, x, y)
+          VALUES (1, @x, @y)
+          ON CONFLICT(id) DO UPDATE SET
+            x = excluded.x,
+            y = excluded.y;
+          """,
+          new { x, y }
+        )
+        .ConfigureAwait(false);
+    }
+    catch (Exception)
+    {
+      // Deliberate per AGENTS.md §9: a failed write must never surface to the UI.
+    }
+  }
+
+  /// <inheritdoc />
+  public async Task<(int X, int Y)?> LoadWindowPositionAsync()
+  {
+    try
+    {
+      SqliteConnection connection = RequireConnection();
+
+      WindowPositionRow? row = await connection
+        .QuerySingleOrDefaultAsync<WindowPositionRow>(
+          """
+          SELECT x, y
+          FROM window_position
+          WHERE id = 1;
+          """
+        )
+        .ConfigureAwait(false);
+      if (row is null)
+      {
+        return null;
+      }
+
+      return ((int)row.X, (int)row.Y);
+    }
+    catch (Exception)
+    {
+      // Deliberate per AGENTS.md §9: a corrupt or unreadable saved position returns null rather
+      // than throwing.
+      return null;
+    }
+  }
+
+  /// <inheritdoc />
   public async ValueTask DisposeAsync()
   {
     if (_connection is not null)
@@ -290,4 +347,16 @@ public sealed class Database : IStopwatchStore, IAsyncDisposable
     long LastLapTimestamp,
     long PausedAt
   );
+
+  /// <summary>
+  /// The raw <c>window_position</c> row shape, used only to receive Dapper's column mapping
+  /// before it is narrowed to <c>int</c> and projected into the
+  /// <see cref="IStopwatchStore.LoadWindowPositionAsync"/> tuple. <c>long</c>, not <c>int</c>,
+  /// because SQLite's <c>INTEGER</c> affinity always round-trips through Microsoft.Data.Sqlite as
+  /// <see cref="long"/> — Dapper's constructor-based record materialization requires an exact
+  /// parameter-type match against the column's runtime type, not just a name match (see AGENTS.md
+  /// §17, dated 2026-09-11), the same reason every column in <see cref="PausedSessionRow"/> is
+  /// <see cref="long"/>.
+  /// </summary>
+  private sealed record WindowPositionRow(long X, long Y);
 }

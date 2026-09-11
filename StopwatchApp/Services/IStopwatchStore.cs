@@ -46,4 +46,18 @@ public interface IStopwatchStore
   /// Deletes the saved paused-session snapshot, if any.
   /// </summary>
   Task ClearPausedSessionAsync();
+
+  /// <summary>
+  /// Saves (upserting into the single slot) the window's last manually-dragged position (AGENTS.md
+  /// §10.6).
+  /// </summary>
+  /// <param name="x">The window's <c>Location.X</c>.</param>
+  /// <param name="y">The window's <c>Location.Y</c>.</param>
+  Task SaveWindowPositionAsync(int x, int y);
+
+  /// <summary>
+  /// Loads the saved window position, if any.
+  /// </summary>
+  /// <returns>The saved position, or <see langword="null"/> if none exists or it fails to deserialize.</returns>
+  Task<(int X, int Y)?> LoadWindowPositionAsync();
 }

@@ -158,6 +158,39 @@ public sealed class DatabaseTests : IAsyncLifetime
   }
 
   [Fact]
+  public async Task LoadWindowPositionAsync_WithNoSavedPosition_ReturnsNull()
+  {
+    (int X, int Y)? position = await _database.LoadWindowPositionAsync();
+
+    Assert.Null(position);
+  }
+
+  [Fact]
+  public async Task SaveWindowPositionAsync_ThenLoad_RoundTrips()
+  {
+    await _database.SaveWindowPositionAsync(123, 456);
+
+    (int X, int Y)? loaded = await _database.LoadWindowPositionAsync();
+
+    Assert.NotNull(loaded);
+    Assert.Equal(123, loaded.Value.X);
+    Assert.Equal(456, loaded.Value.Y);
+  }
+
+  [Fact]
+  public async Task SaveWindowPositionAsync_CalledTwice_OverwritesTheSingleSlot()
+  {
+    await _database.SaveWindowPositionAsync(1, 2);
+    await _database.SaveWindowPositionAsync(3, 4);
+
+    (int X, int Y)? loaded = await _database.LoadWindowPositionAsync();
+
+    Assert.NotNull(loaded);
+    Assert.Equal(3, loaded.Value.X);
+    Assert.Equal(4, loaded.Value.Y);
+  }
+
+  [Fact]
   public async Task InitializeAsync_OnFreshDatabase_StampsCurrentSchemaVersion()
   {
     long userVersion = await ReadUserVersionAsync();
@@ -217,6 +250,76 @@ public sealed class DatabaseTests : IAsyncLifetime
     Assert.Equal(SchemaMigrations.Current, userVersion);
     StopwatchRecord record = Assert.Single(records);
     Assert.Equal(60000, record.EndTimestamp);
+  }
+
+  [Fact]
+  public async Task InitializeAsync_OnV1Database_AppliesMigration2AndKeepsData()
+  {
+    // Build a database at exactly the pre-S11b shape: records/paused_session present (migration 1's
+    // DDL) and user_version stamped at 1, no window_position table — simulating a database created
+    // by the build immediately before this stage. Mirrors
+    // InitializeAsync_OnLegacyDatabaseWithNoVersionStamp_AdoptsItAsV1AndKeepsData above, one version
+    // later (AGENTS.md §9 "Schema versioning", §17 dated 2026-09-11).
+    await _database.DisposeAsync();
+    if (File.Exists(_databasePath))
+    {
+      File.Delete(_databasePath);
+    }
+
+    await using (SqliteConnection v1Connection = new($"Data Source={_databasePath}"))
+    {
+      await v1Connection.OpenAsync();
+      await using SqliteCommand createTables = v1Connection.CreateCommand();
+      createTables.CommandText = """
+        CREATE TABLE IF NOT EXISTS records (
+          id             INTEGER PRIMARY KEY AUTOINCREMENT,
+          startTimestamp INTEGER NOT NULL,
+          endTimestamp   INTEGER NOT NULL,
+          elapsedMinutes INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS paused_session (
+          id               INTEGER PRIMARY KEY CHECK (id = 1),
+          elapsedTime      INTEGER NOT NULL,
+          sessionStartTime INTEGER NOT NULL,
+          lapsJson         TEXT    NOT NULL,
+          lastLapElapsed   INTEGER NOT NULL,
+          lastLapTimestamp INTEGER NOT NULL,
+          pausedAt         INTEGER NOT NULL
+        );
+        """;
+      await createTables.ExecuteNonQueryAsync();
+
+      await using SqliteCommand insertRow = v1Connection.CreateCommand();
+      insertRow.CommandText = """
+        INSERT INTO records (startTimestamp, endTimestamp, elapsedMinutes)
+        VALUES (0, 60000, 1);
+        """;
+      await insertRow.ExecuteNonQueryAsync();
+
+      await using SqliteCommand stampVersion = v1Connection.CreateCommand();
+      stampVersion.CommandText = "PRAGMA user_version = 1;";
+      await stampVersion.ExecuteNonQueryAsync();
+    }
+
+    _database = new Database(_databasePath);
+    await _database.InitializeAsync();
+
+    IReadOnlyList<StopwatchRecord> records = await _database.GetAllRecordsAsync();
+    (int X, int Y)? windowPosition = await _database.LoadWindowPositionAsync();
+    long userVersion = await ReadUserVersionAsync();
+
+    Assert.Equal(SchemaMigrations.Current, userVersion);
+    Assert.Equal(2, userVersion);
+    StopwatchRecord record = Assert.Single(records);
+    Assert.Equal(60000, record.EndTimestamp);
+    Assert.Null(windowPosition);
+
+    // The new table exists and is usable, not just present as an empty migration no-op.
+    await _database.SaveWindowPositionAsync(10, 20);
+    windowPosition = await _database.LoadWindowPositionAsync();
+    Assert.NotNull(windowPosition);
+    Assert.Equal(10, windowPosition.Value.X);
+    Assert.Equal(20, windowPosition.Value.Y);
   }
 
   [Fact]

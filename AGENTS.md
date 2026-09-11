@@ -1298,3 +1298,63 @@ that now carries the actual rule.
   exercise of the append-only `PRAGMA user_version` path S3a built (previously only migration 1
   existed). Full spec: §9 (data layer), §10.6 (behavior), §14 (acceptance criteria); roadmap stage:
   `plan-stopwatch-csharp-winforms-modern-dotnet.md` §5 "S11b — Window position memory".
+- **2026-09-11 — S11b: `window_position` upsert follows `paused_session`'s exact
+  `INSERT ... ON CONFLICT(id) DO UPDATE SET` shape.** `Database.SaveWindowPositionAsync` mirrors
+  `SavePausedSessionAsync` byte-for-byte in structure: a single `ExecuteAsync` with
+  `INSERT INTO window_position (id, x, y) VALUES (1, @x, @y) ON CONFLICT(id) DO UPDATE SET x =
+  excluded.x, y = excluded.y;`, same swallow-errors try/catch. `LoadWindowPositionAsync` reads
+  through a private `WindowPositionRow` mapping record, same pattern as `PausedSessionRow`. That
+  row type had to be declared with `long X, long Y`, not `int X, int Y`, even though the public
+  `IStopwatchStore` surface is `int`: Dapper's constructor-based materialization for a record type
+  requires an exact parameter-type match against each column's runtime CLR type, and
+  Microsoft.Data.Sqlite always returns SQLite's `INTEGER` affinity as `long` — an `int`-parameter
+  record throws `InvalidOperationException: ... required for ... materialization` at read time
+  (caught and swallowed by §9's convention, so it silently read back as `null` until the row type
+  was fixed and reproduced under a debug build). `LoadWindowPositionAsync` narrows to `int` with an
+  explicit cast when projecting into the returned tuple. See `Database.cs`'s `WindowPositionRow` and
+  `PausedSessionRow` (the latter avoids this by being all-`long` already).
+- **2026-09-11 — S11b: migration-2 test mirrors S3a's "legacy database" test one version later, in
+  the same file.** No `SchemaMigrationsTests.cs` exists in this repo — the equivalent coverage
+  already lived in `DatabaseTests.cs` (`InitializeAsync_OnLegacyDatabaseWithNoVersionStamp_...`), so
+  `InitializeAsync_OnV1Database_AppliesMigration2AndKeepsData` was added alongside it there instead
+  of a new file. It hand-builds a v1 database (migration 1's `records`/`paused_session` DDL, one
+  inserted record, `PRAGMA user_version = 1` stamped explicitly — unlike the S3a test, which leaves
+  the stamp at its unset default of 0) via a raw `SqliteConnection`, then opens it through
+  `Database.InitializeAsync` and asserts: `user_version` ends at `SchemaMigrations.Current` (2), the
+  pre-existing record survived, `window_position` starts empty (`LoadWindowPositionAsync()` returns
+  `null`), and the new table is actually usable (a save/load round-trip against it succeeds), not
+  merely present.
+- **2026-09-11 — S11b: `MainForm` positioning wiring — exact call sites.** `IStopwatchStore`/
+  `Database`/`SchemaMigrations` implement the §9 storage surface; this entry pins where `MainForm`
+  calls it, since §10.6 describes the behavior but not the method names. Four new private members:
+  `PositionWindowCentered()` (sync; centers on `Screen.PrimaryScreen ?? Screen.AllScreens[0]`'s
+  `WorkingArea`, also the fallback path), `PositionWindowAsync()` (awaits
+  `LoadWindowPositionAsync()`, validates the saved point's bounds via
+  `Screen.AllScreens.Any(s => s.WorkingArea.IntersectsWith(...))`, else falls back to
+  `PositionWindowCentered()`), `CurrentPersistableLocation` (a computed property:
+  `Location` while `WindowState == Normal`, else `RestoreBounds.Location` — see the next entry),
+  and `SaveWindowPositionIfChangedAsync()` (compares `CurrentPersistableLocation` against the new
+  `_shownAtLocation` field, writes only on a difference). Call sites: the constructor calls
+  `PositionWindowCentered()` synchronously (before the database exists, so it can't yet check for a
+  saved position — replaces the old `StartPosition = FormStartPosition.CenterScreen`, now
+  `FormStartPosition.Manual`); `InitializeAsync` (the `Load` handler) awaits `PositionWindowAsync()`
+  right after `_database.InitializeAsync()` succeeds, overriding the constructor's default if a
+  valid saved position exists; `RestoreWindow()` forces `WindowState = FormWindowState.Normal` then
+  awaits `PositionWindowAsync()`, both before `Show()`; `HideToTray()` (shared by both the
+  `FormClosing` cancel-and-hide branch and `OnResize`'s minimize branch, per S9) fires
+  `SaveWindowPositionIfChangedAsync()` without awaiting it (`_ = ...;` — nothing to await inside a
+  synchronous override, and the store swallows its own errors per §9); `ExitApplication()` awaits it
+  directly, before disposing the database.
+- **2026-09-11 — S11b: `CurrentPersistableLocation` reads `RestoreBounds`, not `Location`, whenever
+  the form isn't `Normal`.** `Form.Location` is unreliable while `WindowState == Minimized` — Windows
+  tracks a minimized window's actual on-screen rect (historically an off-screen sentinel) separately
+  from where it should restore to, so reading `Location` at that point does not reliably reflect the
+  position the user last dragged it to. This matters because `OnResize` calls `HideToTray()` (and
+  therefore the save-if-changed check) at the moment `WindowState` has already become `Minimized`,
+  and `ExitApplication()` can likewise run while still `Minimized` if the window was minimized-to-tray
+  and never reopened before choosing Exit from the tray menu. `Form.RestoreBounds` is the WinForms-
+  documented escape hatch for exactly this (`Bounds`/`Location` when `Normal`, the last known normal
+  bounds otherwise), so `CurrentPersistableLocation` branches on `WindowState` and uses it for the
+  non-`Normal` case. `PositionWindowCentered`/`PositionWindowAsync` don't need the same treatment
+  since `RestoreWindow()` forces `WindowState = FormWindowState.Normal` before either ever runs (see
+  the entry above), and the constructor/first-`Load` path is always `Normal` already.
