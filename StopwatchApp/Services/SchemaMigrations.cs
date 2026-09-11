@@ -55,10 +55,21 @@ internal static class SchemaMigrations
     );
     """;
 
+  // S11b (AGENTS.md §9/§10.6) — the single remembered manual window position. No IF NOT EXISTS:
+  // only migration 1 needs it (see the type-level remarks above).
+  private const string V2CreateWindowPositionTable = """
+    CREATE TABLE window_position (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      x  INTEGER NOT NULL,
+      y  INTEGER NOT NULL
+    );
+    """;
+
   /// <summary>
   /// Every migration, in ascending, consecutive <see cref="Migration.Version"/> order.
   /// </summary>
-  internal static IReadOnlyList<Migration> All { get; } = [new Migration(1, V1CreateTables)];
+  internal static IReadOnlyList<Migration> All { get; } =
+  [new Migration(1, V1CreateTables), new Migration(2, V2CreateWindowPositionTable)];
 
   /// <summary>
   /// The schema version a freshly initialized database ends up at — the highest version in

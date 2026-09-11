@@ -12,6 +12,7 @@ internal sealed class FakeStopwatchStore : IStopwatchStore
 {
   private readonly List<StopwatchRecord> _records = [];
   private PausedSession? _pausedSession;
+  private (int X, int Y)? _windowPosition;
 
   public Task<long> SaveRecordAsync(long startTimestamp, long endTimestamp, long elapsedMs)
   {
@@ -42,4 +43,12 @@ internal sealed class FakeStopwatchStore : IStopwatchStore
     _pausedSession = null;
     return Task.CompletedTask;
   }
+
+  public Task SaveWindowPositionAsync(int x, int y)
+  {
+    _windowPosition = (x, y);
+    return Task.CompletedTask;
+  }
+
+  public Task<(int X, int Y)?> LoadWindowPositionAsync() => Task.FromResult(_windowPosition);
 }
