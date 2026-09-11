@@ -1,3 +1,5 @@
+using StopwatchApp.Theme;
+
 namespace StopwatchApp.Controls;
 
 /// <summary>
@@ -28,7 +30,7 @@ public static class ClearRecordsDialog
       ShowInTaskbar = false,
       AutoSize = true,
       AutoSizeMode = AutoSizeMode.GrowAndShrink,
-      Padding = new Padding(16),
+      Padding = new Padding(Palette.SpacingLg),
     };
 
     Label message = new()
@@ -36,7 +38,7 @@ public static class ClearRecordsDialog
       Text = "Are you sure you want to clear all records? This action cannot be undone.",
       AutoSize = true,
       MaximumSize = new Size(320, 0),
-      Margin = new Padding(0, 0, 0, 16),
+      Margin = new Padding(0, 0, 0, Palette.SpacingLg),
       Dock = DockStyle.Top,
     };
 
@@ -45,13 +47,27 @@ public static class ClearRecordsDialog
       Text = "Clear All",
       DialogResult = DialogResult.Yes,
       AutoSize = true,
+      FlatStyle = FlatStyle.Flat,
+      Padding = new Padding(
+        Palette.SpacingMd,
+        Palette.SpacingXs,
+        Palette.SpacingMd,
+        Palette.SpacingXs
+      ),
     };
     Button cancelButton = new()
     {
       Text = "Cancel",
       DialogResult = DialogResult.Cancel,
       AutoSize = true,
-      Margin = new Padding(0, 0, 8, 0),
+      FlatStyle = FlatStyle.Flat,
+      Padding = new Padding(
+        Palette.SpacingMd,
+        Palette.SpacingXs,
+        Palette.SpacingMd,
+        Palette.SpacingXs
+      ),
+      Margin = new Padding(0, 0, Palette.SpacingSm, 0),
     };
 
     FlowLayoutPanel buttonPanel = new()
@@ -77,6 +93,22 @@ public static class ClearRecordsDialog
     // No AcceptButton: Enter should never trigger the destructive action by default.
     dialog.CancelButton = cancelButton;
 
+    // S11a: round the two buttons' corners (AGENTS.md §11/§17). A Region clip on an already-Flat
+    // button is a cheap, one-time (no per-frame owner paint) way to do this for a dialog that never
+    // resizes — PerformLayout first so Width/Height reflect the final AutoSize result.
+    dialog.PerformLayout();
+    ApplyRoundedRegion(clearAllButton);
+    ApplyRoundedRegion(cancelButton);
+
+    // The dialog's own outer corners are not rounded here: Windows 11 already rounds top-level
+    // window frames at the DWM level by default, so AGENTS.md §11's DialogCornerRadius token needs
+    // no extra rendering — see AGENTS.md §17.
     return dialog.ShowDialog(owner);
+  }
+
+  private static void ApplyRoundedRegion(Control control)
+  {
+    Rectangle bounds = new(0, 0, control.Width, control.Height);
+    control.Region = new Region(RoundedRectangle.Path(bounds, Palette.ControlCornerRadius));
   }
 }
