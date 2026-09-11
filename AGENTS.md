@@ -173,6 +173,33 @@ public static class ClearRecordsDialog    // §8.5 — the confirm dialog
     // dialog (Escape/X) — CancelButton is wired so both of the latter map to Cancel.
 }
 
+public sealed class StopwatchControl : UserControl   // §8.5 — display + control row
+{
+    // Constructor, Timer, DarkMode, and RestoreAsync are the S5 shape above §3.1's block; S8/S9
+    // added the rest so the tray menu and (later) hotkeys can drive a transition without leaving
+    // the window's own display stale — every action method below does exactly what its button's
+    // Click handler does (UpdateDisplay() then StateChanged?.Invoke()), and there is only ever
+    // one copy of each body.
+    public event Action? StateChanged;   // after Start, Pause, Lap, Stop, or Restore
+    public event Action? Tick;           // once a second, only while running (S8)
+    public void StartTimer();
+    public Task PauseTimerAsync();
+    public void AddLap();
+    public Task StopTimerAsync();
+}
+
+public sealed class TrayIconService : IDisposable   // §10.1/§10.2 — NotifyIcon owner
+{
+    // Takes callbacks, not a MainForm reference, per §3's "events or callback delegates, never
+    // shared mutable state." Constructed with the StopwatchControl whose action methods (above)
+    // the tray menu's transition items call, and whose Tick/StateChanged events MainForm relays
+    // into UpdateDisplay.
+    public TrayIconService(StopwatchControl control, Action onOpen, Action onExit);
+    public bool DarkMode { get; set; }   // default false; S12 wires it to the OS setting
+    public void UpdateDisplay(long elapsedMs, bool running, bool paused);
+    public void Dispose();
+}
+
 public sealed class RecordsListControl : UserControl   // §8.5 — records/laps panels
 {
     // Data is pushed in, never pulled: UpdateRecords(IReadOnlyList<StopwatchRecord>) and
@@ -288,6 +315,10 @@ Keep these set — they make lint and analyzers run on every `dotnet build` and 
     <Platforms>x64</Platforms>
     <Platform>x64</Platform>
     <Version>1.0.0</Version>
+
+    <!-- Required by LibraryImportAttribute-based source-generated interop (SYSLIB1062); see
+         TrayIconService's DestroyIcon P/Invoke and §17. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
 
     <!-- WinForms application configuration (source-generates ApplicationConfiguration.Initialize) -->
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
@@ -1001,5 +1032,60 @@ that now carries the actual rule.
   `StopwatchTimer` has no lap-specific event, while `RecordsListControl` needs a pushed update as
   soon as the user clicks Lap. The control raises `StateChanged` after Start, Pause, Lap, Stop, and
   Restore display updates; `MainForm` uses it only to push the timer's current laps into the list.
-  `RecordsChanged` remains the sole notification for the records list and is marshaled through
-  `Control.Invoke`, because service continuations may run off the UI thread.
+  `RecordsChanged` remains the sole notification for the records list; both it and `StateChanged`
+  are marshaled through `Control.Invoke` on the `MainForm` side, because service continuations
+  (`RecordsChanged`) may run off the UI thread and callers should not need to know which case
+  applies.
+- **2026-09-10 — M7 follow-up: `Database.ClearAllRecordsAsync` already had a real-SQLite test.**
+  A review pass while starting S8 flagged this as a gap, but `DatabaseTests.ClearAllRecordsAsync_EmptiesTheTable`
+  (added in S3a) already covers it against a temp-file database — no test was added or was needed.
+- **2026-09-10 — M7 follow-up: `MainForm.InitializeAsync` now catches `Database.InitializeAsync`
+  failures.** §9's swallow-everything rule deliberately excludes `InitializeAsync` (a half-migrated
+  schema must not pass silently), but nothing previously caught it either, so a locked or corrupt
+  database file crashed the app from an unhandled exception in an `async void Load` handler —
+  reachable today since single-instance (S11) doesn't exist yet. `MainForm` now catches
+  `SqliteException`/`IOException`/`UnauthorizedAccessException` narrowly (§5: never a bare
+  `Exception`), shows a `MessageBox` naming the database path, and calls `Close()`. `Close()` here
+  reports `CloseReason.None`, not `UserClosing`, so S9's hide-to-tray override does not intercept
+  it — the app actually exits. See §10.3's entry below for why that distinction is load-bearing.
+- **2026-09-10 — S8: the tray's once-a-second heartbeat is `StopwatchControl`'s existing UI timer,
+  not a second one.** `StopwatchTimer.OnTick` fires only every 5 seconds and from inside
+  `ConfigureAwait(false)` continuations — wrong frequency and, per the S5 entry above, off the UI
+  thread. `StopwatchControl` already runs a 1000 ms `System.Windows.Forms.Timer` (started only
+  while running) for its own display; it now also raises a public `Tick` event from that same
+  handler. `TrayIconService` never owns a `Timer` of its own. Because that timer stops while idle
+  or paused, `MainForm` also refreshes the tray from `StateChanged` to catch those transitions.
+- **2026-09-10 — S8: tray menu actions call `StopwatchControl`'s new action methods, never
+  `StopwatchTimer` directly.** Invoking `Timer.PauseAsync()` from a menu item would change state
+  behind the window's back, leaving its label and buttons stale. `StopwatchControl` gained
+  `StartTimer()`/`PauseTimerAsync()`/`AddLap()`/`StopTimerAsync()` — each does exactly what its
+  button's `Click` handler already did (call the timer, `UpdateDisplay()`, raise `StateChanged`) —
+  and the four `Click` handlers now call them too, so each body exists in exactly one place. The
+  tray menu (and S10's hotkeys, later) route through these, not through `Timer`.
+- **2026-09-10 — S8: `TrayIconService` takes callbacks and a `StopwatchControl`, not a `MainForm`
+  reference.** `MainForm` exposes no public API beyond its constructor, and §3 mandates
+  communication "through events or callback delegates... never shared mutable state." The
+  constructor takes `(StopwatchControl control, Action onOpen, Action onExit)`; `MainForm` passes
+  its own `RestoreWindow`/`ExitApplication` methods as the callbacks.
+- **2026-09-10 — S8: tray icon tint reads `Theme/Palette.cs`, not new literals.** §10.1 makes tint
+  optional ("may differ"); running uses `Palette.Accent`, paused `Palette.PauseButton.Base`, idle
+  `Palette.MutedText` — same digit layout in all three. `TrayIconService.DarkMode` (default `false`)
+  follows the `StopwatchControl.DarkMode`/`RecordsListControl.Dark` precedent; S12 wires it to the
+  OS setting.
+- **2026-09-10 — S8: `AllowUnsafeBlocks` added to the csproj.** `TrayIconService`'s `DestroyIcon`
+  P/Invoke uses `[LibraryImport]` (required — a plain `[DllImport]` trips `SYSLIB1054` and a
+  `public` one trips `CA1401` under `TreatWarningsAsErrors`). The source generator itself requires
+  unsafe code for the generated marshalling stubs (`SYSLIB1062`), so `<AllowUnsafeBlocks>true</AllowUnsafeBlocks>`
+  is now in §6's fixed property block. No other unsafe code exists or is permitted elsewhere in the
+  project — this is interop plumbing, not a license for `unsafe` blocks in application code.
+- **2026-09-10 — S9: minimize interception uses `OnResize`, not a `WndProc`/`SC_MINIMIZE` hook.**
+  §10.3 offers either; `OnResize` checking `WindowState == FormWindowState.Minimized` is simpler,
+  and S10 will add its own `WndProc` override for `WM_HOTKEY` separately, so the two stay
+  independent rather than sharing one override.
+- **2026-09-10 — S9: database disposal moved from `FormClosed` into `ExitApplication`.** The prior
+  `FormClosed` handler was `async void` with no pump guaranteed to still be running once
+  `Application.Run` returns, so `Database.DisposeAsync`'s continuation (including its
+  `SqliteConnection.ClearPool` call) was not guaranteed to complete. Since §10.3 makes the tray's
+  `Exit` item the only real quit path once `FormClosing` cancels `UserClosing`, disposal now happens
+  in `MainForm.ExitApplication()` — `_trayIconService.Dispose()`, then `await _database.DisposeAsync()`,
+  then `Application.Exit()` — where the `await` runs on a message loop that is still alive.

@@ -451,9 +451,9 @@ log for anything discovered or decided while executing a stage — check it alon
 | S4 StopwatchTimer | ✅ Done | 2026-09-10 | |
 | S5 StopwatchControl | ✅ Done | 2026-09-10 | |
 | S6 RecordsListControl + ClearRecordsDialog | ✅ Done | 2026-09-10 | |
-| S7 MainForm | ⬜ Not started | — | |
-| S8 TrayIconService | ⬜ Not started | — | |
-| S9 Window-to-tray | ⬜ Not started | — | |
+| S7 MainForm | ✅ Done | 2026-09-10 | |
+| S8 TrayIconService | ✅ Done | 2026-09-10 | |
+| S9 Window-to-tray | ✅ Done | 2026-09-10 | |
 | S10 HotkeyService | ⬜ Not started | — | |
 | S11 Single-instance | ⬜ Not started | — | |
 | S12 Theme/DPI/version polish | ⬜ Not started | — | |
@@ -776,7 +776,15 @@ S3a sits on the critical path between S3 and S4 — it is not part of a parallel
   (S7 reads `Timer.Laps`/`Timer.Records`/`Timer.RestoredPausedAtMs` directly rather than the control
   proxying each one); `public bool DarkMode { get; set; }`; `public Task RestoreAsync()` (delegates
   to `Timer.RestoreAsync()` then refreshes the display — S7 calls this one, not `Timer.RestoreAsync()`
-  directly, so the UI updates).
+  directly, so the UI updates); `public event Action? StateChanged` (added in S7 — raised after
+  Start, Pause, Lap, Stop, and Restore so a parent can push a refresh to something it renders
+  elsewhere, such as `RecordsListControl`'s laps panel or S8's tray icon); `public event Action?
+  Tick` (added in S8 — raised from the internal 1000 ms `System.Windows.Forms.Timer`'s own `Tick`
+  handler, so a parent gets the same once-a-second, guaranteed-UI-thread heartbeat without a second
+  timer); and the four action methods `StartTimer()`, `PauseTimerAsync()`, `AddLap()`,
+  `StopTimerAsync()` (added in S8 — each does what its `Click` handler already does, so a caller
+  other than this control's own buttons, such as the S8 tray menu or S10's hotkeys, can drive a
+  transition without leaving the window's own display stale).
 - **Done when:** manual/visual check that all three button rows from §2.6 render correctly and
   that the timer disposes cleanly on control disposal (no ticks fire after teardown). No interactive
   display was available in the environment that built this stage, so the visual render itself is
@@ -820,10 +828,12 @@ S3a sits on the critical path between S3 and S4 — it is not part of a parallel
   `StopwatchApp/Controls/StopwatchControl.cs`, `StopwatchApp/Services/StopwatchTimer.cs`, and
   `StopwatchApp.Tests/StopwatchTimerTests.cs`.
 - **Build:** constructs `Database`, `StopwatchControl`, `RecordsListControl`, wires
-  `RecordsChanged`/`ClearAllRequested` events between them and `IStopwatchStore`, and calls
-  `StopwatchTimer.RestoreAsync()` once at startup (after the DB connection opens) to show the
-  frozen elapsed time, `Continue` button, restored laps, and "resumed from a pause" note if a
-  saved session exists. **No business logic lives here** — pure wiring, per `AGENTS.md` §3/§5.
+  `StopwatchControl.Timer.RecordsChanged`/`RecordsListControl.ClearAllRequested` between the two
+  controls (through `StopwatchTimer`, not directly against `IStopwatchStore` — see `AGENTS.md` §17,
+  dated 2026-09-10), and calls `StopwatchControl.RestoreAsync()` once at startup (after the DB
+  connection opens) to show the frozen elapsed time, `Continue` button, restored laps, and "resumed
+  from a pause" note if a saved session exists. **No business logic lives here** — pure wiring, per
+  `AGENTS.md` §3/§5.
 - **Public interface:** `MainForm : Form` retains its default constructor. To preserve the timer's
   ownership of its records cache after Clear All, `StopwatchTimer.ClearRecordsAsync()` clears the
   store then reloads `Records` and raises `RecordsChanged`. `StopwatchControl.StateChanged` lets
@@ -838,33 +848,46 @@ S3a sits on the critical path between S3 and S4 — it is not part of a parallel
 - **Out of scope:** tray, hotkeys, single-instance, window-hide-to-tray — the form at this stage
   behaves like an ordinary window with a visible taskbar button and no tray icon.
 
-### S8 — `TrayIconService`
+### S8 — `TrayIconService` ✅ Done
 
 - **Depends on:** S1 (`TimeFormat`, for the tooltip), S7 (`MainForm` to restore/activate).
-- **Files:** `StopwatchApp/Services/TrayIconService.cs`.
+- **Files:** `StopwatchApp/Services/TrayIconService.cs`, `StopwatchApp/Controls/StopwatchControl.cs`,
+  `StopwatchApp/MainForm.cs`, `StopwatchApp/StopwatchApp.csproj`.
 - **Build:** §3.1 (32×32 GDI+ rendered icon, hours over minutes, regenerate only when the visible
   minute changes, `DestroyIcon` on every replace) and §3.2 (context menu order: `Open`, separator,
-  state action(s), separator, `Exit`; double-click opens/activates).
-- **Public interface:** a class owning a `NotifyIcon`, constructed with a reference to
-  `MainForm`/`StopwatchTimer` (agent's call on exact wiring) and exposing `UpdateDisplay(long
-  elapsedMs, bool running, bool paused)` or equivalent, plus `IDisposable`.
-- **Done when:** manual check — icon renders and updates at most once/second, tooltip shows full
-  `HH:MM:SS`, no `DestroyIcon` leak (verify via Task Manager GDI handle count over a few minutes
-  of running).
+  state action(s), separator, `Exit`; double-click opens/activates). `StopwatchControl` gained a
+  `Tick` event (its existing 1000 ms UI timer is the once-a-second, guaranteed-UI-thread heartbeat —
+  no second timer) and four action methods (`StartTimer`/`PauseTimerAsync`/`AddLap`/`StopTimerAsync`)
+  so the tray menu drives transitions without leaving the window's own display stale. See
+  `AGENTS.md` §17, dated 2026-09-10, for these and for the `AllowUnsafeBlocks` addition the
+  `DestroyIcon` P/Invoke requires.
+- **Public interface:** `TrayIconService(StopwatchControl control, Action onOpen, Action onExit)`,
+  `bool DarkMode { get; set; }`, `void UpdateDisplay(long elapsedMs, bool running, bool paused)`,
+  `IDisposable`. Takes callbacks and the control, not a `MainForm` reference (AGENTS.md §3).
+- **Done when:** `csharpier check .`, `dotnet build -c Release` (zero warnings/errors), and
+  `dotnet test` (43 passing) are verified; a smoke launch confirmed the app starts and shows its
+  window without crashing. The full interactive checklist — icon renders and updates at most
+  once/second, tooltip shows `HH:MM:SS`, GDI handle count stays flat over several minutes via Task
+  Manager — requires a human at the keyboard and remains to be run before shipping.
 - **Owns acceptance criteria:** "Tray: the icon updates while running and reflects the current
-  hour/minute; the tooltip shows the full `HH:MM:SS`."
-- **Out of scope:** window hide/show behavior (S9), hotkeys (S10).
+  hour/minute; the tooltip shows the full `HH:MM:SS`." (shared with S9; see there for the rest).
+- **Out of scope:** window hide/show behavior (S9 — implemented in the same change, see below),
+  hotkeys (S10).
 
-### S9 — Window-to-tray behavior
+### S9 — Window-to-tray behavior ✅ Done
 
 - **Depends on:** S8.
-- **Files:** edits to `StopwatchApp/MainForm.cs`.
-- **Build:** §3.3 — intercept `FormClosing` on `CloseReason.UserClosing` (cancel close, hide,
-  `ShowInTaskbar = false`); intercept minimize the same way; tray `Exit` disposes `NotifyIcon`
-  **before** `Application.Exit()`.
+- **Files:** `StopwatchApp/MainForm.cs`.
+- **Build:** §3.3 — `OnFormClosing` cancels `CloseReason.UserClosing`, hides, sets
+  `ShowInTaskbar = false`; `OnResize` does the same when minimized; the tray's `Exit` item
+  (`MainForm.ExitApplication`) disposes `TrayIconService`, then awaits `Database.DisposeAsync()`,
+  then calls `Application.Exit()`. `Close()` calls made programmatically (e.g. the DB-failure path
+  in `InitializeAsync`) report `CloseReason.None`, not `UserClosing`, so they are not intercepted —
+  see `AGENTS.md` §17, dated 2026-09-10.
 - **Public interface:** none new.
-- **Done when:** manual check — both close and minimize hide the window with no taskbar button
-  remaining; opening from the tray restores and activates; Exit leaves no ghost icon.
+- **Done when:** automated gate verified (see S8); the interactive checklist — both close and
+  minimize hide the window with no taskbar button remaining, opening from the tray restores and
+  activates, Exit leaves no ghost icon — remains a manual check.
 - **Owns acceptance criteria:** "both close and minimize hide the window and remove its taskbar
   button; Exit terminates the process with no icon left behind in the tray."
 - **Out of scope:** hotkeys, single-instance.
