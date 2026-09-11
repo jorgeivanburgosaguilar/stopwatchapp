@@ -1384,3 +1384,35 @@ that now carries the actual rule.
   non-`Normal` case. `PositionWindowCentered`/`PositionWindowAsync` don't need the same treatment
   since `RestoreWindow()` forces `WindowState = FormWindowState.Normal` before either ever runs (see
   the entry above), and the constructor/first-`Load` path is always `Normal` already.
+- **2026-09-11 — S11c: large-MM layout centered by measured point, not a centered `RectangleF`.**
+  The existing stacked layout centers each row's text with `StringFormat.Alignment`/
+  `LineAlignment` on a `RectangleF` sized to the row. That approach was tried first for the new
+  single large "MM" row and rejected: at a font size where "MM"'s measured width exceeds the
+  32px-wide rectangle, pairing `StringFormatFlags.NoWrap` with rectangle-based centering was
+  observed (empirically, rendering to a `Bitmap` and inspecting pixel alpha) to drop the second
+  character entirely instead of clipping/overflowing evenly on both sides. Fixed by measuring the
+  string first (`Graphics.MeasureString` against an oversized bound with `StringFormat.GenericDefault`)
+  and drawing at an explicitly computed centered `PointF` instead — see
+  `TrayIconService.DrawLargeMinutes`. Font is `Segoe UI`, 24px bold (up from the stacked layout's
+  13px) — chosen by rendering "00" through "59" at several sizes and checking the ink bounding box
+  stayed within the 32×32 canvas with margin (24px keeps ~2px clearance on every side across all
+  minute values; 26px+ starts touching the edges for wider glyph pairs).
+- **2026-09-11 — S11c: dirty-check state gained an explicit `TrayIconLayout` field, not an inferred
+  one.** `TrayIconService._lastRendered` was `(int Hours, int Minutes, TrayState State)`; it's now
+  `(int Hours, int Minutes, TrayState State, TrayIconLayout Layout)`, with `TrayIconLayout` picked by
+  a new pure `internal static TrayIconService.SelectLayout(int hours)`. Hours changing already forces
+  a redraw today, so this field is redundant with the current rule — but AGENTS.md §10.1 explicitly
+  asks for the active layout to be tracked "rather than relying on the coincidence" that a layout
+  switch always also changes the hour/minute digits, so a future change to either rule can't silently
+  decouple them. `_lastRendered`'s tuple equality (`==`) already covers the new field for free.
+- **2026-09-11 — S11c: `SelectLayout` and `TrayIconLayout` made `internal`, not `private`.** The only
+  part of this stage's logic pure enough to unit test without a real `NotifyIcon`/HICON (per §13's
+  "UI-free testability doesn't extend to raw GDI+ output," reaffirmed by the roadmap's S11c entry) is
+  "which layout applies to this hour count" — `RenderIcon`'s actual drawing stayed untested, same as
+  before this stage. `internal` (not `public`) avoids a `GenerateDocumentationFile`/`CS1591`
+  obligation while still being visible to `StopwatchApp.Tests` via the existing
+  `InternalsVisibleTo("StopwatchApp.Tests")` (§17, 2026-09-10 entry). See
+  `StopwatchApp.Tests/TrayIconServiceTests.cs`. One test-authoring wrinkle: `[InlineData]` can't carry
+  an `internal` enum as a public `[Theory]` method's parameter type (CS0051, accessibility mismatch)
+  even with `InternalsVisibleTo`, so the test passes a `bool` ("expect the large-minutes layout") and
+  maps it to the enum value inside the test body instead.

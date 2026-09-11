@@ -520,7 +520,7 @@ log for anything discovered or decided while executing a stage — check it alon
 | S11 Single-instance | ✅ Done | 2026-09-11 | `FindWindow`-targeted `PostMessage`, not `HWND_BROADCAST` (see `AGENTS.md` §17) |
 | S11a Visual design refresh | ✅ Done | 2026-09-11 | Owner-drawn rounded buttons/rows + card borders as the GDI+ elevation stand-in; `TrayIconService` needed no edit (see `AGENTS.md` §17) |
 | S11b Window position memory | ✅ Done | 2026-09-11 | `window_position` migration 2 + `_shownAtLocation` baseline in `MainForm` (see `AGENTS.md` §17, dated 2026-09-11) |
-| S11c Tray icon: large minutes under an hour | ⬜ Not started | — | Added post-hoc at user request (see `AGENTS.md` §17, dated 2026-09-11) |
+| S11c Tray icon: large minutes under an hour | ✅ Done | 2026-09-11 | Large-MM layout drawn by measured point, not centered RectangleF; `TrayIconLayout` tracked explicitly in the dirty-check tuple (see `AGENTS.md` §17, dated 2026-09-11) |
 | S12 Theme/DPI/version polish | ⬜ Not started | — | |
 | S13 Publish | ⬜ Not started | — | |
 
