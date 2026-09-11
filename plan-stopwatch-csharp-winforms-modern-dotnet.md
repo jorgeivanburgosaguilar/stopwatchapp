@@ -1167,18 +1167,33 @@ part of a parallel wave.
 
 - **Depends on:** S9, S10, S11 (i.e., after the whole feature set exists), and S11a — the light/dark
   detection this stage wires must apply to the refreshed palette S11a produces, not the one it
-  replaces.
+  replaces. S11b/S11c already merged too, but this stage doesn't touch either of their code paths.
 - **Files:** touches across `Program.cs`, `MainForm.cs`, `StopwatchControl.cs`,
   `RecordsListControl.cs`, `TrayIconService.cs`.
-- **Build:** `Application.SetColorMode(SystemColorMode.System)` in `Program.Main` (after
-  `ApplicationConfiguration.Initialize()`, before `Application.Run`); apply `Palette` (S2) to every
-  custom-painted surface; handle `DpiChanged` to re-render the tray icon at the new size; add the
-  `<Version>1.0.0</Version>` surfaced somewhere in the UI (footer or tray "About").
+- **Build:** `Application.SetColorMode(SystemColorMode.System)` in `Program.Main` — **already present**
+  (confirm it's still correctly placed: after `ApplicationConfiguration.Initialize()`, before
+  `Application.Run`, no action needed if so). The real work:
+  - Wire **live OS dark/light-mode detection** into `StopwatchControl.DarkMode`,
+    `RecordsListControl.Dark`, and `TrayIconService.DarkMode` — all three still default to the
+    hardcoded `false` every stage from S5 onward deliberately left for this stage (see `AGENTS.md`
+    §17's S5/S6/S8 entries). Research the exact .NET 10 WinForms API for reading current effective
+    dark-mode state via Context7 or Microsoft Learn before writing code — do not guess a member name
+    from training data (a candidate to verify is `Application.IsDarkModeEnabled`, but confirm it).
+  - React to the OS theme changing **while the app is running**, not just at startup — the standard
+    WinForms mechanism is `Microsoft.Win32.SystemEvents.UserPreferenceChanged`; confirm the correct
+    `UserPreferenceCategory` to filter on via the same research, and update all three `DarkMode`/
+    `Dark` properties (triggering their existing repaint/re-render paths) when it fires. Unsubscribe
+    on form/service disposal — this is a static, process-wide event; a missed unsubscribe leaks the
+    subscriber.
+  - Handle `DpiChanged` to re-render the tray icon at the new size.
+  - Add the `<Version>1.0.0</Version>` (already in the `.csproj`) surfaced somewhere in the UI
+    (footer or tray "About" entry — agent's call, matching precedent for unfixed UI shape).
 - **Public interface:** none new — this stage only wires existing pieces together correctly.
 - **Done when:** manual check in both Windows light and dark mode — window chrome and stock
   controls follow the OS setting, custom-painted surfaces (button colors, empty-state text) match
-  §2.8's tables in both themes; moving the window between monitors with different DPI re-renders
-  the tray icon at the correct size.
+  §2.8's tables in both themes, and flipping the OS setting *while the app is running* updates them
+  live, without a restart; moving the window between monitors with different DPI re-renders the tray
+  icon at the correct size; the version number is visible somewhere in the UI.
 - **Owns acceptance criteria:** none listed by number in §6 (theme/DPI are verified manually, no
   §6 bullet is dedicated to them).
 - **Out of scope:** any new feature — this is strictly a polish/consistency pass.
