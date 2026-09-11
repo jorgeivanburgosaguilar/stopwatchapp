@@ -1512,3 +1512,22 @@ that now carries the actual rule.
   refreshed by the same `ApplyDarkMode()` that drives the three `DarkMode`/`Dark` properties, so the
   footer stays legible in both themes and across a live theme flip. No `Palette` change was needed —
   `MutedText` already existed for exactly this kind of secondary text (§11).
+- **2026-09-11 — S13: automated GUI screenshot verification attempted and abandoned as unsafe.**
+  While starting S13, an attempt was made to launch the built app on the real dev machine and
+  screenshot its window (`Start-Process` + `SetForegroundWindow` + `Graphics.CopyFromScreen` over the
+  window's `GetWindowRect` bounds) to actually verify rendering instead of leaving it as a standing
+  manual-check item. It failed unsafely on the first attempt: `SetForegroundWindow` from a background
+  process is subject to Windows' foreground-lock restrictions and did not reliably bring the target
+  window to the front, so the screen-region capture returned whatever window actually occupied those
+  screen coordinates — in this case a **different, unrelated application's content**, not
+  `StopwatchApp`. Since this runs on the developer's live desktop (not an isolated sandbox), a blind
+  screen-region capture risks capturing unrelated, potentially sensitive on-screen content any time
+  the target window isn't verifiably foregrounded first. The capture and script were deleted
+  immediately and the launched process killed. **Do not attempt blind `CopyFromScreen`-based
+  verification again without first confirming true foreground/topmost status of the target window by
+  some other verified means** (e.g. reading back the actual foreground `HWND` via `GetForegroundWindow`
+  and asserting it equals the target before capturing, not just calling `SetForegroundWindow` and
+  hoping). Until such a safe driver exists, GUI/visual verification for this app stays a manual,
+  human-performed step per §4 item 5 and the "Done when" manual checklists throughout §5 of the
+  roadmap — process-level smoke tests (launch, confirm responsive, clean terminate) remain safe and
+  were used instead for S13's publish verification.
