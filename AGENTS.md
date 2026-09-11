@@ -14,9 +14,11 @@ records list, and a system-tray presence showing elapsed time while the main win
   crash reporting — ever. New code must never add any of these.
 - All data lives in one local SQLite file at `%LOCALAPPDATA%\StopwatchApp\stopwatch.db`.
 - **Windows 11 only.** Do not add compatibility shims for Windows 10 or earlier.
-- In scope: global hotkeys, single-instance enforcement, close-to-tray, tray context menu.
-- Out of scope (do not add): run-at-login/startup registration, crash recovery of a running
-  (unpaused) session, idle detection, CSV/JSON export, cloud sync, telemetry, installer/MSIX.
+- In scope: window-scoped keyboard shortcuts, single-instance enforcement, close-to-tray, tray
+  context menu.
+- Out of scope (do not add): global/system-wide hotkeys, run-at-login/startup registration, crash
+  recovery of a running (unpaused) session, idle detection, CSV/JSON export, cloud sync, telemetry,
+  installer/MSIX.
 - **No taskbar integration** — no overlay badge, no thumbnail toolbar buttons, no progress bar,
   no title-bar clock. The tray icon is the only out-of-window surface.
 - Pausing is the *only* action that persists a live session. A session that runs and is never
@@ -50,7 +52,8 @@ StopwatchApp/
   Program.cs               single-instance mutex, ApplicationConfiguration.Initialize, SetColorMode, Application.Run
   MainForm.cs              thin orchestrator — wires controls and services, no business logic
   Controls/                rendering + event wiring only, no untestable business logic
-    StopwatchControl.cs    timer state (§8) + control row (§8.5)
+    StopwatchControl.cs    timer state (§8) + control row (§8.5) + keyboard shortcuts (§10.4)
+    StopwatchShortcut.cs   the three window-scoped shortcuts (§10.4)
     RecordsListControl.cs  records and laps list rendering
     ClearRecordsDialog.cs  confirm dialog
   Models/                  one record type per file (§5)
@@ -60,7 +63,6 @@ StopwatchApp/
   Services/                UI-free, unit-testable
     StopwatchTimer.cs      tick loop + transitions (§8)
     TrayIconService.cs     NotifyIcon, rendered icon, context menu (§10)
-    HotkeyService.cs       RegisterHotKey P/Invoke (§10)
     IStopwatchStore.cs     the data-access interface (§3.1/§9)
     Database.cs            SQLite access via Dapper (§9)
     SchemaMigrations.cs    versioned schema steps, PRAGMA user_version (§9)
@@ -186,6 +188,10 @@ public sealed class StopwatchControl : UserControl   // §8.5 — display + cont
     public Task PauseTimerAsync();
     public void AddLap();
     public Task StopTimerAsync();
+
+    // S10 — pure key-to-shortcut mapping, called from MainForm.ProcessCmdKey (§10.4); no window
+    // needed to test it.
+    public static StopwatchShortcut? MapShortcut(Keys keyData);
 }
 
 public sealed class TrayIconService : IDisposable   // §10.1/§10.2 — NotifyIcon owner
@@ -731,28 +737,42 @@ remaining. Opening from the tray restores and re-activates the window.
 the `NotifyIcon` — otherwise a ghost icon lingers in the tray until the user hovers over its former
 location.
 
-### 10.4 Global hotkeys
+### 10.4 Keyboard shortcuts
 
-`RegisterHotKey`/`UnregisterHotKey` via P/Invoke on `user32.dll`, handled by overriding `WndProc`
-and checking for `WM_HOTKEY`. Default bindings:
+**Global (system-wide) hotkeys are explicitly out of scope (§1) — do not add `RegisterHotKey`.**
+This app is mouse-driven; the only shortcuts are ordinary, window-scoped keystrokes, active only
+while the main window has focus:
 
-| Hotkey | Action |
+| Key | Action |
 |---|---|
-| `Ctrl+Alt+S` | Start / Continue |
-| `Ctrl+Alt+P` | Pause |
-| `Ctrl+Alt+L` | Lap |
-| `Ctrl+Alt+X` | Stop |
+| `Space` | Start / Pause / Continue — whatever the primary button currently does |
+| `Shift+Space` | Lap |
+| `Enter` | Stop |
 
-Registration can fail if another app already owns a combination. Fail soft — log it and surface a
-tray balloon notification — never throw or crash the app over a hotkey conflict. Call
-`UnregisterHotKey` for every `RegisterHotKey` on shutdown.
+`StopwatchControl.MapShortcut(Keys keyData)` is the pure, unit-tested key table (bare `Space` →
+`Toggle`, `Shift+Space` → `Lap`, `Enter` → `Stop`, everything else → `null` — any other modifier on
+these keys, e.g. `Ctrl+Space`, is deliberately unmapped). `MainForm` overrides `ProcessCmdKey`
+(not `KeyDown`/`AcceptButton`) to call it and dispatch to the existing `StartTimer()`/
+`PauseTimerAsync()`/`AddLap()`/`StopTimerAsync()` action methods (§3.1) — the same ones the tray
+menu uses. `ProcessCmdKey` runs before a focused control's own key handling, so returning `true`
+both dispatches the shortcut and stops it from also clicking whatever button has focus. No
+wrong-state guards are needed: `Lap()`'s and `Stop()`'s own no-op guards (§8.3) already absorb a
+shortcut pressed in a state where it doesn't apply.
 
 ### 10.5 Single instance
 
 Named `System.Threading.Mutex` created at startup. If a second instance detects the mutex already
-exists, it sends a registered window message (via `RegisterWindowMessage` +
-`PostMessage(HWND_BROADCAST, ...)`) asking the first instance to restore and activate its window,
-then exits immediately — never runs a second copy.
+exists, it locates the first instance's window with `FindWindow` (matched by the fixed window
+title, `MainForm.WindowTitle`) and sends it a registered window message (via
+`RegisterWindowMessage` + `PostMessage`) asking it to restore and activate itself, then exits
+immediately — never runs a second copy.
+
+**Not `PostMessage(HWND_BROADCAST, ...)`**, despite that being the originally-planned mechanism
+(§17, dated 2026-09-11): once hidden to tray, §10.3's `ShowInTaskbar = false` gives the window an
+owner (the mechanism WinForms uses to drop its taskbar button), and Windows excludes owned windows
+from `HWND_BROADCAST` delivery regardless of visibility — so a broadcast posted while the window is
+hidden is silently never delivered, in exactly the one state single-instance activation exists to
+handle. A direct, title-targeted `FindWindow` lookup is not subject to that exclusion.
 
 ---
 
@@ -851,6 +871,9 @@ xUnit, in a `StopwatchApp.Tests` project.
 - Tray: the icon updates while running and reflects the current hour/minute; the tooltip shows the
   full `HH:MM:SS`; both close and minimize hide the window and remove its taskbar button; Exit
   terminates the process with no icon left behind in the tray.
+- Keyboard shortcuts: with the main window focused, `Space` starts/pauses/continues, `Shift+Space`
+  laps, and `Enter` stops, matching the mouse-click behavior of the same buttons; none of the three
+  fires while the window is hidden to the tray or while `ClearRecordsDialog` is open.
 
 Implement these as automated tests wherever the behavior is UI-free, and as a manual check where it
 genuinely requires a running window (tray, hotkeys).
@@ -1089,3 +1112,40 @@ that now carries the actual rule.
   `Exit` item the only real quit path once `FormClosing` cancels `UserClosing`, disposal now happens
   in `MainForm.ExitApplication()` — `_trayIconService.Dispose()`, then `await _database.DisposeAsync()`,
   then `Application.Exit()` — where the `await` runs on a message loop that is still alive.
+- **2026-09-11 — S10: global hotkeys dropped in favor of window-scoped keyboard shortcuts.** While
+  planning S10, a blocking flaw surfaced in the originally-specified `RegisterHotKey` design: a
+  registered hotkey is bound to one specific `HWND`, and `MainForm.HideToTray()` sets
+  `ShowInTaskbar = false`, which makes WinForms destroy and recreate the form's native window
+  handle (it governs `WS_EX_APPWINDOW`/the owner relationship, which can't be changed on a live
+  handle). The hotkeys would silently stop firing after the very first hide-to-tray — exactly the
+  state global hotkeys exist to serve — and `UnregisterHotKey` on shutdown would then target a
+  handle the registration was never bound to. Decision: drop global/system-wide hotkeys from scope
+  entirely (§1) rather than work around the handle lifecycle (e.g. a message-only `NativeWindow`);
+  this app is mouse-driven and a hidden-window-only shortcut has no use for a *global* binding.
+  Replaced with three ordinary, window-scoped keystrokes — `Space` (toggle Start/Pause/Continue),
+  `Shift+Space` (Lap), `Enter` (Stop) — dispatched from `MainForm.ProcessCmdKey` through the same
+  `StopwatchControl` action methods S8 already added for the tray menu. See §10.4 for the full
+  spec and §3.1 for `MapShortcut`'s shape.
+- **2026-09-11 — S11: `user32.dll`'s bare `RegisterWindowMessage`/`PostMessage`/`FindWindow` names
+  aren't real export names.** A first `[LibraryImport("user32.dll")]` attempt using the bare
+  function names built clean but crashed every launch with
+  `EntryPointNotFoundException: Unable to find an entry point named 'RegisterWindowMessage'` — the
+  actual exports are the `...W` (wide-string) forms; the bare names are C-header macros, not
+  linkable symbols. Fixed with an explicit `EntryPoint = "RegisterWindowMessageW"` /
+  `"PostMessageW"` / `"FindWindowW"` on each `[LibraryImport]`, alongside
+  `StringMarshalling = StringMarshalling.Utf16` on the two that take a `string` parameter.
+- **2026-09-11 — S11: `HWND_BROADCAST` does not reach the window once hidden to tray; switched to a
+  `FindWindow`-targeted `PostMessage`.** The originally-specified §3.5/§10.5 mechanism
+  (`RegisterWindowMessage` + `PostMessage(HWND_BROADCAST, ...)`) worked when tested against a
+  visible window, but silently failed the moment the window was hidden to tray first — exactly the
+  scenario this feature exists to serve. Root cause, confirmed by driving both instances externally
+  via PowerShell P/Invoke (`EnumWindows` + `GetWindowThreadProcessId` to inspect the live
+  owner/visibility state of the actual window handle, which §10.3's handle-recreation note above
+  means is a *different* HWND than the one the form started with): `HWND_BROADCAST` is documented
+  to reach invisible windows only if they're *unowned*, and §10.3's `ShowInTaskbar = false` gives
+  the recreated handle an owner as part of how WinForms drops its taskbar button — so the broadcast
+  is accepted (`PostMessage` returns success) but never queued to that window at all. Fixed by
+  having the second instance call `FindWindow(null, MainForm.WindowTitle)` to get the first
+  instance's window handle directly (unaffected by ownership) and `PostMessage` it there instead of
+  broadcasting; `MainForm.WindowTitle` (`"Stopwatch"`) is now a shared `internal const` so both
+  classes reference the same literal. See §10.5.

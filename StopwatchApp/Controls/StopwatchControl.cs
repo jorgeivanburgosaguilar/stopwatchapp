@@ -15,6 +15,7 @@ namespace StopwatchApp.Controls;
 public sealed class StopwatchControl : UserControl
 {
   private readonly System.Windows.Forms.Timer _uiTimer;
+  private readonly ToolTip _shortcutToolTip;
   private readonly Button _primaryButton; // Start / Continue — never shown alongside Pause/Lap
   private readonly Button _pauseButton;
   private readonly Button _lapButton;
@@ -72,6 +73,11 @@ public sealed class StopwatchControl : UserControl
 
     _stopButton = CreateButton("Stop", Palette.StopButton);
     _stopButton.Click += async (_, _) => await StopTimerAsync();
+
+    _shortcutToolTip = new ToolTip();
+    _shortcutToolTip.SetToolTip(_pauseButton, "Pause (Space)");
+    _shortcutToolTip.SetToolTip(_lapButton, "Lap (Shift+Space)");
+    _shortcutToolTip.SetToolTip(_stopButton, "Stop (Enter)");
 
     FlowLayoutPanel buttonRow = new()
     {
@@ -188,6 +194,22 @@ public sealed class StopwatchControl : UserControl
     StateChanged?.Invoke();
   }
 
+  /// <summary>
+  /// Maps a key combination to the <see cref="StopwatchShortcut"/> it triggers, or
+  /// <see langword="null"/> if the combination is not one of the window-scoped shortcuts
+  /// (AGENTS.md §10.4): bare Space toggles Start/Pause/Continue, Shift+Space records a lap, and
+  /// Enter stops. Any other modifier on these keys (e.g. Ctrl+Space) is deliberately unmapped.
+  /// </summary>
+  /// <param name="keyData">The key combination, as passed to <c>Form.ProcessCmdKey</c>.</param>
+  public static StopwatchShortcut? MapShortcut(Keys keyData) =>
+    keyData switch
+    {
+      Keys.Space => StopwatchShortcut.Toggle,
+      Keys.Shift | Keys.Space => StopwatchShortcut.Lap,
+      Keys.Enter => StopwatchShortcut.Stop,
+      _ => null,
+    };
+
   /// <inheritdoc />
   protected override void Dispose(bool disposing)
   {
@@ -195,6 +217,7 @@ public sealed class StopwatchControl : UserControl
     {
       _uiTimer.Stop();
       _uiTimer.Dispose();
+      _shortcutToolTip.Dispose();
     }
     base.Dispose(disposing);
   }
@@ -239,6 +262,7 @@ public sealed class StopwatchControl : UserControl
     bool running = Timer.IsRunning;
     _primaryButton.Text = Timer.IsPaused ? "Continue" : "Start";
     _primaryButton.Visible = !running;
+    _shortcutToolTip.SetToolTip(_primaryButton, $"{_primaryButton.Text} (Space)");
     _pauseButton.Visible = running;
     _lapButton.Visible = running;
     _stopButton.Visible = true;

@@ -27,8 +27,8 @@ alone, without needing to consult any other project or source.
 | Tray icon | Runtime-rendered icon showing **hours over minutes**; tooltip = full `HH:MM:SS`, plain text, no emoji or label |
 | Window | **Both close and minimize hide to tray** (no taskbar button while hidden); Exit only from the tray menu |
 | Taskbar | **None** — no overlay badge, no thumbnail toolbar buttons, no progress bar, no title-bar clock |
-| Features in scope | Global hotkeys, single-instance enforcement, close-to-tray, tray context menu |
-| Features out of scope | Run-at-login/startup registration, crash recovery of a running (unpaused) session, idle detection, CSV/JSON export, cloud sync, telemetry |
+| Features in scope | Window-scoped keyboard shortcuts, single-instance enforcement, close-to-tray, tray context menu |
+| Features out of scope | Global/system-wide hotkeys, run-at-login/startup registration, crash recovery of a running (unpaused) session, idle detection, CSV/JSON export, cloud sync, telemetry |
 | Packaging | **Framework-dependent** `dotnet publish -c Release` (small output, requires the .NET 10 Desktop Runtime on the machine) |
 
 Pausing is the only action that persists a live session. A session that is running and never
@@ -341,20 +341,23 @@ button remaining. Opening from the tray restores and re-activates the window.
 `NotifyIcon` — otherwise a ghost icon lingers in the tray until the user hovers over its former
 location.
 
-### 3.4 Global hotkeys
+### 3.4 Keyboard shortcuts
 
-Use `RegisterHotKey` / `UnregisterHotKey` via P/Invoke on `user32.dll`, handled by overriding
-`WndProc` and checking for `WM_HOTKEY`. Proposed default bindings:
+**Global (system-wide) hotkeys are out of scope** — see `AGENTS.md` §17, dated 2026-09-11, for why
+the originally-planned `RegisterHotKey` design was dropped (it binds to one `HWND`, and hiding to
+the tray recreates the form's window handle, silently breaking the hotkeys at the one moment they'd
+matter). Instead, three ordinary, window-scoped keystrokes, active only while the main window has
+focus:
 
-| Hotkey | Action |
+| Key | Action |
 |---|---|
-| `Ctrl+Alt+S` | Start / Continue |
-| `Ctrl+Alt+P` | Pause |
-| `Ctrl+Alt+L` | Lap |
-| `Ctrl+Alt+X` | Stop |
+| `Space` | Start / Pause / Continue — whatever the primary button currently does |
+| `Shift+Space` | Lap |
+| `Enter` | Stop |
 
-Registration can fail if another application already owns a combination. Fail soft — log it and
-surface a tray balloon notification — never throw or crash the app over a hotkey conflict.
+`StopwatchControl.MapShortcut(Keys)` is the pure key table; `MainForm.ProcessCmdKey` calls it and
+dispatches to the same action methods (`StartTimer`/`PauseTimerAsync`/`AddLap`/`StopTimerAsync`) the
+tray menu already uses.
 
 ### 3.5 Single instance
 
@@ -454,8 +457,8 @@ log for anything discovered or decided while executing a stage — check it alon
 | S7 MainForm | ✅ Done | 2026-09-10 | |
 | S8 TrayIconService | ✅ Done | 2026-09-10 | |
 | S9 Window-to-tray | ✅ Done | 2026-09-10 | |
-| S10 HotkeyService | ⬜ Not started | — | |
-| S11 Single-instance | ⬜ Not started | — | |
+| S10 Keyboard shortcuts | ✅ Done | 2026-09-11 | Global hotkeys dropped for window-scoped shortcuts (see `AGENTS.md` §17) |
+| S11 Single-instance | ✅ Done | 2026-09-11 | `FindWindow`-targeted `PostMessage`, not `HWND_BROADCAST` (see `AGENTS.md` §17) |
 | S11a Visual design refresh | ⬜ Not started | — | |
 | S12 Theme/DPI/version polish | ⬜ Not started | — | |
 | S13 Publish | ⬜ Not started | — | |
@@ -476,7 +479,6 @@ StopwatchApp/
   Services/
     StopwatchTimer.cs      tick loop + transitions (§2.2-2.3), UI-free and unit-testable
     TrayIconService.cs     NotifyIcon, rendered icon (§3.1), context menu (§3.2)
-    HotkeyService.cs       RegisterHotKey P/Invoke (§3.4)
     Database.cs            SQLite access via Dapper (§4)
     SchemaMigrations.cs    versioned schema steps, PRAGMA user_version (§4)
   Formatting/
@@ -514,7 +516,7 @@ S0 scaffold
               S7 MainForm
         ┌──────────┼──────────┬──────────┐
         ▼          ▼          ▼          ▼
-   S8 Tray    S10 Hotkeys  S11 Single-instance
+   S8 Tray    S10 Shortcuts S11 Single-instance
         ▼
    S9 Window-to-tray
         └──────────┴──────────┴──────────┘
@@ -897,32 +899,67 @@ part of a parallel wave.
   button; Exit terminates the process with no icon left behind in the tray."
 - **Out of scope:** hotkeys, single-instance.
 
-### S10 — `HotkeyService`
+### S10 — Keyboard shortcuts ✅ Done
 
-- **Depends on:** S7 (needs `MainForm`'s `WndProc` to hook `WM_HOTKEY`).
-- **Files:** `StopwatchApp/Services/HotkeyService.cs`.
-- **Build:** §3.4 — `RegisterHotKey`/`UnregisterHotKey` P/Invoke on `user32.dll`, the four default
-  bindings, fail-soft registration (log + tray balloon on conflict, never throw).
-- **Public interface:** a class taking the form's handle and a dispatch callback (or direct
-  `StopwatchTimer` reference), exposing `RegisterAll()` / `IDisposable.Dispose()` (which calls
-  `UnregisterHotKey` for every registered id).
-- **Done when:** manual check — each of the four hotkeys triggers its action with the window
-  hidden; a deliberately conflicting registration fails soft (no crash, balloon shown).
-- **Owns acceptance criteria:** none listed by number in §6 (hotkeys are a manual-only check per
-  §3.4's own text).
-- **Out of scope:** single-instance.
+- **Depends on:** S7 (needs `MainForm` to override `ProcessCmdKey`), S8 (the `StartTimer`/
+  `PauseTimerAsync`/`AddLap`/`StopTimerAsync` action methods this dispatches to).
+- **Why not `HotkeyService`/global hotkeys, as originally planned:** a `RegisterHotKey` registration
+  is bound to one specific `HWND`. `MainForm.HideToTray()` sets `ShowInTaskbar = false`, which makes
+  WinForms destroy and recreate the form's native window handle (it governs `WS_EX_APPWINDOW`/the
+  owner relationship, neither changeable on a live handle) — so the hotkeys would silently stop
+  firing after the very first hide-to-tray, exactly the state global hotkeys exist to serve. Rather
+  than work around the handle lifecycle (e.g. a message-only `NativeWindow`), the feature itself was
+  dropped: this app is mouse-driven, and a shortcut that only works while the window is visible has
+  no use for a *global* binding. See `AGENTS.md` §17, dated 2026-09-11, and §3.4/§10.4 above.
+- **Files:** `StopwatchApp/Controls/StopwatchShortcut.cs` (new), `StopwatchApp/Controls/StopwatchControl.cs`,
+  `StopwatchApp/MainForm.cs`, `StopwatchApp.Tests/StopwatchControlTests.cs` (new).
+- **Build:** §3.4/§10.4 — the three-key table (`Space`/`Shift+Space`/`Enter`), active only while the
+  main window has focus. `StopwatchControl.MapShortcut(Keys)` is the pure, unit-tested mapping;
+  `StopwatchControl` also gained a `ToolTip` showing each button's shortcut hint (`"Pause (Space)"`,
+  etc., refreshed on the primary button as its text switches between `Start`/`Continue`).
+  `MainForm.ProcessCmdKey` calls `MapShortcut` and dispatches to the existing S8 action methods —
+  chosen over `KeyDown`/`AcceptButton` because it runs before a focused button's own Space/Enter
+  handling, so returning `true` both fires the shortcut and stops it from double-firing whatever
+  button has focus. No wrong-state guards needed: `Lap()`/`Stop()`'s own no-op guards (§2.3) already
+  absorb a shortcut pressed where it doesn't apply.
+- **Public interface:** `public static StopwatchShortcut? StopwatchControl.MapShortcut(Keys keyData)`;
+  no changes to any existing public member's signature.
+- **Done when:** `csharpier check .` / `dotnet build -c Release` (zero warnings) / `dotnet test`
+  (49 passing — the existing 43 plus 6 new `MapShortcut` cases) all pass. Manual check: with the
+  window focused, `Space`/`Shift+Space`/`Enter` each do what their button does, including from a
+  freshly-clicked (focused) button (proving `ProcessCmdKey` suppresses the double-fire); none of the
+  three fires while hidden to the tray or while `ClearRecordsDialog` is open; hovering each button
+  shows its shortcut hint.
+- **Owns acceptance criteria:** the keyboard-shortcuts bullet added to §6/`AGENTS.md` §14 by this
+  stage (manual-only check, no automated acceptance criterion beyond `MapShortcut`'s own tests).
+- **Out of scope:** global/system-wide hotkeys (removed from the project entirely by this stage),
+  user-configurable bindings, single-instance (S11).
 
-### S11 — Single-instance enforcement
+### S11 — Single-instance enforcement ✅ Done
 
 - **Depends on:** S7 (needs a window to restore/activate).
-- **Files:** edits to `StopwatchApp/Program.cs`.
-- **Build:** §3.5 — named `Mutex` at startup; a second instance detects the existing mutex, sends
-  a `RegisterWindowMessage` + `PostMessage(HWND_BROADCAST, ...)` asking the first instance to
-  restore/activate, then exits immediately.
-- **Public interface:** none new (logic lives in `Program.Main`, plus a `WndProc` handler in
-  `MainForm` for the registered message).
-- **Done when:** manual check — launching a second instance while one is running restores/activates
-  the first window and the second process exits with no second window ever appearing.
+- **Files:** `StopwatchApp/Program.cs`, `StopwatchApp/MainForm.cs`.
+- **Build:** §3.5/§10.5 — named `Mutex` at startup; a second instance detects the existing mutex,
+  locates the first instance's window via `FindWindow(null, MainForm.WindowTitle)`, and sends it a
+  `RegisterWindowMessage` + `PostMessage` asking it to restore/activate, then exits immediately.
+  **Not `PostMessage(HWND_BROADCAST, ...)`** as originally planned — see `AGENTS.md` §17, dated
+  2026-09-11, for why a broadcast silently never reaches the window once it's hidden to tray (the
+  exact scenario this feature exists to serve), and for the separate `EntryPoint` gotcha on the
+  three `user32.dll` P/Invokes (`RegisterWindowMessageW`/`PostMessageW`/`FindWindowW` — the bare
+  names aren't real exports and crash with `EntryPointNotFoundException`). `MainForm.WindowTitle`
+  is now a shared `internal const` ("Stopwatch") for the `FindWindow` lookup. `MainForm.WndProc` is
+  the receiving end, comparing `m.Msg` against the registered message id and calling the same
+  `RestoreWindow()` the tray's `Open` item uses.
+- **Public interface:** none new (logic lives in `Program.Main`, plus a `WndProc` override in
+  `MainForm` for the registered message, plus the `MainForm.WindowTitle`/`Program.
+  RegisterWindowMessage`/`Program.ActivateMessageName` internals the two classes share).
+- **Done when:** manually verified (driving both instances via PowerShell + P/Invoke, since no
+  interactive desktop session narrates itself) — launching a second instance while one is running
+  restores/activates the first window and the second process exits (code 0) with no second window
+  ever appearing, in both the normally-visible and the hidden-to-tray starting states. Automated
+  gate verified: `csharpier check .`, `dotnet build -c Release` (zero warnings), `dotnet test` (49
+  passing, unchanged — this stage added no automated tests, matching its no-new-public-interface
+  scope).
 - **Owns acceptance criteria:** none listed by number in §6 (single-instance has no dedicated §6
   bullet — verified manually as specified in §3.5).
 - **Out of scope:** hotkeys.
