@@ -520,7 +520,7 @@ log for anything discovered or decided while executing a stage — check it alon
 | S11 Single-instance | ✅ Done | 2026-09-11 | `FindWindow`-targeted `PostMessage`, not `HWND_BROADCAST` (see `AGENTS.md` §17) |
 | S11a Visual design refresh | ✅ Done | 2026-09-11 | Owner-drawn rounded buttons/rows + card borders as the GDI+ elevation stand-in; `TrayIconService` needed no edit (see `AGENTS.md` §17) |
 | S11b Window position memory | ✅ Done | 2026-09-11 | `window_position` migration 2 + `_shownAtLocation` baseline in `MainForm` (see `AGENTS.md` §17, dated 2026-09-11) |
-| S11c Tray icon: large minutes under an hour | ✅ Done | 2026-09-11 | Large-MM layout drawn by measured point, not centered RectangleF; `TrayIconLayout` tracked explicitly in the dirty-check tuple (see `AGENTS.md` §17, dated 2026-09-11) |
+| S11c Tray icon: large minutes under an hour | ✅ Done | 2026-09-11 | Large-MM layout drawn by measured point, not centered RectangleF; `TrayIconLayout` tracked explicitly in the dirty-check tuple; follow-up: stacked layout's hours row is not zero-padded (`2`, not `02`) — a tray-icon-only exception (see `AGENTS.md` §17, dated 2026-09-11) |
 | S12 Theme/DPI/version polish | ⬜ Not started | — | |
 | S13 Publish | ⬜ Not started | — | |
 
@@ -1143,6 +1143,10 @@ part of a parallel wave.
   don't rely on the coincidence. `DestroyIcon` on every handle replacement (unchanged rule, both
   layouts). Icon tint by run state (idle/paused/running, from S8/S11a) is unchanged and orthogonal to
   which layout is active. Tooltip text and format (`FormatTime`, full `HH:MM:SS`) is unchanged.
+  Follow-up (same day, repo owner clarification): the stacked layout's hours row is **not**
+  zero-padded (`2`, not `02`; no digit-count cap) — a tray-icon-only exception to this app's otherwise
+  always-zero-padded digit formatting, so it reads like a written clock time ("2:01"). The minutes row
+  is unaffected. See `AGENTS.md` §10.1/§17.
 - **Public interface:** none changed — `TrayIconService`'s constructor and public members (§3.1) are
   exactly as S8 left them; this stage only changes `RenderIcon`'s internal drawing logic.
 - **Done when:** `csharpier check .` / `dotnet build -c Release` (zero warnings) / `dotnet test` (all

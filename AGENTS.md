@@ -736,7 +736,12 @@ and rejected first):
 - **Elapsed hours == 0** (the common case): a single large two-digit **MM** readout, centered and
   sized to fill as much of the 32×32 canvas as legibility at the 16 px scaled-down display size
   allows.
-- **Elapsed hours ≥ 1**: the original two stacked rows of two digits — hours on top, minutes below.
+- **Elapsed hours ≥ 1**: the original two stacked rows — hours on top, minutes below. **The hours row
+  is not zero-padded** (`2`, not `02`; `10` stays two digits; no digit-count cap beyond that) —
+  a deliberate, tray-icon-only exception to this app's otherwise-always-zero-padded digit formatting
+  (contrast `TimeFormat.FormatTime`, §8.4, whose tooltip stays fully zero-padded regardless), added
+  post-hoc at the repo owner's request so the row reads like a clock time ("2:01", not "02:01") — see
+  §17's S11c follow-up entry. The minutes row is unaffected: always two digits, zero-padded.
 
 Update the icon at most once per second, and only when the displayed value **or the active layout**
 changes — track both explicitly in the dirty-check state rather than relying on the fact that a
@@ -1416,3 +1421,21 @@ that now carries the actual rule.
   an `internal` enum as a public `[Theory]` method's parameter type (CS0051, accessibility mismatch)
   even with `InternalsVisibleTo`, so the test passes a `bool` ("expect the large-minutes layout") and
   maps it to the enum value inside the test body instead.
+- **2026-09-11 — S11c follow-up: the stacked layout's hours row is not zero-padded.** Repo owner
+  clarified, after the initial S11c build, that the ≥1-hour stacked layout's hours row should render
+  unpadded (`1`, not `01`; `10` stays `10`; a hypothetical `100` stays `100` — no digit-count cap) so
+  it reads the way people write a clock time ("2:01", not "02:01"). This is a **deliberate,
+  tray-icon-only exception** to the rest of the app's always-zero-padded digit formatting (notably
+  `TimeFormat.FormatTime`, §8.4, whose `HH:MM:SS` tooltip stays fully zero-padded and unaffected — the
+  exception is scoped to this one stacked-layout icon row only). The minutes row is unaffected either
+  way — still always two digits, zero-padded. §10.1 now states this explicitly so it doesn't read as
+  an inconsistency with §8.4. Implementation: extracted the pure formatting rule as
+  `internal static TrayIconService.FormatHourText(int hours) => hours.ToString(CultureInfo.InvariantCulture)`
+  (same rationale as `SelectLayout` above — unit-testable without a GDI+ handle; covered in
+  `StopwatchApp.Tests/TrayIconServiceTests.cs`, including the single-digit case the repo owner called
+  out, `2h → "2"`). Also extracted a shared `DrawCenteredByMeasuredPoint` helper (measure the string,
+  draw at a computed `PointF`) used by both the hours row and `DrawLargeMinutes`'s MM readout, since a
+  variable-width hour count (1 vs. 3+ digits) risks the same rectangle-centering character-drop
+  behavior documented in the first S11c entry above — the hours row now uses that same fix, not just
+  the minutes readout. The minutes row keeps its original `RectangleF`/`StringFormat` centering since
+  it's always exactly two fixed-width glyphs.

@@ -143,6 +143,15 @@ public sealed partial class TrayIconService : IDisposable
   internal static TrayIconLayout SelectLayout(int hours) =>
     hours == 0 ? TrayIconLayout.LargeMinutes : TrayIconLayout.StackedHoursMinutes;
 
+  /// <summary>
+  /// Pure formatting rule for the stacked layout's hours row (AGENTS.md §10.1/§17): unlike every
+  /// other digit display in this app (e.g. <see cref="TimeFormat.FormatTime"/>, §8.4), the tray's
+  /// hours row is deliberately NOT zero-padded — a 1-digit hour count renders as <c>"2"</c>, not
+  /// <c>"02"</c>. No digit-count cap either, so a (hypothetical) 100+ hour session still renders its
+  /// true value. Internal (not private) so it can be unit tested without a real GDI+ handle.
+  /// </summary>
+  internal static string FormatHourText(int hours) => hours.ToString(CultureInfo.InvariantCulture);
+
   /// <inheritdoc />
   public void Dispose()
   {
@@ -271,34 +280,50 @@ public sealed partial class TrayIconService : IDisposable
     }
   }
 
-  // A single large MM readout for the common under-an-hour case (AGENTS.md §10.1/§17): one row
-  // fills the whole 32×32 canvas instead of the stacked layout's two 16px-tall rows, since no hours
-  // row is needed while it would always read "00" anyway.
-  //
-  // Centering is done by measuring the string and drawing at an explicit point, not by handing
-  // StringFormat.Alignment/LineAlignment a RectangleF the way the stacked layout does below: at this
-  // font size "MM"'s measured width exceeds the 32px-wide rectangle, and centering a
-  // StringFormatFlags.NoWrap line inside a rectangle narrower than the text empirically drops the
-  // second character instead of just overflowing/clipping it evenly on both sides. Measuring first
-  // and drawing at a computed point sidesteps that rectangle-fit behavior entirely.
-  private static void DrawLargeMinutes(Graphics graphics, Brush brush, int minutes)
+  // Draws `text` centered within `bounds` by measuring it and computing an explicit origin point,
+  // instead of handing StringFormat.Alignment/LineAlignment a RectangleF (AGENTS.md §10.1/§17):
+  // whenever the measured text width can be close to or exceed the bounds' width — the large "MM"
+  // readout, or an hour count that isn't reliably two digits — that combination was observed
+  // (empirically, rendering to a Bitmap and inspecting pixel alpha) to silently drop a trailing
+  // character instead of overflowing/clipping evenly on both sides. Measuring first and drawing at a
+  // computed point sidesteps that rectangle-fit behavior entirely. `bounds` is used only for the
+  // centering math, not as a clip/wrap region.
+  private static void DrawCenteredByMeasuredPoint(
+    Graphics graphics,
+    Brush brush,
+    Font font,
+    string text,
+    RectangleF bounds
+  )
   {
-    string minuteText = (minutes % 100).ToString("D2", CultureInfo.InvariantCulture);
-    using Font font = new("Segoe UI", 24f, FontStyle.Bold, GraphicsUnit.Pixel);
     SizeF measured = graphics.MeasureString(
-      minuteText,
+      text,
       font,
       new SizeF(100, 100),
       StringFormat.GenericDefault
     );
-    PointF origin = new((32 - measured.Width) / 2f, (32 - measured.Height) / 2f);
-    graphics.DrawString(minuteText, font, brush, origin);
+    PointF origin = new(
+      bounds.X + (bounds.Width - measured.Width) / 2f,
+      bounds.Y + (bounds.Height - measured.Height) / 2f
+    );
+    graphics.DrawString(text, font, brush, origin);
+  }
+
+  // A single large MM readout for the common under-an-hour case (AGENTS.md §10.1/§17): one row
+  // fills the whole 32×32 canvas instead of the stacked layout's two 16px-tall rows, since no hours
+  // row is needed while it would always read "00" anyway.
+  private static void DrawLargeMinutes(Graphics graphics, Brush brush, int minutes)
+  {
+    string minuteText = (minutes % 100).ToString("D2", CultureInfo.InvariantCulture);
+    using Font font = new("Segoe UI", 24f, FontStyle.Bold, GraphicsUnit.Pixel);
+    DrawCenteredByMeasuredPoint(graphics, brush, font, minuteText, new RectangleF(0, 0, 32, 32));
   }
 
   // The original two-stacked-rows layout (AGENTS.md §10.1), unchanged since S8 except for being
-  // pulled out of RenderIcon so it can be selected between. Two digits per row is the fixed layout;
-  // an hour count of 100+ wraps at two digits here, but the tooltip set in UpdateDisplay carries the
-  // true, unrounded value.
+  // pulled out of RenderIcon so it can be selected between. The hours row's formatting rule (NOT
+  // zero-padded, unlike the rest of this app — see AGENTS.md §17) lives in FormatHourText above. The
+  // minutes row is unaffected by that rule — still always two digits, zero-padded, and still
+  // rectangle-centered rather than measured-point-centered, since it's always exactly two glyphs.
   private static void DrawStackedHoursMinutes(
     Graphics graphics,
     Brush brush,
@@ -306,15 +331,17 @@ public sealed partial class TrayIconService : IDisposable
     int minutes
   )
   {
-    string hourText = (hours % 100).ToString("D2", CultureInfo.InvariantCulture);
+    string hourText = FormatHourText(hours);
     string minuteText = (minutes % 100).ToString("D2", CultureInfo.InvariantCulture);
     using Font font = new("Segoe UI", 13f, FontStyle.Bold, GraphicsUnit.Pixel);
+
+    DrawCenteredByMeasuredPoint(graphics, brush, font, hourText, new RectangleF(0, 0, 32, 16));
+
     using StringFormat format = new()
     {
       Alignment = StringAlignment.Center,
       LineAlignment = StringAlignment.Center,
     };
-    graphics.DrawString(hourText, font, brush, new RectangleF(0, 0, 32, 16), format);
     graphics.DrawString(minuteText, font, brush, new RectangleF(0, 16, 32, 16), format);
   }
 

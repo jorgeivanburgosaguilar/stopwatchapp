@@ -3,10 +3,11 @@ using StopwatchApp.Services;
 namespace StopwatchApp.Tests;
 
 /// <summary>
-/// Covers <see cref="TrayIconService.SelectLayout"/>, the pure layout-selection rule added in S11c
-/// (AGENTS.md §10.1/§17). The rest of <see cref="TrayIconService"/> renders raw GDI+ pixel output via
-/// a real <c>NotifyIcon</c>/HICON and is not unit tested, per AGENTS.md §13/§17 — this is the one
-/// piece of that stage's logic pure enough to factor out.
+/// Covers <see cref="TrayIconService.SelectLayout"/> and <see cref="TrayIconService.FormatHourText"/>,
+/// the two pure rules S11c factored out of the icon-drawing code (AGENTS.md §10.1/§17: which layout
+/// applies, and how the stacked layout's hours row is formatted). The rest of
+/// <see cref="TrayIconService"/> renders raw GDI+ pixel output via a real <c>NotifyIcon</c>/HICON and
+/// is not unit tested, per AGENTS.md §13/§17.
 /// </summary>
 public class TrayIconServiceTests
 {
@@ -27,5 +28,22 @@ public class TrayIconServiceTests
       : TrayIconService.TrayIconLayout.StackedHoursMinutes;
 
     Assert.Equal(expected, TrayIconService.SelectLayout(hours));
+  }
+
+  // Covers TrayIconService.FormatHourText, the pure formatting rule behind the S11c follow-up: the
+  // stacked layout's hours row is deliberately not zero-padded, unlike every other digit display in
+  // this app (AGENTS.md §17). The single-digit case (2h -> "2", not "02") is the one the repo owner
+  // specifically called out.
+  [Theory]
+  [InlineData(0, "0")]
+  [InlineData(1, "1")]
+  [InlineData(2, "2")]
+  [InlineData(9, "9")]
+  [InlineData(10, "10")]
+  [InlineData(23, "23")]
+  [InlineData(100, "100")]
+  public void FormatHourText_NeverZeroPads(int hours, string expected)
+  {
+    Assert.Equal(expected, TrayIconService.FormatHourText(hours));
   }
 }
