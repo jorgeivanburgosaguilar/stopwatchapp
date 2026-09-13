@@ -608,7 +608,7 @@ Rules:
 - Stop while idle is a harmless no-op (the `ElapsedMs > 0 && SessionStartMs > 0` guard in `Stop()`
   absorbs it).
 - **Type scale (S14, §17), defined centrally in `Theme/Typography.cs`:** display (elapsed-time
-  readout) 36pt/48px bold; body (buttons, headers, dialogs, list rows) 12pt/16px; caption 9pt/12px —
+  readout) 72pt/96px bold; body (buttons, headers, dialogs, list rows) 12pt/16px; caption 9pt/12px —
   all at the 96dpi design baseline (`1pt = 4/3px`), scaling further with the OS DPI setting via
   `MainForm`'s `AutoScaleMode.Dpi`. The caption size has had no consumer since S15 removed the
   version footer (below) but stays defined — it is still §11's third type-scale step, and

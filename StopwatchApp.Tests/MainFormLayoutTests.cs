@@ -81,6 +81,25 @@ public sealed class MainFormLayoutTests
   }
 
   [Theory]
+  [InlineData(96)]
+  [InlineData(120)]
+  [InlineData(144)]
+  [InlineData(168)]
+  public void RequiredClientWidth_FitsDoubleSizeElapsedDisplayAtGivenDpi(int deviceDpi)
+  {
+    using Font unscaledDisplayFont = Typography.CreateDisplayFont();
+    int actualDisplayWidth = MeasureAtDpi("00:00:00", unscaledDisplayFont, deviceDpi);
+    using Font unscaledMonoFont = Typography.CreateMonospaceBodyFont();
+    int requiredWidth = MainForm.RequiredClientWidth(unscaledMonoFont, deviceDpi);
+
+    Assert.True(
+      requiredWidth >= actualDisplayWidth,
+      $"MainForm.RequiredClientWidth({deviceDpi}) returned {requiredWidth}px, but the elapsed "
+        + $"display measures {actualDisplayWidth}px at that DPI."
+    );
+  }
+
+  [Theory]
   [InlineData(120)]
   [InlineData(144)]
   [InlineData(168)]

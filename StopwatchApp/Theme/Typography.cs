@@ -6,14 +6,14 @@ namespace StopwatchApp.Theme;
 /// The app's type scale (S14, AGENTS.md §17): three roles — display, body, and caption — each a
 /// fixed point size, plus the monospace family resolution shared by the elapsed-time display and
 /// the records/laps rows. Point sizes are chosen so the rendered pixel size (at the standard 96 dpi
-/// design baseline, where <c>1pt = 4/3px</c>) matches the sizes specified for this app: 48px display,
+/// design baseline, where <c>1pt = 4/3px</c>) matches the sizes specified for this app: 96px display,
 /// 16px body, 12px caption. Actual on-screen pixels still scale with the OS DPI setting via
 /// <see cref="AutoScaleMode.Dpi"/> (<c>MainForm</c>), as is correct for a WinForms point-sized font.
 /// </summary>
 public static class Typography
 {
-  /// <summary>The elapsed-time display's point size — 36pt, 48px at 96 dpi.</summary>
-  public const float DisplayPointSize = 36f;
+  /// <summary>The elapsed-time display's point size — 72pt, 96px at 96 dpi.</summary>
+  public const float DisplayPointSize = 72f;
 
   /// <summary>The body text point size (buttons, headers, dialogs, list rows) — 12pt, 16px at 96 dpi.</summary>
   public const float BodyPointSize = 12f;

@@ -367,7 +367,7 @@ public sealed class MainForm : Form
   }
 
   /// <summary>
-  /// Computes the minimum client width for two independent needs, at <paramref name="deviceDpi"/>,
+  /// Computes the minimum client width for three independent needs, at <paramref name="deviceDpi"/>,
   /// and returns whichever is larger: the widest row <see cref="RecordsListControl"/> is sized for —
   /// a session that ran a full 24 hours (<see cref="WorstCaseElapsedMinutes"/>, AGENTS.md §8.5/§17; a
   /// row past this word-wraps instead of clipping, per <see cref="RecordsListControl"/>'s own row
@@ -430,7 +430,20 @@ public sealed class MainForm : Form
     // DPI where it happens to need more room than the mono row does. Uses the same pre-scaled-font
     // measuring technique as the mono row above, and the same GlyphButton Padding formula
     // (Palette.SpacingMd left/right, no glyph/gutter for a text-only button) its real buttons use.
-    return Math.Max(rowWidth, HeaderRowWidth(scale));
+    return Math.Max(Math.Max(rowWidth, HeaderRowWidth(scale)), DisplayWidth(scale));
+  }
+
+  private static int DisplayWidth(float scale)
+  {
+    using Font unscaledDisplayFont = Typography.CreateDisplayFont();
+    using Font scaledDisplayFont = new(
+      unscaledDisplayFont.FontFamily,
+      unscaledDisplayFont.Size * scale,
+      unscaledDisplayFont.Style
+    );
+    int textWidth = MeasureRowWidth("00:00:00", scaledDisplayFont);
+    int chrome = DesignCardPadding + DesignCellMargin + DesignRootPadding;
+    return textWidth + (int)Math.Ceiling(chrome * scale);
   }
 
   private static int MeasureRowWidth(string row, Font scaledFont) =>

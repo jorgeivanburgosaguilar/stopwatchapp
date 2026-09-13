@@ -11,6 +11,10 @@ public sealed class TypographyTests
   private static readonly string[] ExpectedMonospaceFamilies = ["Cascadia Mono", "Consolas"];
 
   [Fact]
+  public void DisplayPointSize_IsDoubleThePreviousDesignSize() =>
+    Assert.Equal(72f, Typography.DisplayPointSize);
+
+  [Fact]
   public void MonospaceFamilyName_ResolvesToInstalledFamily()
   {
     string name = Typography.MonospaceFamilyName;

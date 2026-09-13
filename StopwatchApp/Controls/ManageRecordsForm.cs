@@ -294,7 +294,13 @@ internal sealed class ManageRecordsForm : Form
 
     TableLayoutPanel content = new()
     {
-      Dock = DockStyle.Fill,
+      // An AutoSize panel cannot derive a height from a Dock.Fill child: Fill consumes the space the
+      // parent has already allocated rather than contributing its preferred height. Dock.Top keeps
+      // this row full-width while allowing the record label and Delete button to determine the row
+      // height, instead of collapsing every record into a thin line.
+      Dock = DockStyle.Top,
+      AutoSize = true,
+      AutoSizeMode = AutoSizeMode.GrowAndShrink,
       ColumnCount = 2,
       RowCount = 1,
       Padding = new Padding(Palette.SpacingSm),
@@ -302,6 +308,7 @@ internal sealed class ManageRecordsForm : Form
     };
     content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
     content.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+    content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
     content.Controls.Add(details, 0, 0);
     content.Controls.Add(deleteButton, 1, 0);
 
