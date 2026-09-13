@@ -20,6 +20,9 @@ public static class ClearRecordsDialog
   /// </returns>
   public static DialogResult ShowConfirm(IWin32Window owner)
   {
+    // S14 (AGENTS.md §17) — a modal Form does not inherit MainForm.Font, so the dialog needs its own
+    // body font to match the rest of the app's 16px type scale; disposed with the `using` below.
+    using Font bodyFont = Typography.CreateBodyFont();
     using Form dialog = new()
     {
       Text = "Clear All Records",
@@ -31,13 +34,18 @@ public static class ClearRecordsDialog
       AutoSize = true,
       AutoSizeMode = AutoSizeMode.GrowAndShrink,
       Padding = new Padding(Palette.SpacingLg),
+      Font = bodyFont,
     };
 
+    // S14a (AGENTS.md §17) — 420 is a 96dpi design-pixel literal (same convention as
+    // MainForm.FixedClientSize); scaled to the dialog's real device DPI so the wrap width stays a
+    // comfortable two-line measure instead of narrowing at higher OS scaling.
+    int messageMaxWidth = (int)Math.Ceiling(420 * (dialog.DeviceDpi / 96f));
     Label message = new()
     {
       Text = "Are you sure you want to clear all records? This action cannot be undone.",
       AutoSize = true,
-      MaximumSize = new Size(320, 0),
+      MaximumSize = new Size(messageMaxWidth, 0),
       Margin = new Padding(0, 0, 0, Palette.SpacingLg),
       Dock = DockStyle.Top,
     };

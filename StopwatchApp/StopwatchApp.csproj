@@ -7,7 +7,12 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Platforms>x64</Platforms>
     <Platform>x64</Platform>
-    <Version>1.0.0</Version>
+    <Version>1.1.0</Version>
+
+    <!-- S14a (AGENTS.md §17) — without this, the SDK appends the git SourceRevisionId to
+         AssemblyInformationalVersionAttribute, which the version footer (S12) reads verbatim via
+         Application.ProductVersion (e.g. "1.1.0+dd67742c..."). Not user-facing information. -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
 
     <!-- Required by LibraryImportAttribute-based source-generated interop (SYSLIB1062); see
          TrayIconService's DestroyIcon P/Invoke and AGENTS.md §17. -->
@@ -17,6 +22,11 @@
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <ApplicationVisualStyles>true</ApplicationVisualStyles>
     <ApplicationUseCompatibleTextRendering>false</ApplicationUseCompatibleTextRendering>
+
+    <!-- Explorer, the pinned taskbar entry, and the published .exe read this; MainForm separately
+         loads the EmbeddedResource below to set the live title-bar/taskbar-button icon (S14,
+         AGENTS.md §17) — see StopwatchApp/Assets/README or tools/IconGen for provenance. -->
+    <ApplicationIcon>Assets\app.ico</ApplicationIcon>
 
     <!-- Analyzers as real build gates -->
     <EnableNETAnalyzers>true</EnableNETAnalyzers>
@@ -28,5 +38,10 @@
   <ItemGroup>
     <PackageReference Include="Dapper" Version="2.1.79" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.12" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Loaded at runtime by MainForm.LoadAppIcon() to set Form.Icon (the title-bar/live-taskbar
+         icon) — <ApplicationIcon> above only covers the .exe's own icon, not the running window's. -->
+    <EmbeddedResource Include="Assets\app.ico" />
   </ItemGroup>
 </Project>

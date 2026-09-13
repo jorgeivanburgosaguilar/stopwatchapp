@@ -1,6 +1,5 @@
 using System.ComponentModel;
 using System.Drawing.Drawing2D;
-using System.Drawing.Text;
 using StopwatchApp.Formatting;
 using StopwatchApp.Services;
 using StopwatchApp.Theme;
@@ -23,6 +22,7 @@ public sealed class StopwatchControl : UserControl
   private readonly GlyphButton _stopButton;
   private readonly Label _elapsedLabel;
   private readonly Label _resumedNoteLabel;
+  private readonly Font _elapsedFont;
   private bool _darkMode;
 
   /// <summary>
@@ -46,22 +46,34 @@ public sealed class StopwatchControl : UserControl
 
     // Card-level inset (S11a comp spacing scale); the outer border/fill is drawn in OnPaint below.
     Padding = new Padding(Palette.SpacingLg);
+    // S14 (AGENTS.md §17) — ResizeRedraw forces a full repaint on every size change instead of only
+    // the newly-exposed strip; without it, the rounded border OnPaint draws at Width-1/Height-1
+    // stays visible at its old position after a resize — the ghosting behind the button row.
+    SetStyle(
+      ControlStyles.ResizeRedraw
+        | ControlStyles.OptimizedDoubleBuffer
+        | ControlStyles.AllPaintingInWmPaint,
+      true
+    );
 
+    _elapsedFont = Typography.CreateDisplayFont();
     _elapsedLabel = new Label
     {
       AutoSize = true,
-      Dock = DockStyle.Top,
-      TextAlign = ContentAlignment.MiddleCenter,
-      Font = new Font(ResolveMonospaceFontFamily(), 28f, FontStyle.Bold),
-      Padding = new Padding(0, 0, 0, Palette.SpacingMd),
+      // S14 (AGENTS.md §17) — Anchor=None (not Dock+TextAlign) is this repo's centering idiom for
+      // an AutoSize label: it shrink-wraps to its text, so TextAlign has no box left to center
+      // inside. Centering instead comes from this label's TableLayoutPanel cell, below.
+      Anchor = AnchorStyles.None,
+      Font = _elapsedFont,
+      Margin = new Padding(0, 0, 0, Palette.SpacingMd),
     };
 
     _resumedNoteLabel = new Label
     {
       AutoSize = true,
-      Dock = DockStyle.Top,
+      Anchor = AnchorStyles.None,
       Visible = false,
-      Padding = new Padding(0, 0, 0, Palette.SpacingSm),
+      Margin = new Padding(0, 0, 0, Palette.SpacingSm),
     };
 
     _primaryButton = CreateButton("Start", Glyph.Play, Palette.StartButton);
@@ -89,19 +101,53 @@ public sealed class StopwatchControl : UserControl
     {
       FlowDirection = FlowDirection.LeftToRight,
       AutoSize = true,
-      Dock = DockStyle.Top,
+      AutoSizeMode = AutoSizeMode.GrowAndShrink,
+      Anchor = AnchorStyles.None,
     };
     // Added in the fixed left-to-right order from §2.6/§8.5; hidden buttons take no flow space,
-    // so idle/paused render "Start/Continue, Stop" and running renders "Pause, Lap, Stop".
+    // so idle/paused render "Start/Continue, Stop" and running renders "Pause, Lap, Stop". The
+    // FlowLayoutPanel's own AutoSize shrinks to fit whichever set is visible, and re-centers via its
+    // TableLayoutPanel cell's Anchor=None below.
     buttonRow.Controls.Add(_primaryButton);
     buttonRow.Controls.Add(_pauseButton);
     buttonRow.Controls.Add(_lapButton);
     buttonRow.Controls.Add(_stopButton);
 
-    Controls.Add(buttonRow);
-    Controls.Add(_resumedNoteLabel);
-    Controls.Add(_elapsedLabel);
+    // S14 (AGENTS.md §17) — an interior TableLayoutPanel with Anchor=None cells is this repo's
+    // centering idiom: a plain Controls collection never re-centers a child on its own, only a
+    // TableLayoutPanel cell does. Dock.Top (not Fill, see the S14a correction in §17) still spans
+    // this card's full content width, so each AutoSize row centers across that width — but Dock.Top
+    // also contributes a real preferred height, which is required for the AutoSize/GrowAndShrink
+    // pairing below to size the card correctly.
+    TableLayoutPanel contentLayout = new()
+    {
+      // S14a (AGENTS.md §17) — Dock.Fill here collapsed the whole card to its own Padding: an
+      // AutoSize parent asks its children for their preferred size, but a Dock.Fill child instead
+      // takes whatever size the parent gives it, so WinForms breaks that circular dependency by
+      // never letting a Fill child contribute to its AutoSize parent's preferred size. Dock.Top
+      // does contribute a real preferred height while still stretching to the parent's full width.
+      Dock = DockStyle.Top,
+      AutoSize = true,
+      // GrowOnly (the AutoSize default) would never shrink this panel back down after the resumed
+      // note is cleared by Stop — the same pitfall already documented for the card itself, below.
+      AutoSizeMode = AutoSizeMode.GrowAndShrink,
+      ColumnCount = 1,
+      RowCount = 3,
+    };
+    contentLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+    contentLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+    contentLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+    contentLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+    contentLayout.Controls.Add(_elapsedLabel, 0, 0);
+    contentLayout.Controls.Add(_resumedNoteLabel, 0, 1);
+    contentLayout.Controls.Add(buttonRow, 0, 2);
+
+    Controls.Add(contentLayout);
     AutoSize = true;
+    // S14 (AGENTS.md §17) — GrowOnly (the AutoSize default when AutoSizeMode is left unset) never
+    // shrinks the card back down once it has grown to fit the "Resumed from a pause" note; explicit
+    // GrowAndShrink is required for the card to return to its normal height after Stop clears it.
+    AutoSizeMode = AutoSizeMode.GrowAndShrink;
     DoubleBuffered = true;
 
     ApplyPaletteColors();
@@ -232,6 +278,7 @@ public sealed class StopwatchControl : UserControl
       _uiTimer.Stop();
       _uiTimer.Dispose();
       _shortcutToolTip.Dispose();
+      _elapsedFont.Dispose();
     }
     base.Dispose(disposing);
   }
@@ -254,15 +301,6 @@ public sealed class StopwatchControl : UserControl
     Glyph glyph,
     (Color Base, Color Hover, Color Pressed) colors
   ) => new(text, glyph, colors) { Margin = new Padding(Palette.SpacingXs) };
-
-  private static string ResolveMonospaceFontFamily()
-  {
-    using InstalledFontCollection installed = new();
-    bool hasCascadiaMono = installed.Families.Any(family =>
-      string.Equals(family.Name, "Cascadia Mono", StringComparison.Ordinal)
-    );
-    return hasCascadiaMono ? "Cascadia Mono" : "Consolas";
-  }
 
   private void ApplyPaletteColors()
   {

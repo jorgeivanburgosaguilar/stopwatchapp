@@ -1,6 +1,8 @@
+using System.Reflection;
 using Microsoft.Data.Sqlite;
 using Microsoft.Win32;
 using StopwatchApp.Controls;
+using StopwatchApp.Models;
 using StopwatchApp.Services;
 using StopwatchApp.Theme;
 
@@ -18,17 +20,42 @@ public sealed class MainForm : Form
   /// </summary>
   internal const string WindowTitle = "Stopwatch";
 
+  // S14/S14a/S14b/S14c (AGENTS.md §17) — the window's fixed content size, expressed in *design*
+  // pixels at the 96dpi baseline. Width is driven by the widest realistic records/laps row rendered
+  // in the mono body font (a 5-digit lap id with a 4-digit elapsed hour count). Height
+  // (632x680 -> 632x728 in S14b -> 632x732 in S14c) is the worst case with the resumed-pause note,
+  // the laps panel, 5 records, "Clear All Records", and the disabled "Manage Records" placeholder
+  // all visible at once, measured directly from the real, fixed-up control tree rather than hand
+  // arithmetic (see §17's S14b/S14c entries for the exact measured numbers) — records are capped to
+  // MaxDisplayedRecords, so this worst case is a genuine, known constant instead of "however much
+  // space happens to be left." This literal alone is never assigned to ClientSize —
+  // ComputeFixedClientSize scales it to the window's real device DPI first, and widens it further
+  // if the live-DPI row measurement needs more than this design width provides. Internal (not
+  // private) so MainFormLayoutTests can pin the row-width test to this literal instead of
+  // duplicating it.
+  internal static readonly Size FixedClientSize = new(632, 732);
+
+  // S14a (AGENTS.md §17) — the non-text chrome a records/laps row must fit alongside, in the same
+  // 96dpi design pixels as FixedClientSize above: RecordsListControl.DrawRow's text inset, the
+  // laps/records ListBox's own vertical scrollbar, RecordsListControl's card Padding, the
+  // TableLayoutPanel cell's default Margin, and MainForm's own root layout Padding. Kept as design
+  // constants (not read from SystemInformation at call time) so RequiredClientWidth stays a pure
+  // function of its dpi parameter and is testable across DPIs the test host isn't actually running.
+  private const int DesignRowTextInset = Palette.SpacingSm * 2;
+  private const int DesignScrollBarWidth = 17; // SystemInformation.VerticalScrollBarWidth at 96dpi
+  private const int DesignCardPadding = Palette.SpacingLg * 2;
+  private const int DesignCellMargin = 6; // WinForms' default Control.Margin is 3px/side
+  private const int DesignRootPadding = Palette.SpacingMd * 2;
+
   private readonly Database _database;
   private readonly StopwatchControl _stopwatchControl;
   private readonly RecordsListControl _recordsListControl;
   private readonly TrayIconService _trayIconService;
   private readonly Label _versionLabel;
+  private readonly Font _bodyFont;
+  private readonly Font _captionFont;
+  private readonly Icon _appIcon;
   private readonly int _activateMessage;
-
-  // S11b (AGENTS.md §10.6) — the position the window was last shown at, reset every time
-  // PositionWindowCentered/PositionWindowAsync places the window. Compared against the live
-  // Location on hide-to-tray/exit to detect a user-initiated drag.
-  private Point _shownAtLocation;
 
   /// <summary>
   /// Initializes a new instance of the <see cref="MainForm"/> class.
@@ -36,8 +63,32 @@ public sealed class MainForm : Form
   public MainForm()
   {
     Text = WindowTitle;
-    ClientSize = new Size(560, 600);
-    MinimumSize = new Size(400, 400);
+    // S14 (AGENTS.md §10.3/§17) — the window is fixed-size and not user-resizable: FixedSingle
+    // border, no maximize box, no MinimumSize (FixedSingle already blocks dragging, and a fixed
+    // MinimumSize fights WinForms' own PerMonitorV2 rescale on DpiChanged). FormBorderStyle affects
+    // the non-client chrome that ClientSize/PositionWindowCentered measure against, so it's set
+    // before either runs.
+    FormBorderStyle = FormBorderStyle.FixedSingle;
+    MaximizeBox = false;
+    // Dpi, not Font: the body font below is itself point-sized, so scaling a second time off the
+    // font would double-apply the DPI factor. AutoScaleDimensions must be set alongside
+    // AutoScaleMode for PerformAutoScale to do anything at all — with Dimensions left at its
+    // default SizeF.Empty, AutoScaleMode.Dpi was a silent no-op (S14a, AGENTS.md §17): the window
+    // stayed at literal 96dpi device pixels while its point-sized fonts scaled with the real DPI,
+    // which is what made record rows clip at anything above 100% scaling.
+    AutoScaleMode = AutoScaleMode.Dpi;
+    AutoScaleDimensions = new SizeF(96F, 96F);
+    DoubleBuffered = true;
+    _bodyFont = Typography.CreateBodyFont();
+    _captionFont = Typography.CreateCaptionFont();
+    Font = _bodyFont;
+    _appIcon = LoadAppIcon();
+    Icon = _appIcon;
+    // Clamped so a fixed (non-draggable) window can never end up taller than the screen at high
+    // DPI — the user has no resize handle to rescue it with (AGENTS.md §17). DeviceDpi is a
+    // reasonable value even before the handle exists (the system DPI); OnDpiChanged re-derives
+    // this once the window is actually placed on a specific monitor.
+    ClientSize = ClampToWorkingArea(ComputeFixedClientSize(DeviceDpi));
     // Manual, not CenterScreen: S11b (AGENTS.md §10.6) owns initial placement so a saved manual
     // position (loaded from the database once it's ready, in InitializeAsync below) can override
     // the synchronous default center set here.
@@ -61,6 +112,7 @@ public sealed class MainForm : Form
       AutoSize = false,
       Text = $"Stopwatch v{Application.ProductVersion}",
       Padding = new Padding(0, Palette.SpacingXs, 0, 0),
+      Font = _captionFont,
     };
 
     TableLayoutPanel layout = new()
@@ -68,10 +120,18 @@ public sealed class MainForm : Form
       Dock = DockStyle.Fill,
       ColumnCount = 1,
       RowCount = 3,
-      Padding = new Padding(12),
+      Padding = new Padding(Palette.SpacingMd),
     };
+    // S14 (AGENTS.md §17) — without an explicit ColumnStyle, a single-column TableLayoutPanel falls
+    // back to an implicit AutoSize column that only happens to span the window's width; pinning it
+    // to 100% makes that span structural instead of incidental.
+    layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
     layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-    layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+    // S14b (AGENTS.md §17) — AutoSize, not Percent(100): RecordsListControl now reports a real,
+    // bounded preferred height (records capped at MaxDisplayedRecords), so it no longer needs to
+    // stretch and fill whatever's left of the fixed window — that stretch was the actual source of
+    // "the window is too tall" in typical use, where far fewer than the worst-case row count show.
+    layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
     layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
     layout.Controls.Add(_stopwatchControl, 0, 0);
     layout.Controls.Add(_recordsListControl, 0, 1);
@@ -155,6 +215,13 @@ public sealed class MainForm : Form
     // layout changes (AGENTS.md §10.1) — none of which a DPI change alone affects — so force a
     // fresh render explicitly here instead (AGENTS.md §7/§17).
     _trayIconService.RefreshIcon();
+    // S14 (AGENTS.md §17) — re-clamp on every DPI change, not just at startup: moving this
+    // fixed-size, non-resizable window to a higher-DPI monitor must not leave it taller than that
+    // monitor's working area, since the user has no resize handle to shrink it back with.
+    // S14a: re-derive from the *new* DPI (e.DeviceDpiNew), not the old size — the previous version
+    // reset ClientSize to raw design pixels here, undoing whatever PerformAutoScale had just
+    // correctly done for the new monitor.
+    ClientSize = ClampToWorkingArea(ComputeFixedClientSize(e.DeviceDpiNew));
   }
 
   /// <inheritdoc />
@@ -166,6 +233,12 @@ public sealed class MainForm : Form
       // it holding a reference to OnUserPreferenceChanged (and therefore to this form) past this
       // form's own disposal (AGENTS.md §7/§17).
       SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged;
+      // S14 (AGENTS.md §17) — fonts and icons created via `new Font(...)`/`new Icon(...)` hold
+      // native GDI handles and are never disposed by the base Form; each factory/loader here is
+      // documented as caller-owned, so ownership is discharged here.
+      _bodyFont.Dispose();
+      _captionFont.Dispose();
+      _appIcon.Dispose();
     }
 
     base.Dispose(disposing);
@@ -175,23 +248,18 @@ public sealed class MainForm : Form
   {
     Hide();
     ShowInTaskbar = false;
-    // Fire-and-forget: Database.SaveWindowPositionAsync swallows its own errors (AGENTS.md §9), so
-    // there's nothing for this hide-to-tray path (itself synchronous, per AGENTS.md §10.3) to await
-    // or catch. Discarding to `_` deliberately, not leaving the call unobserved (CS4014).
-    _ = SaveWindowPositionIfChangedAsync();
   }
 
-  private async void RestoreWindow()
+  private void RestoreWindow()
   {
     // WindowState is reset to Normal *before* positioning: Location reads/writes while
-    // WindowState is Minimized are unreliable (Windows tracks a minimized window's on-screen rect
-    // separately from its "restore" position), so PositionWindowAsync must run only once the form
-    // is guaranteed Normal. Safe on a hidden form — this just updates placement, nothing is drawn
-    // until Show() below.
+    // WindowState is Minimized are unreliable (Windows tracks a minimized window's actual on-screen
+    // rect separately from its "restore" position). Safe on a hidden form — this just updates
+    // placement, nothing is drawn until Show() below.
     WindowState = FormWindowState.Normal;
-    // Position before showing, per AGENTS.md §10.6's "Open" transitions — a tray Open/double-click,
-    // single-instance activation, or restore-from-minimize all route through here.
-    await PositionWindowAsync();
+    // S14b (AGENTS.md §10.6/§17) — always centers; a tray Open/double-click, single-instance
+    // activation, or restore-from-minimize all route through here.
+    PositionWindowCentered();
     Show();
     ShowInTaskbar = true;
     Activate();
@@ -203,15 +271,141 @@ public sealed class MainForm : Form
     // tray until the user hovers over its former location (AGENTS.md §10.3). Application.Exit()
     // is called only from here, the tray menu's Exit item, per the same section.
     _trayIconService.Dispose();
-    await SaveWindowPositionIfChangedAsync();
     await _database.DisposeAsync();
     Application.Exit();
   }
 
   /// <summary>
-  /// Sets <see cref="Form.Location"/> to the centered default (S11b, AGENTS.md §10.6) — used both
-  /// as the constructor's synchronous default (before the database is ready) and as
-  /// <see cref="PositionWindowAsync"/>'s fallback when no valid saved position exists.
+  /// Loads the app icon (S14, AGENTS.md §6/§17) embedded via the .csproj's
+  /// <c>&lt;EmbeddedResource Include="Assets\app.ico" /&gt;</c> — the title bar, the taskbar button,
+  /// and (via the .csproj's separate <c>&lt;ApplicationIcon&gt;</c>) the built .exe's own icon.
+  /// </summary>
+  private static Icon LoadAppIcon()
+  {
+    const string resourceName = "StopwatchApp.Assets.app.ico";
+    using Stream? stream = typeof(MainForm).Assembly.GetManifestResourceStream(resourceName);
+    if (stream is null)
+    {
+      throw new InvalidOperationException(
+        $"Embedded resource \"{resourceName}\" was not found. Check the "
+          + "<EmbeddedResource> item in StopwatchApp.csproj."
+      );
+    }
+
+    return new Icon(stream);
+  }
+
+  /// <summary>
+  /// Computes this window's fixed <see cref="Form.ClientSize"/> for a given device DPI (S14a,
+  /// AGENTS.md §17): <see cref="FixedClientSize"/> scaled from its 96dpi design baseline up to
+  /// <paramref name="deviceDpi"/>, widened if necessary to <see cref="RequiredClientWidth"/> so the
+  /// widest realistic records/laps row never clips at that DPI. The result still needs
+  /// <see cref="ClampToWorkingArea"/> applied before assignment.
+  /// </summary>
+  /// <param name="deviceDpi">The device DPI to size for — <see cref="Control.DeviceDpi"/> at
+  /// construction, or <see cref="DpiChangedEventArgs.DeviceDpiNew"/> from <see cref="OnDpiChanged"/>.</param>
+  private static Size ComputeFixedClientSize(int deviceDpi)
+  {
+    Size scaledDesignSize = ScaleToDpi(FixedClientSize, deviceDpi);
+    using Font monoProbeFont = Typography.CreateMonospaceBodyFont();
+    int requiredWidth = RequiredClientWidth(monoProbeFont, deviceDpi);
+    // The fixed width is a floor, not a bare literal: it must never end up narrower than what the
+    // widest realistic row actually needs at this DPI, since the frame cannot be dragged wider.
+    return new Size(Math.Max(scaledDesignSize.Width, requiredWidth), scaledDesignSize.Height);
+  }
+
+  /// <summary>
+  /// Scales a size expressed in 96dpi design pixels up to <paramref name="deviceDpi"/> device
+  /// pixels (S14a, AGENTS.md §17) — the same linear ratio WinForms' own <c>PerformAutoScale</c>
+  /// applies for <see cref="AutoScaleMode.Dpi"/>.
+  /// </summary>
+  private static Size ScaleToDpi(Size designSize, int deviceDpi)
+  {
+    float scale = deviceDpi / 96f;
+    return new Size(
+      (int)Math.Ceiling(designSize.Width * scale),
+      (int)Math.Ceiling(designSize.Height * scale)
+    );
+  }
+
+  /// <summary>
+  /// Measures the widest row <see cref="RecordsListControl"/> can realistically render — a 5-digit
+  /// lap id with a 4-digit elapsed-hour count (AGENTS.md §8.5) — in <paramref name="monoBodyFont"/>
+  /// as it will actually render at <paramref name="deviceDpi"/>, and adds the itemized non-text
+  /// chrome budget (<see cref="DesignRowTextInset"/> etc.) scaled to the same DPI. A <see cref="Font"/>'s
+  /// point size is otherwise measured against a fixed 96dpi baseline regardless of the caller's
+  /// actual DPI context (S14a, AGENTS.md §17) — the very mismatch that let record rows clip at
+  /// anything above 100% scaling — so the font is rebuilt at an equivalent, pre-scaled size before
+  /// measuring rather than measured as-is.
+  /// </summary>
+  /// <param name="monoBodyFont">The unscaled monospace body font (<see cref="Typography.CreateMonospaceBodyFont"/>).</param>
+  /// <param name="deviceDpi">The device DPI to measure for.</param>
+  /// <returns>The minimum client width, in device pixels at <paramref name="deviceDpi"/>, that fits
+  /// the widest row without clipping.</returns>
+  internal static int RequiredClientWidth(Font monoBodyFont, int deviceDpi)
+  {
+    float scale = deviceDpi / 96f;
+    Lap worstCaseLap = new(
+      Id: 99_999,
+      StartTimestamp: 0,
+      EndTimestamp: 60_000,
+      ElapsedMinutes: 9_999 * 60
+    );
+    string worstCaseRow = RecordsListControl.FormatLapRow(worstCaseLap);
+
+    using Font scaledFont = new(
+      monoBodyFont.FontFamily,
+      monoBodyFont.Size * scale,
+      monoBodyFont.Style
+    );
+    int rowTextWidth = TextRenderer
+      .MeasureText(
+        worstCaseRow,
+        scaledFont,
+        Size.Empty,
+        TextFormatFlags.NoPadding | TextFormatFlags.SingleLine
+      )
+      .Width;
+
+    int designChrome =
+      DesignRowTextInset
+      + DesignScrollBarWidth
+      + DesignCardPadding
+      + DesignCellMargin
+      + DesignRootPadding;
+    int scaledChrome = (int)Math.Ceiling(designChrome * scale);
+
+    return rowTextWidth + scaledChrome;
+  }
+
+  /// <summary>
+  /// Reduces <paramref name="size"/>, if necessary, so that a <see cref="FormBorderStyle.FixedSingle"/>
+  /// window of that client size fits within <see cref="Screen.PrimaryScreen"/>'s working area (S14,
+  /// AGENTS.md §17). This window cannot be resized by dragging, so unlike a normal window, it must
+  /// never be allowed to render taller or wider than the screen in the first place — there would be
+  /// no way for the user to shrink it back down. <paramref name="size"/> must already be in device
+  /// pixels for the target DPI (S14a, AGENTS.md §17) — <see cref="Screen.WorkingArea"/> is reported
+  /// in physical pixels, so comparing it against a 96dpi design size silently under-clamped at any
+  /// DPI above 100%.
+  /// </summary>
+  private static Size ClampToWorkingArea(Size size)
+  {
+    Screen primary = Screen.PrimaryScreen ?? Screen.AllScreens[0];
+    Rectangle workingArea = primary.WorkingArea;
+    int chromeHeight =
+      SystemInformation.CaptionHeight + (SystemInformation.FixedFrameBorderSize.Height * 2);
+    int chromeWidth = SystemInformation.FixedFrameBorderSize.Width * 2;
+    int maxWidth = Math.Max(1, workingArea.Width - chromeWidth);
+    int maxHeight = Math.Max(1, workingArea.Height - chromeHeight);
+    return new Size(Math.Min(size.Width, maxWidth), Math.Min(size.Height, maxHeight));
+  }
+
+  /// <summary>
+  /// Sets <see cref="Form.Location"/> to center the window on the primary screen's working area
+  /// (S14b, AGENTS.md §10.6/§17) — called every time the window is shown: the constructor's
+  /// synchronous default, and every tray Open/double-click, single-instance activation, or
+  /// restore-from-minimize via <see cref="RestoreWindow"/>. The window never remembers or restores
+  /// a previous position.
   /// </summary>
   private void PositionWindowCentered()
   {
@@ -221,57 +415,6 @@ public sealed class MainForm : Form
       workingArea.X + (workingArea.Width - Width) / 2,
       workingArea.Y + (workingArea.Height - Height) / 2
     );
-    _shownAtLocation = Location;
-  }
-
-  /// <summary>
-  /// Positions the window for an "Open" transition (AGENTS.md §10.6): a saved position is used
-  /// only if its bounds intersect at least one currently-connected screen's working area; otherwise
-  /// (including when there is no saved position at all) the window is centered.
-  /// </summary>
-  private async Task PositionWindowAsync()
-  {
-    (int X, int Y)? saved = await _database.LoadWindowPositionAsync();
-    if (saved is { } position)
-    {
-      Rectangle bounds = new(position.X, position.Y, Width, Height);
-      if (Screen.AllScreens.Any(screen => screen.WorkingArea.IntersectsWith(bounds)))
-      {
-        Location = new Point(position.X, position.Y);
-        _shownAtLocation = Location;
-        return;
-      }
-    }
-
-    PositionWindowCentered();
-  }
-
-  /// <summary>
-  /// The window's location as it should be read for S11b persistence purposes: <see cref="Form.Location"/>
-  /// directly while <see cref="Form.WindowState"/> is <see cref="FormWindowState.Normal"/>, or
-  /// <see cref="Form.RestoreBounds"/>'s location otherwise. <c>Location</c> is unreliable while
-  /// minimized (Windows tracks a minimized window's actual on-screen rect separately from its
-  /// "restore" position, so it does not reflect where the window was before it was minimized) —
-  /// relevant here because <see cref="OnResize"/> calls <see cref="HideToTray"/> (and therefore this
-  /// save check) with <see cref="Form.WindowState"/> already <see cref="FormWindowState.Minimized"/>,
-  /// and <see cref="ExitApplication"/> can run while the window is still in that state if it was
-  /// minimized-to-tray and never reopened before Exit.
-  /// </summary>
-  private Point CurrentPersistableLocation =>
-    WindowState == FormWindowState.Normal ? Location : RestoreBounds.Location;
-
-  /// <summary>
-  /// Persists the window's current location only if it differs from <see cref="_shownAtLocation"/>
-  /// — i.e. only if the user dragged the window since it was last positioned (AGENTS.md §10.6). An
-  /// app that's never been dragged never writes to <c>window_position</c>.
-  /// </summary>
-  private async Task SaveWindowPositionIfChangedAsync()
-  {
-    Point current = CurrentPersistableLocation;
-    if (current != _shownAtLocation)
-    {
-      await _database.SaveWindowPositionAsync(current.X, current.Y);
-    }
   }
 
   /// <summary>
@@ -329,10 +472,6 @@ public sealed class MainForm : Form
       Close();
       return;
     }
-
-    // S11b (AGENTS.md §10.6) — first launch's "Open" transition; overrides the constructor's
-    // synchronous centered default if a valid saved position exists.
-    await PositionWindowAsync();
 
     await _stopwatchControl.RestoreAsync();
     RefreshLists();
