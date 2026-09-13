@@ -1,3 +1,4 @@
+using System.Drawing.Drawing2D;
 using System.Drawing.Text;
 using System.Globalization;
 using System.Runtime.InteropServices;
@@ -25,6 +26,7 @@ public sealed partial class TrayIconService : IDisposable
   private readonly Action _onExit;
   private readonly NotifyIcon _notifyIcon;
   private readonly ContextMenuStrip _contextMenu;
+  private readonly Dictionary<TrayMenuAction, Bitmap> _menuImages;
   private int _stateItemCount;
   private bool _darkMode;
   private IntPtr _currentIconHandle;
@@ -59,6 +61,7 @@ public sealed partial class TrayIconService : IDisposable
     _onOpen = onOpen;
     _onExit = onExit;
 
+    _menuImages = CreateMenuImages();
     _contextMenu = BuildBaseMenu();
     _notifyIcon = new NotifyIcon { ContextMenuStrip = _contextMenu, Visible = true };
     _notifyIcon.MouseClick += (_, e) =>
@@ -190,6 +193,11 @@ public sealed partial class TrayIconService : IDisposable
     _notifyIcon.Visible = false;
     _notifyIcon.Dispose();
     _contextMenu.Dispose();
+    foreach (Bitmap image in _menuImages.Values)
+    {
+      image.Dispose();
+    }
+
     _currentIcon?.Dispose();
     if (_currentIconHandle != IntPtr.Zero)
     {
@@ -201,13 +209,11 @@ public sealed partial class TrayIconService : IDisposable
   private ContextMenuStrip BuildBaseMenu()
   {
     ContextMenuStrip menu = new();
-    ToolStripMenuItem openItem = new("Open");
-    openItem.Click += (_, _) => _onOpen();
+    ToolStripMenuItem openItem = CreateMenuItem("Open", TrayMenuAction.Open, _onOpen);
     menu.Items.Add(openItem);
     menu.Items.Add(new ToolStripSeparator());
     menu.Items.Add(new ToolStripSeparator()); // the "before Exit" separator — index StateSectionIndex
-    ToolStripMenuItem exitItem = new("Exit");
-    exitItem.Click += (_, _) => _onExit();
+    ToolStripMenuItem exitItem = CreateMenuItem("Exit", TrayMenuAction.Exit, _onExit);
     menu.Items.Add(exitItem);
     return menu;
   }
@@ -235,34 +241,99 @@ public sealed partial class TrayIconService : IDisposable
     {
       TrayState.Running =>
       [
-        CreateMenuItem("Pause", () => _control.PauseTimerAsync()),
-        CreateMenuItem("Lap", _control.AddLap),
-        CreateMenuItem("Stop", () => _control.StopTimerAsync()),
+        CreateMenuItem("Pause", TrayMenuAction.Pause, () => _control.PauseTimerAsync()),
+        CreateMenuItem("Lap", TrayMenuAction.Lap, _control.AddLap),
+        CreateMenuItem("Stop", TrayMenuAction.Stop, () => _control.StopTimerAsync()),
       ],
       TrayState.Paused =>
       [
-        CreateMenuItem("Continue", _control.StartTimer),
-        CreateMenuItem("Stop", () => _control.StopTimerAsync()),
+        CreateMenuItem("Continue", TrayMenuAction.Continue, _control.StartTimer),
+        CreateMenuItem("Stop", TrayMenuAction.Stop, () => _control.StopTimerAsync()),
       ],
       _ =>
       [
-        CreateMenuItem("Start", _control.StartTimer),
-        CreateMenuItem("Stop", () => _control.StopTimerAsync()),
+        CreateMenuItem("Start", TrayMenuAction.Start, _control.StartTimer),
+        CreateMenuItem("Stop", TrayMenuAction.Stop, () => _control.StopTimerAsync()),
       ],
     };
 
-  private static ToolStripMenuItem CreateMenuItem(string text, Action onClick)
+  private ToolStripMenuItem CreateMenuItem(string text, TrayMenuAction action, Action onClick)
   {
-    ToolStripMenuItem item = new(text);
+    ToolStripMenuItem item = new(text) { Image = _menuImages[action] };
     item.Click += (_, _) => onClick();
     return item;
   }
 
-  private static ToolStripMenuItem CreateMenuItem(string text, Func<Task> onClick)
+  private ToolStripMenuItem CreateMenuItem(string text, TrayMenuAction action, Func<Task> onClick)
   {
-    ToolStripMenuItem item = new(text);
+    ToolStripMenuItem item = new(text) { Image = _menuImages[action] };
     item.Click += async (_, _) => await onClick();
     return item;
+  }
+
+  private static Dictionary<TrayMenuAction, Bitmap> CreateMenuImages()
+  {
+    Dictionary<TrayMenuAction, Bitmap> images = [];
+    foreach (TrayMenuAction action in Enum.GetValues<TrayMenuAction>())
+    {
+      images.Add(action, RenderMenuImage(action));
+    }
+
+    return images;
+  }
+
+  private static Bitmap RenderMenuImage(TrayMenuAction action)
+  {
+    Bitmap bitmap = new(16, 16);
+    using Graphics graphics = Graphics.FromImage(bitmap);
+    graphics.SmoothingMode = SmoothingMode.AntiAlias;
+    graphics.Clear(Color.Transparent);
+
+    Color color = action switch
+    {
+      TrayMenuAction.Start or TrayMenuAction.Continue => Palette.StartButton.Base,
+      TrayMenuAction.Pause => Palette.PauseButton.Base,
+      TrayMenuAction.Lap or TrayMenuAction.Open => Palette.LapButton.Base,
+      _ => Palette.StopButton.Base,
+    };
+    using SolidBrush brush = new(color);
+    using Pen pen = new(color, 2f) { LineJoin = LineJoin.Round };
+    Rectangle bounds = new(2, 2, 11, 11);
+
+    switch (action)
+    {
+      case TrayMenuAction.Open:
+        graphics.DrawRectangle(pen, bounds);
+        graphics.DrawLine(pen, 7, 10, 13, 4);
+        graphics.DrawLine(pen, 9, 4, 13, 4);
+        graphics.DrawLine(pen, 13, 4, 13, 8);
+        break;
+      case TrayMenuAction.Start:
+      case TrayMenuAction.Continue:
+        graphics.FillPolygon(brush, [new Point(5, 3), new Point(5, 13), new Point(13, 8)]);
+        break;
+      case TrayMenuAction.Pause:
+        graphics.FillRectangle(brush, 4, 3, 3, 10);
+        graphics.FillRectangle(brush, 10, 3, 3, 10);
+        break;
+      case TrayMenuAction.Lap:
+        graphics.FillRectangle(brush, 4, 2, 2, 12);
+        graphics.FillPolygon(brush, [new Point(6, 3), new Point(13, 5), new Point(6, 8)]);
+        break;
+      case TrayMenuAction.Stop:
+        graphics.FillRectangle(brush, 3, 3, 10, 10);
+        break;
+      case TrayMenuAction.Exit:
+        graphics.DrawRectangle(pen, 3, 2, 7, 12);
+        graphics.DrawLine(pen, 7, 8, 14, 8);
+        graphics.DrawLine(pen, 11, 5, 14, 8);
+        graphics.DrawLine(pen, 11, 11, 14, 8);
+        break;
+      default:
+        throw new ArgumentOutOfRangeException(nameof(action), action, message: null);
+    }
+
+    return bitmap;
   }
 
   private void RenderIcon(int hours, int minutes, TrayState state, TrayIconLayout layout)
@@ -395,5 +466,16 @@ public sealed partial class TrayIconService : IDisposable
     Idle,
     Running,
     Paused,
+  }
+
+  private enum TrayMenuAction
+  {
+    Open,
+    Start,
+    Continue,
+    Pause,
+    Lap,
+    Stop,
+    Exit,
   }
 }

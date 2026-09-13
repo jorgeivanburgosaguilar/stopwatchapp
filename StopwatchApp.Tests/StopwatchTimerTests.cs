@@ -248,6 +248,120 @@ public sealed class StopwatchTimerTests
   }
 
   [Fact]
+  public async Task SaveAutosaveIfDueAsync_AtRunningTimeMilestone_PersistsWithoutPausing()
+  {
+    FakeStopwatchStore store = new();
+    FakeTimeProvider time = new();
+    StopwatchTimer timer = new(store, time, autosaveIntervalMinutes: 1);
+    timer.Start();
+    time.Advance(TimeSpan.FromSeconds(30));
+    timer.Tick();
+    timer.Lap();
+    time.Advance(TimeSpan.FromSeconds(30));
+    timer.Tick();
+
+    await timer.SaveAutosaveIfDueAsync();
+
+    PausedSession snapshot = Assert.IsType<PausedSession>(await store.LoadPausedSessionAsync());
+    Assert.True(timer.IsRunning);
+    Assert.False(timer.IsPaused);
+    Assert.Equal(60_000, snapshot.ElapsedTime);
+    Assert.Single(snapshot.Laps);
+  }
+
+  [Fact]
+  public async Task SaveAutosaveIfDueAsync_UsesNextRunningTimeMilestoneAfterResume()
+  {
+    FakeStopwatchStore store = new();
+    FakeTimeProvider time = new();
+    StopwatchTimer timer = new(store, time, autosaveIntervalMinutes: 1);
+    timer.Start();
+    time.Advance(TimeSpan.FromSeconds(30));
+    timer.Tick();
+    await timer.PauseAsync();
+    timer.Start();
+    time.Advance(TimeSpan.FromSeconds(29));
+    timer.Tick();
+
+    await timer.SaveAutosaveIfDueAsync();
+
+    PausedSession beforeMilestone = Assert.IsType<PausedSession>(
+      await store.LoadPausedSessionAsync()
+    );
+    Assert.Equal(30_000, beforeMilestone.ElapsedTime);
+
+    time.Advance(TimeSpan.FromSeconds(1));
+    timer.Tick();
+    await timer.SaveAutosaveIfDueAsync();
+
+    PausedSession atMilestone = Assert.IsType<PausedSession>(await store.LoadPausedSessionAsync());
+    Assert.Equal(60_000, atMilestone.ElapsedTime);
+  }
+
+  [Fact]
+  public async Task RestoreAsync_AfterAutosave_RestoresPausedSnapshot()
+  {
+    FakeStopwatchStore store = new();
+    FakeTimeProvider time = new();
+    StopwatchTimer original = new(store, time, autosaveIntervalMinutes: 1);
+    original.Start();
+    time.Advance(TimeSpan.FromSeconds(60));
+    original.Tick();
+    original.Lap();
+    await original.SaveAutosaveIfDueAsync();
+
+    StopwatchTimer restored = new(store, time, autosaveIntervalMinutes: 1);
+    await restored.RestoreAsync();
+
+    Assert.True(restored.IsPaused);
+    Assert.False(restored.IsRunning);
+    Assert.Equal(60_000, restored.ElapsedMs);
+    Assert.Single(restored.Laps);
+  }
+
+  [Fact]
+  public async Task StopAsync_AfterAutosave_ClearsSavedSnapshot()
+  {
+    FakeStopwatchStore store = new();
+    FakeTimeProvider time = new();
+    StopwatchTimer timer = new(store, time, autosaveIntervalMinutes: 1);
+    timer.Start();
+    time.Advance(TimeSpan.FromSeconds(60));
+    timer.Tick();
+    await timer.SaveAutosaveIfDueAsync();
+
+    await timer.StopAsync();
+
+    Assert.Null(await store.LoadPausedSessionAsync());
+  }
+
+  [Fact]
+  public async Task StopAsync_WhileAutosaveIsInFlight_LeavesNoSavedSnapshot()
+  {
+    TaskCompletionSource saveStarted = new();
+    TaskCompletionSource releaseSave = new();
+    FakeStopwatchStore store = new()
+    {
+      PausedSessionSaveStarted = saveStarted,
+      PausedSessionSaveGate = releaseSave,
+    };
+    FakeTimeProvider time = new();
+    StopwatchTimer timer = new(store, time, autosaveIntervalMinutes: 1);
+    timer.Start();
+    time.Advance(TimeSpan.FromSeconds(60));
+    timer.Tick();
+
+    Task autosave = timer.SaveAutosaveIfDueAsync();
+    await saveStarted.Task;
+    Task stop = timer.StopAsync();
+    releaseSave.SetResult();
+    await autosave;
+    await stop;
+
+    Assert.Null(await store.LoadPausedSessionAsync());
+  }
+
+  [Fact]
   public async Task Tick_WhilePaused_IsNoOp()
   {
     FakeTimeProvider time = new();

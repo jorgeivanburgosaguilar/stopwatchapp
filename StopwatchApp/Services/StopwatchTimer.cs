@@ -7,16 +7,19 @@ namespace StopwatchApp.Services;
 /// records list. See AGENTS.md §8 for the full behavioral contract, including §12's intentional
 /// behaviors — this class reproduces that pseudocode verbatim, not a reinterpretation of it.
 /// </summary>
-public sealed class StopwatchTimer
+public sealed class StopwatchTimer : IDisposable
 {
   private readonly IStopwatchStore _store;
   private readonly TimeProvider _time;
+  private readonly SemaphoreSlim _snapshotGate = new(1, 1);
+  private readonly long _autosaveIntervalMs;
   private readonly List<Lap> _laps = [];
   private IReadOnlyList<StopwatchRecord> _records = [];
   private long _startTime;
   private long _sessionStartMs;
   private long _lastLapElapsed;
   private long _lastLapTimestamp;
+  private long _nextAutosaveElapsedMs;
 
   /// <summary>
   /// Initializes a new instance of the <see cref="StopwatchTimer"/> class.
@@ -26,10 +29,18 @@ public sealed class StopwatchTimer
   /// The clock source. Production callers pass <see cref="TimeProvider.System"/>; tests pass a
   /// fake so ticks can be advanced deterministically (AGENTS.md §13).
   /// </param>
-  public StopwatchTimer(IStopwatchStore store, TimeProvider time)
+  /// <param name="autosaveIntervalMinutes">The positive running-time checkpoint interval, in minutes.</param>
+  public StopwatchTimer(
+    IStopwatchStore store,
+    TimeProvider time,
+    int autosaveIntervalMinutes = AutosaveSettings.DefaultAutosaveIntervalMinutes
+  )
   {
+    ArgumentOutOfRangeException.ThrowIfNegativeOrZero(autosaveIntervalMinutes);
+
     _store = store;
     _time = time;
+    _autosaveIntervalMs = (long)TimeSpan.FromMinutes(autosaveIntervalMinutes).TotalMilliseconds;
   }
 
   /// <summary>Gets a value indicating whether the timer is currently running.</summary>
@@ -102,6 +113,7 @@ public sealed class StopwatchTimer
     }
 
     _startTime = NowMs() - ElapsedMs;
+    _nextAutosaveElapsedMs = NextAutosaveAfter(ElapsedMs);
     IsRunning = true;
     IsPaused = false;
     OnStart?.Invoke(ElapsedMs);
@@ -121,15 +133,7 @@ public sealed class StopwatchTimer
     IsRunning = false;
     IsPaused = true;
 
-    PausedSession snapshot = new(
-      ElapsedMs,
-      _sessionStartMs,
-      Laps,
-      _lastLapElapsed,
-      _lastLapTimestamp,
-      NowMs()
-    );
-    await _store.SavePausedSessionAsync(snapshot).ConfigureAwait(false);
+    await SaveSnapshotAsync().ConfigureAwait(false);
 
     OnPause?.Invoke(ElapsedMs);
   }
@@ -167,7 +171,7 @@ public sealed class StopwatchTimer
     IsRunning = false;
     IsPaused = false;
     RestoredPausedAtMs = 0;
-    await _store.ClearPausedSessionAsync().ConfigureAwait(false);
+    await ClearSnapshotAsync().ConfigureAwait(false);
     long endTimestamp = NowMs();
 
     if (_laps.Count > 0 && ElapsedMs > _lastLapElapsed)
@@ -245,6 +249,30 @@ public sealed class StopwatchTimer
   }
 
   /// <summary>
+  /// Saves the current running session into the single recovery slot when its configured
+  /// accumulated-running-time checkpoint is due. This does not pause the stopwatch. Call after
+  /// each <see cref="Tick"/> from the UI timer.
+  /// </summary>
+  public async Task SaveAutosaveIfDueAsync()
+  {
+    await _snapshotGate.WaitAsync().ConfigureAwait(false);
+    try
+    {
+      if (!IsRunning || ElapsedMs < _nextAutosaveElapsedMs)
+      {
+        return;
+      }
+
+      await SaveSnapshotCoreAsync().ConfigureAwait(false);
+      _nextAutosaveElapsedMs = NextAutosaveAfter(ElapsedMs);
+    }
+    finally
+    {
+      _snapshotGate.Release();
+    }
+  }
+
+  /// <summary>
   /// Loads <see cref="Records"/> and, if one exists, restores a saved paused session (frozen
   /// elapsed time, laps, and <see cref="RestoredPausedAtMs"/>) so the UI can show a
   /// <c>Continue</c> button. Call once at startup, after the database connection opens. See
@@ -271,7 +299,52 @@ public sealed class StopwatchTimer
     IsPaused = true;
   }
 
+  /// <summary>Releases the synchronization primitive used to serialize recovery-slot writes.</summary>
+  public void Dispose() => _snapshotGate.Dispose();
+
   private long NowMs() => _time.GetUtcNow().ToUnixTimeMilliseconds();
+
+  private async Task SaveSnapshotAsync()
+  {
+    await _snapshotGate.WaitAsync().ConfigureAwait(false);
+    try
+    {
+      await SaveSnapshotCoreAsync().ConfigureAwait(false);
+    }
+    finally
+    {
+      _snapshotGate.Release();
+    }
+  }
+
+  private Task SaveSnapshotCoreAsync()
+  {
+    PausedSession snapshot = new(
+      ElapsedMs,
+      _sessionStartMs,
+      [.. _laps],
+      _lastLapElapsed,
+      _lastLapTimestamp,
+      NowMs()
+    );
+    return _store.SavePausedSessionAsync(snapshot);
+  }
+
+  private async Task ClearSnapshotAsync()
+  {
+    await _snapshotGate.WaitAsync().ConfigureAwait(false);
+    try
+    {
+      await _store.ClearPausedSessionAsync().ConfigureAwait(false);
+    }
+    finally
+    {
+      _snapshotGate.Release();
+    }
+  }
+
+  private long NextAutosaveAfter(long elapsedMs) =>
+    ((elapsedMs / _autosaveIntervalMs) + 1) * _autosaveIntervalMs;
 
   private async Task ReloadRecordsAsync()
   {

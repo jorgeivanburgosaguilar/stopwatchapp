@@ -37,7 +37,7 @@ public interface IStopwatchStore
   Task ClearAllRecordsAsync();
 
   /// <summary>
-  /// Saves (upserting into the single slot) a snapshot of the currently paused session.
+  /// Saves (upserting into the single slot) a paused or autosaved session snapshot.
   /// </summary>
   /// <param name="session">The snapshot to save.</param>
   Task SavePausedSessionAsync(PausedSession session);

@@ -117,7 +117,7 @@ public interface IStopwatchStore
 ```csharp
 public sealed class StopwatchTimer
 {
-    public StopwatchTimer(IStopwatchStore store, TimeProvider time);
+    public StopwatchTimer(IStopwatchStore store, TimeProvider time, int autosaveIntervalMinutes = 5);
 
     public bool IsRunning { get; }
     public bool IsPaused { get; }
@@ -133,6 +133,7 @@ public sealed class StopwatchTimer
     public Task ClearRecordsAsync();
     public Task DeleteRecordAsync(long id);
     public void Tick();                 // called once/second by the UI-side Timer
+    public Task SaveAutosaveIfDueAsync(); // called after Tick by the UI-side Timer
     public Task RestoreAsync();         // startup: loads a saved paused session, if any
 
     public event Action<long>? OnStart;

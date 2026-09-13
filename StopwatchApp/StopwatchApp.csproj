@@ -7,7 +7,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Platforms>x64</Platforms>
     <Platform>x64</Platform>
-    <Version>1.5.0</Version>
+    <Version>1.6.0</Version>
 
     <!-- S14a (AGENTS.md §17) — without this, the SDK appends the git SourceRevisionId to
          AssemblyInformationalVersionAttribute, which the window title (S15; was the version footer,
@@ -44,5 +44,10 @@
     <!-- Loaded at runtime by MainForm.LoadAppIcon() to set Form.Icon (the title-bar/live-taskbar
          icon) — <ApplicationIcon> above only covers the .exe's own icon, not the running window's. -->
     <EmbeddedResource Include="Assets\app.ico" />
+    <Content
+      Include="settings.json"
+      CopyToOutputDirectory="PreserveNewest"
+      CopyToPublishDirectory="PreserveNewest"
+    />
   </ItemGroup>
 </Project>

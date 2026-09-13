@@ -7,17 +7,22 @@ namespace StopwatchApp.Controls;
 internal sealed class ManageRecordsForm : Form
 {
   internal const int PageSize = 10;
+  private const int DesignClientHeight = 660;
+  private const int CompactClientWidth = 640;
 
   private readonly Func<long, Task> _deleteRecordAsync;
   private readonly Func<Task> _clearRecordsAsync;
   private readonly Font _bodyFont;
   private readonly Font _rowFont;
+  private readonly Icon _appIcon;
   private readonly Label _pageLabel;
   private readonly Label _emptyStateLabel;
   private readonly TableLayoutPanel _rowsLayout;
+  private readonly TableLayoutPanel _rootLayout;
   private readonly GlyphButton _clearAllButton;
   private readonly GlyphButton _previousButton;
   private readonly GlyphButton _nextButton;
+  private readonly List<Label> _recordDetails = [];
   private IReadOnlyList<StopwatchRecord> _records;
   private int _pageIndex;
   private bool _dark;
@@ -26,22 +31,25 @@ internal sealed class ManageRecordsForm : Form
   internal ManageRecordsForm(
     IReadOnlyList<StopwatchRecord> records,
     Func<long, Task> deleteRecordAsync,
-    Func<Task> clearRecordsAsync
+    Func<Task> clearRecordsAsync,
+    Icon appIcon
   )
   {
     _records = records;
     _deleteRecordAsync = deleteRecordAsync;
     _clearRecordsAsync = clearRecordsAsync;
+    _appIcon = (Icon)appIcon.Clone();
 
     Text = "Manage Records";
+    Icon = _appIcon;
     FormBorderStyle = FormBorderStyle.FixedSingle;
     MaximizeBox = false;
     MinimizeBox = false;
     ShowInTaskbar = false;
-    StartPosition = FormStartPosition.CenterParent;
+    StartPosition = FormStartPosition.CenterScreen;
     AutoScaleMode = AutoScaleMode.Dpi;
     AutoScaleDimensions = new SizeF(96F, 96F);
-    ClientSize = new Size(720, 660);
+    ClientSize = new Size(1, DesignClientHeight);
     _bodyFont = Typography.CreateBodyFont();
     _rowFont = Typography.CreateMonospaceBodyFont();
     Font = _bodyFont;
@@ -124,21 +132,21 @@ internal sealed class ManageRecordsForm : Form
     pagination.Controls.Add(_pageLabel);
     pagination.Controls.Add(_nextButton);
 
-    TableLayoutPanel root = new()
+    _rootLayout = new TableLayoutPanel
     {
       Dock = DockStyle.Fill,
       ColumnCount = 1,
       RowCount = 3,
       Padding = new Padding(Palette.SpacingLg),
     };
-    root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-    root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-    root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-    root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-    root.Controls.Add(header, 0, 0);
-    root.Controls.Add(rowsHost, 0, 1);
-    root.Controls.Add(pagination, 0, 2);
-    Controls.Add(root);
+    _rootLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+    _rootLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+    _rootLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+    _rootLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+    _rootLayout.Controls.Add(header, 0, 0);
+    _rootLayout.Controls.Add(rowsHost, 0, 1);
+    _rootLayout.Controls.Add(pagination, 0, 2);
+    Controls.Add(_rootLayout);
 
     UpdateRecords(records);
     ApplyTheme();
@@ -190,9 +198,24 @@ internal sealed class ManageRecordsForm : Form
     {
       _bodyFont.Dispose();
       _rowFont.Dispose();
+      _appIcon.Dispose();
     }
 
     base.Dispose(disposing);
+  }
+
+  /// <inheritdoc />
+  protected override void OnDpiChanged(DpiChangedEventArgs e)
+  {
+    base.OnDpiChanged(e);
+    ResizeToCurrentPage(e.DeviceDpiNew);
+  }
+
+  /// <inheritdoc />
+  protected override void OnShown(EventArgs e)
+  {
+    base.OnShown(e);
+    ResizeToCurrentPage(DeviceDpi);
   }
 
   private void ChangePage(int offset)
@@ -248,6 +271,7 @@ internal sealed class ManageRecordsForm : Form
     _rowsLayout.SuspendLayout();
     _rowsLayout.Controls.Clear();
     _rowsLayout.RowStyles.Clear();
+    _recordDetails.Clear();
 
     IReadOnlyList<StopwatchRecord> page = GetPage(_records, _pageIndex);
     for (int i = 0; i < page.Count; i++)
@@ -271,6 +295,110 @@ internal sealed class ManageRecordsForm : Form
     _previousButton.DarkMode = _dark;
     _nextButton.DarkMode = _dark;
     ApplyTheme();
+    ResizeToCurrentPage(DeviceDpi);
+  }
+
+  private void ResizeToCurrentPage(int deviceDpi)
+  {
+    int contentWidth = RequiredClientWidth(
+      deviceDpi,
+      GetPage(_records, _pageIndex),
+      _records.Count
+    );
+    int compactWidth = (int)Math.Ceiling(CompactClientWidth * (deviceDpi / 96f));
+    int width = Math.Min(contentWidth, compactWidth);
+    int height = (int)Math.Ceiling(DesignClientHeight * (deviceDpi / 96f));
+    Screen screen = Screen.FromControl(this);
+    int chromeWidth = SystemInformation.FixedFrameBorderSize.Width * 2;
+    int chromeHeight = SystemInformation.FixedFrameBorderSize.Height * 2;
+    Size clientSize = new(
+      Math.Max(1, Math.Min(width, screen.WorkingArea.Width - chromeWidth)),
+      Math.Max(1, Math.Min(height, screen.WorkingArea.Height - chromeHeight))
+    );
+    if (ClientSize != clientSize)
+    {
+      ClientSize = clientSize;
+    }
+    ConstrainRecordDetails();
+    if (Visible)
+    {
+      CenterOnCurrentScreen(screen);
+    }
+  }
+
+  private void CenterOnCurrentScreen(Screen screen)
+  {
+    Location = new Point(
+      screen.WorkingArea.Left + ((screen.WorkingArea.Width - Width) / 2),
+      screen.WorkingArea.Top + ((screen.WorkingArea.Height - Height) / 2)
+    );
+  }
+
+  private void ConstrainRecordDetails()
+  {
+    int deleteButtonWidth =
+      TextRenderer
+        .MeasureText(
+          "Delete",
+          Font,
+          Size.Empty,
+          TextFormatFlags.NoPadding | TextFormatFlags.SingleLine
+        )
+        .Width + (Palette.SpacingMd * 2);
+    int rowTextWidth = Math.Max(
+      1,
+      ClientSize.Width
+        - (Palette.SpacingLg * 2)
+        - SystemInformation.VerticalScrollBarWidth
+        - deleteButtonWidth
+        - (Palette.SpacingSm * 3)
+        - 2
+    );
+    foreach (Label details in _recordDetails)
+    {
+      details.MaximumSize = new Size(rowTextWidth, 0);
+    }
+  }
+
+  internal static int RequiredClientWidth(
+    int deviceDpi,
+    IReadOnlyList<StopwatchRecord> page,
+    int totalRecordCount
+  )
+  {
+    float scale = deviceDpi / 96f;
+    using Font bodyFont = Typography.CreateBodyFont();
+    using Font scaledBodyFont = new(bodyFont.FontFamily, bodyFont.Size * scale, bodyFont.Style);
+    using Font rowFont = Typography.CreateMonospaceBodyFont();
+    using Font scaledRowFont = new(rowFont.FontFamily, rowFont.Size * scale, rowFont.Style);
+
+    int TextWidth(string text, Font font) =>
+      TextRenderer
+        .MeasureText(text, font, Size.Empty, TextFormatFlags.NoPadding | TextFormatFlags.SingleLine)
+        .Width;
+    int ButtonWidth(string text) =>
+      TextWidth(text, scaledBodyFont) + (int)Math.Ceiling(Palette.SpacingMd * 2 * scale);
+
+    int rowTextWidth = page.Select(record =>
+        TextWidth(RecordsListControl.FormatRecordRow(record), scaledRowFont)
+      )
+      .DefaultIfEmpty(0)
+      .Max();
+    int rowWidth =
+      rowTextWidth + ButtonWidth("Delete") + (int)Math.Ceiling((Palette.SpacingSm * 3 + 2) * scale);
+    int headerWidth =
+      TextWidth("Manage Records", scaledBodyFont) + ButtonWidth("Clear All Records");
+    int paginationWidth =
+      ButtonWidth("Previous")
+      + TextWidth(
+        $"Page {GetPageCount(totalRecordCount)} of {GetPageCount(totalRecordCount)}",
+        scaledBodyFont
+      )
+      + ButtonWidth("Next")
+      + (int)Math.Ceiling(Palette.SpacingSm * 3 * scale);
+    int rootChrome = (int)
+      Math.Ceiling((Palette.SpacingLg * 2 + SystemInformation.VerticalScrollBarWidth) * scale);
+    return Math.Max(Math.Max(rowWidth, headerWidth), paginationWidth) + rootChrome;
   }
 
   private Panel CreateRecordRow(StopwatchRecord record)
@@ -283,6 +411,7 @@ internal sealed class ManageRecordsForm : Form
       AutoSize = true,
       Margin = new Padding(0),
     };
+    _recordDetails.Add(details);
     GlyphButton deleteButton = new("Delete", glyph: null, Palette.StopButton)
     {
       Anchor = AnchorStyles.Right,

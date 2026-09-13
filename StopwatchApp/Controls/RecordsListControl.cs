@@ -142,24 +142,24 @@ public sealed class RecordsListControl : UserControl
     headerButtonsRow.Controls.Add(_manageRecordsButton);
     headerButtonsRow.Controls.Add(_clearAllButton);
 
-    // S15 (AGENTS.md §17) — one row, two columns: "Records" left (AutoSize column, Anchor.Left) and
-    // the button row right (Percent(100) column, Anchor.Right) — replaces the previous stacked
-    // header-label-then-button-row layout per the owner's markup ("the buttons and the title
-    // 'Records List' should be on the same line").
+    // Keep the actions in their own line below the title. Besides creating a clearer title/action
+    // rhythm, this lets the main window fit its rows instead of permanently reserving the combined
+    // width of the title and both action labels.
     TableLayoutPanel headerRow = new()
     {
       Dock = DockStyle.Top,
       AutoSize = true,
       AutoSizeMode = AutoSizeMode.GrowAndShrink,
-      ColumnCount = 2,
-      RowCount = 1,
+      ColumnCount = 1,
+      RowCount = 2,
       Margin = new Padding(0, 0, 0, Palette.SpacingSm),
     };
-    headerRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
     headerRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
     headerRow.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+    headerRow.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+    recordsLabel.Margin = new Padding(0, 0, 0, Palette.SpacingXs);
     headerRow.Controls.Add(recordsLabel, 0, 0);
-    headerRow.Controls.Add(headerButtonsRow, 1, 0);
+    headerRow.Controls.Add(headerButtonsRow, 0, 1);
 
     // S14b (AGENTS.md §17) — Dock.Top with an explicit Height (not Dock.Fill inside a Percent(100)
     // row) so this host's height is a small, known constant instead of stretching to fill whatever's

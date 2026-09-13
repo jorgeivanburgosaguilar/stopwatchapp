@@ -30,16 +30,18 @@ public sealed class StopwatchControl : UserControl
   /// </summary>
   /// <param name="store">The persistence surface passed through to the internal <see cref="StopwatchTimer"/>.</param>
   /// <param name="time">The clock source passed through to the internal <see cref="StopwatchTimer"/>.</param>
-  public StopwatchControl(IStopwatchStore store, TimeProvider time)
+  /// <param name="autosaveIntervalMinutes">The positive running-time checkpoint interval, in minutes.</param>
+  public StopwatchControl(IStopwatchStore store, TimeProvider time, int autosaveIntervalMinutes)
   {
-    Timer = new StopwatchTimer(store, time);
+    Timer = new StopwatchTimer(store, time, autosaveIntervalMinutes);
 
     _uiTimer = new System.Windows.Forms.Timer { Interval = 1000 };
-    _uiTimer.Tick += (_, _) =>
+    _uiTimer.Tick += async (_, _) =>
     {
       // System.Windows.Forms.Timer.Tick always fires on the UI thread, so calling Timer.Tick()
       // (synchronous, no awaits) and refreshing controls here directly is safe.
       Timer.Tick();
+      await Timer.SaveAutosaveIfDueAsync();
       UpdateDisplay();
       Tick?.Invoke();
     };
@@ -277,6 +279,7 @@ public sealed class StopwatchControl : UserControl
     {
       _uiTimer.Stop();
       _uiTimer.Dispose();
+      Timer.Dispose();
       _shortcutToolTip.Dispose();
       _elapsedFont.Dispose();
     }
@@ -324,7 +327,7 @@ public sealed class StopwatchControl : UserControl
     if (Timer.RestoredPausedAtMs > 0)
     {
       _resumedNoteLabel.Text =
-        $"Resumed from a pause on {TimeFormat.FormatDate(Timer.RestoredPausedAtMs)} "
+        $"Resumed from a saved point on {TimeFormat.FormatDate(Timer.RestoredPausedAtMs)} "
         + $"at {TimeFormat.FormatTimeOnly(Timer.RestoredPausedAtMs)}";
       _resumedNoteLabel.Visible = true;
     }

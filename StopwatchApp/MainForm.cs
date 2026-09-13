@@ -2,6 +2,7 @@ using System.Reflection;
 using Microsoft.Data.Sqlite;
 using Microsoft.Win32;
 using StopwatchApp.Controls;
+using StopwatchApp.Formatting;
 using StopwatchApp.Models;
 using StopwatchApp.Services;
 using StopwatchApp.Theme;
@@ -14,6 +15,9 @@ namespace StopwatchApp;
 /// </summary>
 public sealed class MainForm : Form
 {
+  internal const int WorstCaseElapsedMinutes = 24 * 60;
+  private const int CompactClientWidth = 600;
+
   /// <summary>
   /// The window title, also used by <see cref="Program"/> to locate this window from a second
   /// instance (AGENTS.md §10.5). S15 (AGENTS.md §17) — carries the version, replacing the deleted
@@ -24,14 +28,7 @@ public sealed class MainForm : Form
   /// </summary>
   internal static readonly string WindowTitle = $"Stopwatch v{Application.ProductVersion}";
 
-  // S15 (AGENTS.md §17) — the design-pixel worst case a records/laps row is sized for: a session
-  // that ran for a full 24 hours (FormatElapsed(24 * 60) -> "24:00"). Replaces S14's deliberately
-  // absurd 9,999-hour/5-digit-lap-id bound — anything longer than this now word-wraps to a second
-  // line (RecordsListControl.ConfigureRowRendering) instead of forcing every window wider to fit an
-  // unrealistic case. Internal so MainFormLayoutTests can pin its row-width test to this same bound.
-  internal const int WorstCaseElapsedMinutes = 24 * 60;
-
-  // S14a (AGENTS.md §17) — the non-text chrome a records/laps row must fit alongside, in 96dpi
+  // The non-text chrome a records/laps row must fit alongside, in 96dpi
   // design pixels: RecordsListControl.DrawRow's text inset, RecordsListControl's card Padding, the
   // TableLayoutPanel cell's default Margin, and MainForm's own root layout Padding.
   // DesignScrollBarWidth is budgeted separately, only against the laps row (S15, AGENTS.md §17) —
@@ -59,7 +56,8 @@ public sealed class MainForm : Form
   /// <summary>
   /// Initializes a new instance of the <see cref="MainForm"/> class.
   /// </summary>
-  public MainForm()
+  /// <param name="autosaveIntervalMinutes">The validated running-time checkpoint interval, in minutes.</param>
+  public MainForm(int autosaveIntervalMinutes)
   {
     Text = WindowTitle;
     // S14 (AGENTS.md §10.3/§17) — the window is fixed-size and not user-resizable: FixedSingle
@@ -88,7 +86,11 @@ public sealed class MainForm : Form
     StartPosition = FormStartPosition.Manual;
 
     _database = new Database(Database.DefaultDatabasePath);
-    _stopwatchControl = new StopwatchControl(_database, TimeProvider.System)
+    _stopwatchControl = new StopwatchControl(
+      _database,
+      TimeProvider.System,
+      autosaveIntervalMinutes
+    )
     {
       Dock = DockStyle.Fill,
     };
@@ -129,6 +131,7 @@ public sealed class MainForm : Form
     _stopwatchControl.StateChanged += RefreshLaps;
     _stopwatchControl.StateChanged += RefreshTray;
     _stopwatchControl.Tick += RefreshTray;
+    _stopwatchControl.Tick += ResizeForElapsedTime;
     _recordsListControl.ClearAllRequested += ClearRecordsAsync;
     _recordsListControl.ManageRecordsRequested += OpenManageRecords;
     Load += InitializeAsync;
@@ -320,8 +323,7 @@ public sealed class MainForm : Form
   /// <summary>
   /// Resizes the window to fit its actual current content at <paramref name="deviceDpi"/> (S15,
   /// AGENTS.md §17) — replaces S14's fixed design-pixel <c>FixedClientSize</c> literal. Width comes
-  /// from <see cref="RequiredClientWidth"/> (the sized-for worst-case row, §17's <see
-  /// cref="WorstCaseElapsedMinutes"/>); height comes from asking <see cref="_rootLayout"/> for its
+  /// from <see cref="RequiredClientWidth"/> using the currently visible rows; height comes from asking <see cref="_rootLayout"/> for its
   /// real preferred size at that width, so the window always ends a few pixels below whatever is
   /// actually shown (idle vs. running, 0 vs. 5 records, laps present or not) instead of a constant
   /// sized for the worst case of everything visible at once. Call after any change that can affect
@@ -360,23 +362,25 @@ public sealed class MainForm : Form
   /// AGENTS.md §17) — <see cref="RequiredClientWidth"/> at that DPI, using a throwaway probe font
   /// the way <see cref="OnDpiChanged"/> and the constructor both need without duplicating the
   /// font-creation call at each site.</summary>
-  private static int ComputeFixedWidth(int deviceDpi)
+  private int ComputeFixedWidth(int deviceDpi)
   {
     using Font monoProbeFont = Typography.CreateMonospaceBodyFont();
-    return RequiredClientWidth(monoProbeFont, deviceDpi);
+    int contentWidth = RequiredClientWidth(
+      monoProbeFont,
+      deviceDpi,
+      _stopwatchControl.Timer.Records,
+      _stopwatchControl.Timer.Laps,
+      _stopwatchControl.Timer.ElapsedMs
+    );
+    int compactWidth = (int)Math.Ceiling(CompactClientWidth * (deviceDpi / 96f));
+    return Math.Min(contentWidth, compactWidth);
   }
 
   /// <summary>
   /// Computes the minimum client width for three independent needs, at <paramref name="deviceDpi"/>,
-  /// and returns whichever is larger: the widest row <see cref="RecordsListControl"/> is sized for —
-  /// a session that ran a full 24 hours (<see cref="WorstCaseElapsedMinutes"/>, AGENTS.md §8.5/§17; a
-  /// row past this word-wraps instead of clipping, per <see cref="RecordsListControl"/>'s own row
-  /// rendering) — measured in <paramref name="monoBodyFont"/> as it will actually render, plus its
-  /// itemized non-text chrome budget (<see cref="DesignRowTextInset"/> etc.); and the records header
-  /// row's own content (<see cref="HeaderRowWidth"/> — "Records" plus the "Manage Records"/
-  /// "Clear All Records" buttons, in the proportional body font, S15 follow-up, AGENTS.md §17: a
-  /// window sized only from the mono row left this row free to overflow past the window's right edge
-  /// whenever it needed more room than the mono row did). A <see cref="Font"/>'s point size is
+  /// and returns whichever is larger: the widest currently visible row, the stacked records action
+  /// row, or the elapsed display. Rows beyond this current-content width word-wrap rather than
+  /// permanently reserving unused space. A <see cref="Font"/>'s point size is
   /// otherwise measured against a fixed 96dpi baseline regardless of the caller's actual DPI context
   /// (S14a, AGENTS.md §17) — the very mismatch that let record rows clip at anything above 100%
   /// scaling — so every font used here is rebuilt at an equivalent, pre-scaled size before measuring
@@ -386,54 +390,53 @@ public sealed class MainForm : Form
   /// </summary>
   /// <param name="monoBodyFont">The unscaled monospace body font (<see cref="Typography.CreateMonospaceBodyFont"/>).</param>
   /// <param name="deviceDpi">The device DPI to measure for.</param>
+  /// <param name="records">The records currently visible in the main window.</param>
+  /// <param name="laps">The laps currently visible in the main window.</param>
+  /// <param name="elapsedMs">The elapsed stopwatch time currently shown in the display.</param>
   /// <returns>The minimum client width, in device pixels at <paramref name="deviceDpi"/>, that fits
   /// both the widest row and the header row without clipping.</returns>
-  internal static int RequiredClientWidth(Font monoBodyFont, int deviceDpi)
+  internal static int RequiredClientWidth(
+    Font monoBodyFont,
+    int deviceDpi,
+    IReadOnlyList<StopwatchRecord> records,
+    IReadOnlyList<Lap> laps,
+    long elapsedMs
+  )
   {
     float scale = deviceDpi / 96f;
-
-    StopwatchRecord worstCaseRecord = new(
-      Id: 1,
-      StartTimestamp: 0,
-      EndTimestamp: 0,
-      ElapsedMinutes: WorstCaseElapsedMinutes
-    );
-    Lap worstCaseLap = new(
-      Id: 999,
-      StartTimestamp: 0,
-      EndTimestamp: 0,
-      ElapsedMinutes: WorstCaseElapsedMinutes
-    );
 
     using Font scaledMonoFont = new(
       monoBodyFont.FontFamily,
       monoBodyFont.Size * scale,
       monoBodyFont.Style
     );
-    int recordRowWidth = MeasureRowWidth(
-      RecordsListControl.FormatRecordRow(worstCaseRecord),
-      scaledMonoFont
-    );
-    int lapRowWidth =
-      MeasureRowWidth(RecordsListControl.FormatLapRow(worstCaseLap), scaledMonoFont)
-      + (int)Math.Ceiling(DesignScrollBarWidth * scale);
+    int recordRowWidth = records
+      .Take(5)
+      .Select(record => MeasureRowWidth(RecordsListControl.FormatRecordRow(record), scaledMonoFont))
+      .DefaultIfEmpty(0)
+      .Max();
+    int lapRowWidth = laps.Take(3)
+      .Select(lap => MeasureRowWidth(RecordsListControl.FormatLapRow(lap), scaledMonoFont))
+      .DefaultIfEmpty(0)
+      .Max();
+    if (laps.Count > 3)
+    {
+      lapRowWidth += (int)Math.Ceiling(DesignScrollBarWidth * scale);
+    }
 
     int designChrome =
       DesignRowTextInset + DesignCardPadding + DesignCellMargin + DesignRootPadding;
     int scaledChrome = (int)Math.Ceiling(designChrome * scale);
     int rowWidth = Math.Max(recordRowWidth, lapRowWidth) + scaledChrome;
 
-    // S15 follow-up (AGENTS.md §17) — a second, independent floor for the header row ("Records" +
-    // Manage Records + Clear All Records), which this window's width had never accounted for at
-    // all: sizing purely from the mono row left the header row's own content — in the proportional
-    // body font, not measured anywhere else — free to overflow past the window's right edge at any
-    // DPI where it happens to need more room than the mono row does. Uses the same pre-scaled-font
-    // measuring technique as the mono row above, and the same GlyphButton Padding formula
-    // (Palette.SpacingMd left/right, no glyph/gutter for a text-only button) its real buttons use.
-    return Math.Max(Math.Max(rowWidth, HeaderRowWidth(scale)), DisplayWidth(scale));
+    int contentWidth = Math.Max(
+      Math.Max(rowWidth, HeaderActionsWidth(scale)),
+      DisplayWidth(scale, TimeFormat.FormatTime(elapsedMs))
+    );
+    return contentWidth;
   }
 
-  private static int DisplayWidth(float scale)
+  private static int DisplayWidth(float scale, string elapsedText)
   {
     using Font unscaledDisplayFont = Typography.CreateDisplayFont();
     using Font scaledDisplayFont = new(
@@ -441,7 +444,7 @@ public sealed class MainForm : Form
       unscaledDisplayFont.Size * scale,
       unscaledDisplayFont.Style
     );
-    int textWidth = MeasureRowWidth("00:00:00", scaledDisplayFont);
+    int textWidth = MeasureRowWidth(elapsedText, scaledDisplayFont);
     int chrome = DesignCardPadding + DesignCellMargin + DesignRootPadding;
     return textWidth + (int)Math.Ceiling(chrome * scale);
   }
@@ -457,12 +460,9 @@ public sealed class MainForm : Form
       .Width;
 
   /// <summary>
-  /// Computes the minimum client width the records header row ("Records" label, left; "Manage
-  /// Records"/"Clear All Records" buttons, right — <see cref="RecordsListControl"/>) needs at
-  /// <paramref name="scale"/> (S15, AGENTS.md §17), so <see cref="RequiredClientWidth"/> can floor
-  /// the window's width against it the same way it already does for the mono record/lap row.
+  /// Computes the minimum client width for the stacked records action row at <paramref name="scale"/>.
   /// </summary>
-  private static int HeaderRowWidth(float scale)
+  private static int HeaderActionsWidth(float scale)
   {
     using Font unscaledBodyFont = Typography.CreateBodyFont();
     using Font scaledBodyFont = new(
@@ -484,14 +484,12 @@ public sealed class MainForm : Form
     // with no glyph square or gutter (GlyphButton.GetPreferredSize); its Padding.Left/Right are
     // both Palette.SpacingMd (GlyphButton's constructor).
     int buttonPadding = (int)Math.Ceiling(Palette.SpacingMd * 2 * scale);
-    int recordsLabelWidth = TextWidth("Records");
     int manageButtonWidth = buttonPadding + TextWidth("Manage Records");
     int clearButtonWidth = buttonPadding + TextWidth("Clear All Records");
     // The gap between the two buttons in their FlowLayoutPanel is Manage Records' own right
     // Margin, Palette.SpacingSm (RecordsListControl's header row construction).
     int interButtonGap = (int)Math.Ceiling(Palette.SpacingSm * scale);
-    int headerRowContentWidth =
-      recordsLabelWidth + manageButtonWidth + interButtonGap + clearButtonWidth;
+    int headerRowContentWidth = manageButtonWidth + interButtonGap + clearButtonWidth;
 
     // Same card/cell/root chrome as the mono row's budget, minus the row-specific text inset and
     // scrollbar width — this row isn't drawn by RecordsListControl.DrawRow and never scrolls.
@@ -499,6 +497,14 @@ public sealed class MainForm : Form
     int scaledHeaderRowChrome = (int)Math.Ceiling(headerRowChrome * scale);
 
     return headerRowContentWidth + scaledHeaderRowChrome;
+  }
+
+  private void ResizeForElapsedTime()
+  {
+    if (ComputeFixedWidth(DeviceDpi) != ClientSize.Width)
+    {
+      ResizeToContent(DeviceDpi);
+    }
   }
 
   /// <summary>
@@ -654,7 +660,8 @@ public sealed class MainForm : Form
     ManageRecordsForm form = new(
       _stopwatchControl.Timer.Records,
       _stopwatchControl.Timer.DeleteRecordAsync,
-      _stopwatchControl.Timer.ClearRecordsAsync
+      _stopwatchControl.Timer.ClearRecordsAsync,
+      _appIcon
     )
     {
       DarkMode = Application.IsDarkModeEnabled,

@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using StopwatchApp.Services;
 
 namespace StopwatchApp;
 
@@ -47,7 +48,8 @@ internal static partial class Program
 
     ApplicationConfiguration.Initialize();
     Application.SetColorMode(SystemColorMode.System);
-    Application.Run(new MainForm());
+    AutosaveSettings autosaveSettings = AutosaveSettings.LoadDefault();
+    Application.Run(new MainForm(autosaveSettings.AutosaveIntervalMinutes));
   }
 
   [LibraryImport(

@@ -4,143 +4,71 @@ using StopwatchApp.Theme;
 
 namespace StopwatchApp.Tests;
 
-/// <summary>
-/// Pins <see cref="MainForm.RequiredClientWidth"/> to the actual §8.5 row templates at the S15
-/// design worst case — a session that ran a full 24 hours
-/// (<see cref="MainForm.WorstCaseElapsedMinutes"/>) — across every DPI Windows actually ships. The
-/// window cannot be widened by the user at any DPI, so if a future change to those templates, the
-/// mono body font, or the DPI-scaling math makes the worst-case row wider than what this method
-/// returns, it must fail here instead of silently clipping in a window nobody can resize. A row
-/// longer than this worst case is expected to word-wrap instead (S15,
-/// <see cref="RecordsListControl.MeasureRowHeight"/>), not to widen the window further — that
-/// behavior is covered directly in <c>RecordsListControlTests</c>.
-///
-/// No <see cref="MainForm"/> instance is constructed (it opens the real database and a
-/// <c>NotifyIcon</c>) — <see cref="MainForm.RequiredClientWidth"/> is a pure function of a font and
-/// a DPI, tested directly. This matters because the original (S14) version of this test measured
-/// text with the bare, DPI-unaware <see cref="TextRenderer.MeasureText(string, Font)"/> pattern,
-/// which is calibrated to a fixed 96dpi baseline regardless of the host's actual display — it
-/// passed at 96dpi while the shipped app clipped rows at the repo owner's real 125% scaling. Every
-/// theory here runs the *same* live-DPI scaling technique <see cref="MainForm.RequiredClientWidth"/>
-/// itself uses, so a regression to the old DPI-blind assumption fails at every non-96 data point.
-/// </summary>
+/// <summary>Tests the DPI-aware, current-content width calculations used by both record windows.</summary>
 public sealed class MainFormLayoutTests
 {
   [Theory]
-  [InlineData(96)] // 100% — the one DPI a DPI-unaware test host can measure unassisted
-  [InlineData(120)] // 125% — the repo owner's actual display (S14a, AGENTS.md §17)
-  [InlineData(144)] // 150%
-  [InlineData(168)] // 175%
-  public void RequiredClientWidth_FitsWorstCase24HourLapRowAtGivenDpi(int deviceDpi)
-  {
-    Lap worstCaseLap = new(
-      Id: 999,
-      StartTimestamp: 0,
-      EndTimestamp: 0,
-      ElapsedMinutes: MainForm.WorstCaseElapsedMinutes
-    );
-    string row = RecordsListControl.FormatLapRow(worstCaseLap);
-
-    using Font unscaledMonoFont = Typography.CreateMonospaceBodyFont();
-    int actualRowWidth = MeasureAtDpi(row, unscaledMonoFont, deviceDpi);
-    int requiredWidth = MainForm.RequiredClientWidth(unscaledMonoFont, deviceDpi);
-
-    Assert.True(
-      requiredWidth >= actualRowWidth,
-      $"MainForm.RequiredClientWidth({deviceDpi}) returned {requiredWidth}px, but the 24-hour "
-        + $"worst-case lap row \"{row}\" alone measures {actualRowWidth}px at that DPI — the "
-        + "returned width must always be at least the row's own text width, or the window would "
-        + "clip it."
-    );
-  }
-
-  [Theory]
   [InlineData(96)]
   [InlineData(120)]
   [InlineData(144)]
   [InlineData(168)]
-  public void RequiredClientWidth_FitsWorstCase24HourRecordRowAtGivenDpi(int deviceDpi)
+  public void RequiredClientWidth_FitsVisibleRecordAtGivenDpi(int deviceDpi)
   {
-    StopwatchRecord worstCaseRecord = new(
-      Id: 1,
-      StartTimestamp: 0,
-      EndTimestamp: 0,
-      ElapsedMinutes: MainForm.WorstCaseElapsedMinutes
-    );
-    string row = RecordsListControl.FormatRecordRow(worstCaseRecord);
+    StopwatchRecord record = new(1, 0, 0, 1);
+    using Font font = Typography.CreateMonospaceBodyFont();
 
-    using Font unscaledMonoFont = Typography.CreateMonospaceBodyFont();
-    int actualRowWidth = MeasureAtDpi(row, unscaledMonoFont, deviceDpi);
-    int requiredWidth = MainForm.RequiredClientWidth(unscaledMonoFont, deviceDpi);
-
-    Assert.True(
-      requiredWidth >= actualRowWidth,
-      $"MainForm.RequiredClientWidth({deviceDpi}) returned {requiredWidth}px, but the 24-hour "
-        + $"worst-case record row \"{row}\" alone measures {actualRowWidth}px at that DPI."
-    );
-  }
-
-  [Theory]
-  [InlineData(96)]
-  [InlineData(120)]
-  [InlineData(144)]
-  [InlineData(168)]
-  public void RequiredClientWidth_FitsDoubleSizeElapsedDisplayAtGivenDpi(int deviceDpi)
-  {
-    using Font unscaledDisplayFont = Typography.CreateDisplayFont();
-    int actualDisplayWidth = MeasureAtDpi("00:00:00", unscaledDisplayFont, deviceDpi);
-    using Font unscaledMonoFont = Typography.CreateMonospaceBodyFont();
-    int requiredWidth = MainForm.RequiredClientWidth(unscaledMonoFont, deviceDpi);
-
-    Assert.True(
-      requiredWidth >= actualDisplayWidth,
-      $"MainForm.RequiredClientWidth({deviceDpi}) returned {requiredWidth}px, but the elapsed "
-        + $"display measures {actualDisplayWidth}px at that DPI."
-    );
-  }
-
-  [Theory]
-  [InlineData(120)]
-  [InlineData(144)]
-  [InlineData(168)]
-  public void RequiredClientWidth_GrowsWithDpi(int deviceDpi)
-  {
-    // The S14a root cause was precisely this property being false: MainForm.FixedClientSize used
-    // to be assigned straight to ClientSize with no DPI scaling at all, so the required window
-    // width never grew even though the DPI-scaled text did.
-    using Font monoFont = Typography.CreateMonospaceBodyFont();
-    int widthAt96 = MainForm.RequiredClientWidth(monoFont, 96);
-    int widthAtDpi = MainForm.RequiredClientWidth(monoFont, deviceDpi);
-
-    Assert.True(
-      widthAtDpi > widthAt96,
-      $"RequiredClientWidth(96) = {widthAt96}, RequiredClientWidth({deviceDpi}) = {widthAtDpi} — "
-        + "the required width must strictly increase with DPI."
-    );
-  }
-
-  /// <summary>
-  /// Measures <paramref name="text"/> as it will actually render at <paramref name="deviceDpi"/>,
-  /// using the same technique as <see cref="MainForm.RequiredClientWidth"/>: rebuilding
-  /// <paramref name="unscaledFont"/> at an equivalent, pre-scaled point size before measuring,
-  /// since <see cref="TextRenderer.MeasureText(string, Font)"/> otherwise measures a <see cref="Font"/>'s
-  /// point size against a fixed 96dpi baseline regardless of the target DPI (S14a, AGENTS.md §17).
-  /// </summary>
-  private static int MeasureAtDpi(string text, Font unscaledFont, int deviceDpi)
-  {
+    int width = MainForm.RequiredClientWidth(font, deviceDpi, [record], [], elapsedMs: 0);
     float scale = deviceDpi / 96f;
-    using Font scaledFont = new(
-      unscaledFont.FontFamily,
-      unscaledFont.Size * scale,
-      unscaledFont.Style
-    );
-    return TextRenderer
+    using Font scaledFont = new(font.FontFamily, font.Size * scale, font.Style);
+    int rowWidth = TextRenderer
       .MeasureText(
-        text,
+        RecordsListControl.FormatRecordRow(record),
         scaledFont,
         Size.Empty,
         TextFormatFlags.NoPadding | TextFormatFlags.SingleLine
       )
       .Width;
+
+    Assert.True(width >= rowWidth);
+  }
+
+  [Theory]
+  [InlineData(120)]
+  [InlineData(144)]
+  [InlineData(168)]
+  public void RequiredClientWidth_ScalesWithDpi(int deviceDpi)
+  {
+    StopwatchRecord record = new(1, 0, 0, 1);
+    using Font font = Typography.CreateMonospaceBodyFont();
+
+    int widthAt96 = MainForm.RequiredClientWidth(font, 96, [record], [], elapsedMs: 0);
+    int widthAtDpi = MainForm.RequiredClientWidth(font, deviceDpi, [record], [], elapsedMs: 0);
+
+    Assert.True(widthAtDpi > widthAt96);
+  }
+
+  [Fact]
+  public void RequiredClientWidth_GrowsForLongerVisibleContent()
+  {
+    StopwatchRecord shortRecord = new(1, 0, 0, 1);
+    StopwatchRecord longRecord = new(1, 0, 0, 1000 * 60);
+    using Font font = Typography.CreateMonospaceBodyFont();
+
+    int shortWidth = MainForm.RequiredClientWidth(font, 96, [shortRecord], [], elapsedMs: 0);
+    int longWidth = MainForm.RequiredClientWidth(font, 96, [longRecord], [], elapsedMs: 0);
+
+    Assert.True(longWidth > shortWidth);
+  }
+
+  [Fact]
+  public void ManageRecordsWidth_GrowsForLongerCurrentPage()
+  {
+    StopwatchRecord shortRecord = new(1, 0, 0, 1);
+    StopwatchRecord longRecord = new(1, 0, 0, 1000 * 60);
+
+    int shortWidth = ManageRecordsForm.RequiredClientWidth(96, [shortRecord], totalRecordCount: 1);
+    int longWidth = ManageRecordsForm.RequiredClientWidth(96, [longRecord], totalRecordCount: 1);
+
+    Assert.True(longWidth > shortWidth);
   }
 }

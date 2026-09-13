@@ -14,6 +14,10 @@ internal sealed class FakeStopwatchStore : IStopwatchStore
   private PausedSession? _pausedSession;
   private (int X, int Y)? _windowPosition;
 
+  public TaskCompletionSource? PausedSessionSaveStarted { get; init; }
+
+  public TaskCompletionSource? PausedSessionSaveGate { get; init; }
+
   public Task<long> SaveRecordAsync(long startTimestamp, long endTimestamp, long elapsedMs)
   {
     long id = _records.Count + 1;
@@ -36,10 +40,15 @@ internal sealed class FakeStopwatchStore : IStopwatchStore
     return Task.CompletedTask;
   }
 
-  public Task SavePausedSessionAsync(PausedSession session)
+  public async Task SavePausedSessionAsync(PausedSession session)
   {
+    PausedSessionSaveStarted?.TrySetResult();
+    if (PausedSessionSaveGate is not null)
+    {
+      await PausedSessionSaveGate.Task;
+    }
+
     _pausedSession = session;
-    return Task.CompletedTask;
   }
 
   public Task<PausedSession?> LoadPausedSessionAsync() => Task.FromResult(_pausedSession);
