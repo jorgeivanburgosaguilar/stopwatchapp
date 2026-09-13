@@ -51,6 +51,8 @@ StopwatchApp/
   StopwatchApp.csproj      net10.0-windows, WinForms, nullable, analyzers-as-errors, x64
   Program.cs               single-instance mutex, ApplicationConfiguration.Initialize, SetColorMode, Application.Run
   MainForm.cs              thin orchestrator — wires controls and services, no business logic
+  Assets/
+    app.ico                window/taskbar/.exe icon (§10.3), embedded resource — see tools/IconGen
   Controls/                rendering + event wiring only, no untestable business logic
     StopwatchControl.cs    timer state (§8) + control row (§8.5) + keyboard shortcuts (§10.4)
     StopwatchShortcut.cs   the three window-scoped shortcuts (§10.4)
@@ -70,7 +72,10 @@ StopwatchApp/
     TimeFormat.cs          the four formatters (§8.4)
   Theme/
     Palette.cs             light/dark color tables (§11)
+    Typography.cs          type scale + monospace font resolution (§11)
 StopwatchApp.Tests/        xUnit — formatters, transitions, database round-trip
+tools/IconGen/             one-off generator for StopwatchApp/Assets/app.ico (§17, S14); not in
+                            StopwatchApp.slnx, not a build/test gate — see its own README.md
 ```
 
 Controls hold rendering and event wiring only — no logic that can't be tested outside a form.
@@ -325,7 +330,7 @@ Keep these set — they make lint and analyzers run on every `dotnet build` and 
     <ImplicitUsings>enable</ImplicitUsings>
     <Platforms>x64</Platforms>
     <Platform>x64</Platform>
-    <Version>1.0.0</Version>
+    <Version>1.1.0</Version>
 
     <!-- Required by LibraryImportAttribute-based source-generated interop (SYSLIB1062); see
          TrayIconService's DestroyIcon P/Invoke and §17. -->
@@ -336,6 +341,11 @@ Keep these set — they make lint and analyzers run on every `dotnet build` and 
     <ApplicationVisualStyles>true</ApplicationVisualStyles>
     <ApplicationUseCompatibleTextRendering>false</ApplicationUseCompatibleTextRendering>
 
+    <!-- S14 (§17) — what Explorer, the pinned taskbar entry, and the published .exe read for their
+         icon. Does not by itself set the live title-bar/taskbar-button icon; MainForm separately
+         loads the EmbeddedResource below and assigns Form.Icon at runtime. -->
+    <ApplicationIcon>Assets\app.ico</ApplicationIcon>
+
     <!-- Analyzers as real build gates -->
     <EnableNETAnalyzers>true</EnableNETAnalyzers>
     <AnalysisLevel>latest-recommended</AnalysisLevel>
@@ -343,6 +353,12 @@ Keep these set — they make lint and analyzers run on every `dotnet build` and 
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- S14 (§17) — loaded at runtime by MainForm.LoadAppIcon() to set the live window/taskbar icon.
+         See the ApplicationIcon comment above for why both are needed. -->
+    <EmbeddedResource Include="Assets\app.ico" />
+  </ItemGroup>
 
 </Project>
 ```
@@ -361,7 +377,7 @@ Keep these set — they make lint and analyzers run on every `dotnet build` and 
   demotes only `CAxxxx` code-quality rules, not compiler warnings. Any suppression must be
   narrow — a justified `[SuppressMessage]` attribute or a scoped
   `#pragma warning disable ... / restore ...` pair — **never** a blanket `<NoWarn>` list.
-- The version lives in exactly one place (`<Version>` above, starting at `1.0.0`) and must also be
+- The version lives in exactly one place (`<Version>` above, now `1.1.0`) and must also be
   surfaced in the app's UI (e.g. a footer or an About entry in the tray menu). Bump it in the same
   change as any user-visible behavior change.
 - **CSharpier vs. these analyzers:** whitespace/formatting is owned entirely by CSharpier (§4), not
@@ -587,12 +603,29 @@ Rules:
 - No button is ever disabled. State is expressed purely by which buttons are present.
 - Stop while idle is a harmless no-op (the `ElapsedMs > 0 && SessionStartMs > 0` guard in `Stop()`
   absorbs it).
-- The large elapsed-time display uses a monospace, tabular-figure font (Cascadia Mono or Consolas)
-  so digits don't shift width as they change.
+- **Type scale (S14, §17), defined centrally in `Theme/Typography.cs`:** display (elapsed-time
+  readout) 36pt/48px bold; body (buttons, headers, dialogs, list rows) 12pt/16px; caption (version
+  footer) 9pt/12px — all at the 96dpi design baseline (`1pt = 4/3px`), scaling further with the OS
+  DPI setting via `MainForm`'s `AutoScaleMode.Dpi`.
+- The large elapsed-time display and the records/laps rows both use a monospace, tabular-figure font
+  (`Typography.MonospaceFamilyName` — Cascadia Mono or Consolas) so digits don't shift width as they
+  change and so dates/times column-align down the list.
+- **Centering (S14, §17):** the elapsed-time display and the button row are both centered on the
+  stopwatch card's horizontal axis via `Anchor = AnchorStyles.None` inside a `TableLayoutPanel` cell
+  (not `Dock` + `TextAlign`, which is a no-op on an `AutoSize` control). The button row re-centers
+  automatically as buttons swap per state.
 - A **Laps** panel is shown only when `Laps.Count > 0`, newest first, scrollable.
-- A **Records** panel is always shown, newest first, scrollable, with an empty state reading
-  `No records yet` when there are none.
-- A `Clear All Records` button is visible only when `Records.Count > 0`.
+- A **Records** panel is always shown, newest first, with an empty state reading `No records yet`
+  when there are none. **Only the most recent 5 are listed** (S14b, §17,
+  `RecordsListControl.MaxDisplayedRecords`) — a planned, out-of-scope-for-now history/records-manager
+  window will offer the full list with edit/delete; this panel is capped, not scrollable.
+- A `Clear All Records` button is visible only when `Records.Count > 0` (the *actual* total, not the
+  capped display count) and, when clicked and confirmed, clears every persisted record — not just
+  the 5 shown.
+- A **`Manage Records`** button (S14c, §17) sits beside `Clear All Records`, always visible but
+  **`Enabled = false`** — a reserved placeholder for the planned history/records-manager window
+  above. Its space is accounted for in `MainForm.FixedClientSize`'s height now, rather than
+  requiring another recalculation once that window exists.
 - A confirm dialog, titled `Clear All Records`, body text
   `Are you sure you want to clear all records? This action cannot be undone.`, buttons `Cancel` and
   `Clear All`. Confirming clears the records table and reloads the (now empty) list.
@@ -777,6 +810,23 @@ remaining. Opening from the tray restores and re-activates the window.
 the `NotifyIcon` — otherwise a ghost icon lingers in the tray until the user hovers over its former
 location.
 
+**The window is fixed-size and non-resizable (S14, §17).** `FormBorderStyle.FixedSingle`,
+`MaximizeBox = false`, `ClientSize` fixed at `MainForm.FixedClientSize` (632 × 732 design pixels at
+96dpi, scaled to the live device DPI and widened if needed — see §17's S14a/S14b/S14c entries for
+the derivation and why a hand-typed literal was replaced with DPI-aware, then measured, values). The
+frame cannot be dragged wider or taller by the user, so `MainForm` clamps that fixed size to
+`Screen.PrimaryScreen.WorkingArea` at construction and again on every `OnDpiChanged` — at higher OS
+scaling the requested size could otherwise exceed the working area with no way for the user to
+shrink it back. This is a deliberate layout choice, independent of the `ControlStyles.ResizeRedraw`
+fix that stops the stale-border repaint artifact (§17) — the two are not the same thing.
+
+**Window and taskbar icon (S14, §17).** `MainForm.Icon` is set from the embedded
+`Assets/app.ico` resource (`StopwatchApp.Assets.app.ico`) at construction; see §6 for why both
+`<ApplicationIcon>` and the `<EmbeddedResource>` item are needed. This is a static identity icon and
+does not conflict with §1's "no taskbar integration" constraint, which bans dynamic taskbar
+features (badges, thumbnail toolbars, progress, a title-bar clock) — not an ordinary app icon. The
+animated tray `NotifyIcon` (§10.1) is unrelated and unchanged.
+
 ### 10.4 Keyboard shortcuts
 
 **Global (system-wide) hotkeys are explicitly out of scope (§1) — do not add `RegisterHotKey`.**
@@ -814,33 +864,21 @@ from `HWND_BROADCAST` delivery regardless of visibility — so a broadcast poste
 hidden is silently never delivered, in exactly the one state single-instance activation exists to
 handle. A direct, title-targeted `FindWindow` lookup is not subject to that exclusion.
 
-### 10.6 Window position memory
+### 10.6 Window position (always centered)
 
-Added post-hoc at the repo owner's explicit request, dated 2026-09-11 (see §17) — not part of the
-original spec. The window centers itself by default, but remembers the last position the user
-dragged it to and reopens there instead, until it's dragged again:
+**The window always centers itself and never remembers a position.** Added post-hoc at the repo
+owner's explicit request dated 2026-09-11, then reversed at the repo owner's explicit request dated
+2026-09-12 (see §17) — the app never should have remembered a position at all. Every "Open"
+transition (first launch, tray Open/double-click, single-instance activation, restore-from-minimize)
+calls the same `PositionWindowCentered()`, unconditionally, with no history or saved state involved.
 
-```
-Open (first launch, tray Open/double-click, single-instance activation, or restore-from-minimize):
-  if a saved WindowPosition exists AND its bounds intersect at least one current screen's working area:
-    Location = (SavedX, SavedY)
-  else:
-    Location = centered on Screen.PrimaryScreen.WorkingArea
-    // also the fallback when a saved position no longer fits any connected monitor
-  _shownAtLocation = Location   // baseline for detecting a user-initiated move, see below
-
-Hide-to-tray (close or minimize) or Exit:
-  if Location != _shownAtLocation:              // the user dragged it since it was last shown
-    persist WindowPosition { X: Location.X, Y: Location.Y }
-  // unchanged → no write; an app that's never been dragged stays centered forever
-```
-
-Only `Location` is tracked — resizing alone never triggers a save. `_shownAtLocation` is plain
-in-memory `MainForm` state, reset every time the window is positioned by the block above, so repeated
-hide/show/drag cycles within one session are each compared against the position that cycle actually
-started from, not a stale one from app launch. A saved position is never trusted blindly — a saved
-position whose bounds don't intersect any currently-connected screen (e.g. a monitor was unplugged)
-falls back to centering rather than placing the window somewhere unreachable.
+The `IStopwatchStore.SaveWindowPositionAsync`/`LoadWindowPositionAsync` methods, `Database`'s
+implementation, and the `window_position` table (migration 2, `SchemaMigrations.cs`) all still exist
+but are **no longer called by any application code path** — per this file's own "never edit a
+shipped migration" rule (§9), a released migration is not retroactively removed, so the table stays
+in the schema for any database that has already applied it. `DatabaseTests` still covers this
+persistence machinery directly (it still functions correctly), even though nothing in `MainForm`
+exercises it anymore.
 
 ---
 
@@ -868,6 +906,9 @@ Button colors (base / hover / pressed), same in both themes:
 | Pause (yellow) | `#CA8A04` | `#A16207` | `#854D0E` |
 | Lap (blue) | `#2563EB` | `#1D4ED8` | `#1E40AF` |
 | Stop (red) | `#DC2626` | `#B91C1C` | `#991B1B` |
+
+`Theme/Palette.cs` holds the color and spacing tokens above; `Theme/Typography.cs` (S14, §17) is the
+second token file, holding the type scale (§8.5) and the shared monospace-family resolution.
 
 ---
 
@@ -945,10 +986,20 @@ xUnit, in a `StopwatchApp.Tests` project.
 - Keyboard shortcuts: with the main window focused, `Space` starts/pauses/continues, `Shift+Space`
   laps, and `Enter` stops, matching the mouse-click behavior of the same buttons; none of the three
   fires while the window is hidden to the tray or while `ClearRecordsDialog` is open.
-- Window position: with no saved position, the window opens centered on the primary screen; after
-  being dragged and then hidden-to-tray/exited, it reopens at that exact position instead of
-  centering; a saved position that no longer intersects any connected screen falls back to
-  centering rather than opening off-screen; resizing alone (no drag) never triggers a save.
+- Window position (S14b, §10.6): the window always opens centered on the primary screen — on first
+  launch, tray Open/double-click, single-instance activation, and restore-from-minimize alike. It
+  never remembers or restores a previous position, and cannot be dragged-then-resized since it is
+  fixed-size (§10.3).
+- Window frame and icon (S14, §10.3): the frame cannot be resized (no maximize button, no drag on
+  any edge/corner); the stopwatch icon shows in the title bar, the taskbar button, and on the built
+  `.exe` in Explorer; the chrono, buttons, and record/lap rows render at the S14 type scale
+  (48px/16px/16px) and stay centered as the button set changes state.
+- Records display cap (S14b, §8.5): only the 5 most recent records are listed in the main window
+  regardless of how many are persisted; "Clear All Records" still clears every persisted record, and
+  its own visibility still reflects the true total, not the capped display count.
+- Manage Records placeholder (S14c, §8.5): a `Manage Records` button is always visible beside
+  `Clear All Records`, always disabled (there is no records-manager window yet), and never wraps to
+  its own line regardless of window state.
 
 Implement these as automated tests wherever the behavior is UI-free, and as a manual check where it
 genuinely requires a running window (tray, hotkeys).
@@ -1531,3 +1582,188 @@ that now carries the actual rule.
   human-performed step per §4 item 5 and the "Done when" manual checklists throughout §5 of the
   roadmap — process-level smoke tests (launch, confirm responsive, clean terminate) remain safe and
   were used instead for S13's publish verification.
+- **2026-09-12 — S14: `ControlStyles.ResizeRedraw` is mandatory on any control that owner-paints a
+  border at `Width - 1, Height - 1`.** A pass over the running window found a stale border line
+  drawn through the middle of both the stopwatch card and the records card on any size change — a
+  horizontal line behind the button row, repeated vertical strokes behind the records list. Root
+  cause: `StopwatchControl` and `RecordsListControl` both draw their rounded border in `OnPaint` at
+  the control's current bounds, but neither set `ControlStyles.ResizeRedraw`, so WinForms only
+  invalidated the newly-exposed strip on a size change and the previous border stayed drawn.
+  `GlyphButton` (same file) already set this style correctly and never showed the artifact — the
+  fix was to add the same `SetStyle(ResizeRedraw | OptimizedDoubleBuffer | AllPaintingInWmPaint,
+  true)` call to both cards. **This is what fixes the ghosting, independent of whether the window
+  is resizable at all** — it was verified by reasoning about the repaint mechanism, not by making
+  the window fixed-size, which was a separate, later decision (see below).
+- **2026-09-12 — S14: `Anchor = AnchorStyles.None` inside a `TableLayoutPanel` cell is this repo's
+  centering idiom, not `Dock` + `TextAlign`.** The elapsed-time display combined `AutoSize = true`
+  with `Dock = DockStyle.Top` and `TextAlign = ContentAlignment.MiddleCenter`; an `AutoSize` label
+  shrink-wraps to its text, so there is no box left for `TextAlign` to center within and the
+  readout rendered flush-left. `StopwatchControl` was restructured around an interior
+  `TableLayoutPanel` with one `Percent(100)` column, and every child that should be centered uses
+  `Anchor = AnchorStyles.None` instead of `Dock`. Use this pattern for any future centered content;
+  `Dock` inside a `TableLayoutPanel` cell only ever fills that cell, it does not center within it.
+- **2026-09-12 — S14: `AutoSize = true` without an explicit `AutoSizeMode` defaults to `GrowOnly`
+  and never shrinks back.** Found while deriving the fixed window's height budget:
+  `StopwatchControl` grows to fit the "Resumed from a pause" note but, without
+  `AutoSizeMode.GrowAndShrink`, stayed at that taller height even after the note was cleared by
+  Stop. This was a latent bug independent of the rest of S14; fixing it (adding
+  `AutoSizeMode.GrowAndShrink` alongside every `AutoSize = true`) is what makes a fixed-height
+  window viable at all. Always pair the two properties explicitly rather than relying on the
+  `GrowOnly` default.
+- **2026-09-12 — S14: `MainForm.AutoScaleMode = AutoScaleMode.Dpi`, not the WinForms default of
+  `Font`.** With `AutoScaleMode.Font`, a control's layout rescales relative to its *own* font size
+  change, which would double-apply scaling on top of the new S14 type-scale fonts (`Typography.cs`)
+  as they're assigned. `Dpi` scales purely off the OS DPI setting, matching
+  `ApplicationHighDpiMode.PerMonitorV2` (§6/§7) and leaving the point-sized fonts as the only thing
+  that changes the type scale. **Superseded/expanded by the S14a entry below** — this reasoning for
+  *which* `AutoScaleMode` to use was correct, but it was not, by itself, sufficient.
+- **2026-09-12 — S14: a fixed-size window needs an explicit working-area clamp, checked again on
+  every DPI change.** `MainForm.FixedClientSize` (632 × 680, derived from the actual §8.5 row
+  templates at the S14 type scale — see the `MainFormLayoutTests` width test) can exceed a 1080p
+  screen's working area once OS scaling reaches ~150%. A resizable window would let the user drag it
+  smaller; a fixed one has no such escape hatch, so `MainForm` clamps the requested size against
+  `Screen.PrimaryScreen.WorkingArea` (via `SystemInformation.CaptionHeight`/
+  `FixedFrameBorderSize`) both at construction and again in `OnDpiChanged` — a window opened on one
+  monitor and then dragged to a higher-DPI one must not end up taller than that monitor. **The clamp
+  itself had a matching unit bug — see the S14a entry below.**
+- **2026-09-12 — S14: a static application icon is not the §1 "no taskbar integration"
+  constraint.** §1 bans *dynamic* taskbar features this app deliberately doesn't have — badges,
+  thumbnail toolbars, progress indicators, a title-bar clock. An ordinary identity icon in the
+  title bar/taskbar button/Explorer is unrelated and was simply missing (the app showed the stock
+  WinForms icon). Added via `<ApplicationIcon>` + an `<EmbeddedResource>` in the `.csproj` (§6) and
+  `MainForm.Icon` assigned from the embedded stream at construction (§10.3). The animated tray
+  `NotifyIcon` (§10.1) is untouched.
+- **2026-09-12 — S14: the app icon is sourced from Microsoft's Fluent System Icons, not hand-drawn
+  geometry.** An initial pass drew the icon from scratch with GDI+ (case circle, crown, hand,
+  pivot dot). The repo owner's later steer — prefer a free, properly-licensed asset over
+  from-scratch artwork when a good one exists — led to replacing that with Microsoft's
+  **Fluent System Icons** (`microsoft/fluentui-system-icons`, MIT License): there is no icon named
+  "Stopwatch" in that set, but the **`Timer` (filled)** variant is exactly the classic stopwatch
+  silhouette (case, crown, side button, hand as a negative-space cutout via opposite-winding
+  subpaths). The `16/20/24/32/48` px source SVGs are vendored verbatim under
+  `tools/IconGen/vendor/fluent-timer/` alongside the upstream `LICENSE` and a `NOTICE.md`
+  (source URL, fetch date, and the one modification made: recoloring the shipped `#212121` to
+  `Palette.LapButton.Base`, `#2563EB`) — vendored rather than fetched at generation time, so the
+  build is reproducible and the license position is explicit rather than implicit in a network
+  call. `tools/IconGen/Program.cs` loads each vendored SVG with the **`Svg`** NuGet package
+  (SVG.NET, MIT), recolors every paintable node, and rasterizes with `SvgDocument.Draw(w, h)` at
+  every size Explorer/the taskbar actually request, each rendered from the vendored source closest
+  at or above that target (Microsoft's own smaller variants are hand-re-hinted and must not be
+  downscaled from the 48px source). The generator stays outside `StopwatchApp.slnx` (see the
+  layout tree, §3) so it is not a build/test gate; the committed `.ico` is the artifact, the
+  generator exists only so it is re-derivable rather than opaque binary.
+- **2026-09-12 — S14a: shipped S14 with the stopwatch card rendering as an empty strip and record
+  rows clipped, despite a full green gate (format/zero-warning build/74 tests/a launch smoke test).**
+  Root causes, found only once the repo owner actually looked at the running window:
+  - **A `Dock = DockStyle.Fill` child inside an `AutoSize` parent contributes nothing to that
+    parent's preferred size — WinForms deliberately never lets it, since "fill whatever's left"
+    and "compute my own size from my children" are circular.** `StopwatchControl`'s interior
+    `contentLayout` (chrono/note/button-row) was `Dock.Fill` inside the card, which is itself
+    `AutoSize` + `GrowAndShrink` (the pairing from the entry above) — so the card's preferred
+    height collapsed to just its own `Padding` (32px), matching the empty strip in the repo owner's
+    screenshot almost exactly. Fix: `Dock.Top` instead of `Fill` — still spans the parent's full
+    width, but (unlike `Fill`) contributes a real preferred height. This is now this repo's rule:
+    **inside a `UserControl`/`Panel` (the plain `DefaultLayoutEngine`, not `TableLayoutPanel`) whose
+    own `AutoSize` must reflect its content, no direct child may be `Dock.Fill` — use `Dock.Top` (or
+    `Bottom`/`Left`/`Right`) and give that child its own `AutoSize`/`AutoSizeMode.GrowAndShrink` if
+    it also needs to size itself from ITS OWN children** (`RecordsListControl`'s internal `layout`
+    needed the identical fix — see the S14b entry below). This does **not** apply to a
+    `TableLayoutPanel`'s own `AutoSize`-`RowStyle`: that panel's row-sizing algorithm queries each
+    cell control's `GetPreferredSize()` directly, independent of that control's own `Dock`, and only
+    applies `Dock` afterward to fit the control within the row's now-determined bounds — which is
+    why `MainForm`'s outer `TableLayoutPanel` rows can safely hold `Dock.Fill` children
+    (`_stopwatchControl`, `_recordsListControl`) as long as each child itself correctly reports a
+    real preferred size via its own `AutoSize`.
+  - **`AutoScaleMode.Dpi` alone does not make a hard-coded `ClientSize` DPI-correct.** The window
+    stayed at exactly `632 × 680` **device** pixels regardless of the OS scale setting (confirmed:
+    the screenshot's outer window was `634 × 719` ≈ `632 + 2px FixedSingle border`, at the repo
+    owner's 125% / 120dpi display) while the type-scale fonts (`Typography.cs`, point-sized)
+    rendered genuinely larger at that DPI — text growing inside a window that didn't, clipping the
+    widest lap row. Fix: `MainForm.FixedClientSize` is now explicitly documented and treated as
+    **96dpi design pixels**, never assigned to `ClientSize` directly — `ComputeFixedClientSize(int
+    deviceDpi)` scales it by `deviceDpi / 96f` first (`ScaleToDpi`), and `RequiredClientWidth`
+    rebuilds the mono row font at an equivalent pre-scaled point size before measuring, since
+    `TextRenderer.MeasureText(text, font)` measures a `Font`'s point size against a fixed 96dpi
+    baseline regardless of the caller's actual DPI context. `ClampToWorkingArea` now documents that
+    its input must already be in device pixels for the target DPI, since `Screen.WorkingArea` always
+    is. Both the constructor and `OnDpiChanged` route through the same `ComputeFixedClientSize`.
+  - **The §4 gate cannot see layout or DPI defects, and a DPI-unaware test host silently validates
+    only the 96dpi case.** `MainFormLayoutTests`' original width assertion measured with the bare
+    `TextRenderer.MeasureText(string, Font)` overload — calibrated to 96dpi regardless of the host
+    machine's real display — so it passed on the exact build that clipped rows at 125% in the real
+    app. The test now calls the production `MainForm.RequiredClientWidth(Font, int deviceDpi)`
+    directly (a pure function) across 96/120/144/168dpi, using the same "rebuild the font at a
+    pre-scaled size" technique the production code uses, so a regression to DPI-blind measurement
+    fails at every non-96 data point. **Reinforces the 2026-09-11 rule (above) that GUI/visual
+    defects need a human looking at the actual window** — a green gate, including passing layout
+    tests, is not sufficient evidence for a change that touches rendering or sizing.
+- **2026-09-12 — S14b: window position memory (S11b, §10.6) reversed at the repo owner's explicit
+  request — "you added a functionality that i didn't ask for it."** The window now always centers
+  on every Open transition; `MainForm.PositionWindowAsync`/`CurrentPersistableLocation`/
+  `SaveWindowPositionIfChangedAsync`/`_shownAtLocation` are deleted, and `HideToTray`/`ExitApplication`
+  no longer persist anything. Per this file's own "never edit a shipped migration" rule (§9),
+  `IStopwatchStore.SaveWindowPositionAsync`/`LoadWindowPositionAsync`, `Database`'s implementation,
+  and migration 2 (`window_position` table, `SchemaMigrations.cs`) are **kept, not removed** — a
+  released migration is not retroactively deleted even though nothing calls it anymore.
+  `DatabaseTests`' four window-position tests are unchanged and still pass, since the persistence
+  layer itself still works correctly; it is simply unused application behavior now, not broken code.
+- **2026-09-12 — S14b: records display capped to the most recent 5 (`RecordsListControl.MaxDisplayedRecords`),
+  at the repo owner's explicit request, ahead of a planned (out-of-scope-for-now) history/records-manager
+  window that will offer the full list with edit/delete.** `UpdateRecords` now iterates
+  `records.Take(MaxDisplayedRecords)` while `hasRecords`/`Clear-All`'s visibility still read the
+  *uncapped* `records.Count`, so Clear-All still clears everything even though only 5 rows show.
+  This is also what fixes "the window is too tall": `RecordsListControl`'s records section
+  previously used `Dock.Fill` inside a `Percent(100)` `MainForm` row, stretching to fill whatever
+  height the fixed window had left over *regardless of how many records actually existed* — a fresh
+  app with one record showed a card with ~9 rows of dead space below it. Capping the count let the
+  records host get a small, *known* fixed height (`MaxDisplayedRecords * ItemHeight`, the same
+  `ItemHeight` formula `ConfigureRowRendering` already computes) instead. Making that height
+  actually count required the identical `Dock.Fill`-inside-`AutoSize`-parent fix from the S14a entry
+  above, applied one level deeper: `RecordsListControl` itself gained `AutoSize` +
+  `AutoSizeMode.GrowAndShrink` (it previously had neither), its internal `layout` TableLayoutPanel
+  changed from `Dock.Fill` to `Dock.Top` (+ its own `AutoSize`/`GrowAndShrink`), and the
+  `recordsHost` panel changed from `Dock.Fill`/`Percent(100)` to `Dock.Top` with an explicit
+  `Height`. `MainForm`'s own root row for `_recordsListControl` changed from `RowStyle.Percent(100)`
+  to `RowStyle.AutoSize` to match — its `Dock.Fill` usage there stays safe per the
+  `TableLayoutPanel`-is-Dock-agnostic rule from the S14a entry.
+- **2026-09-12 — S14b: `MainForm.FixedClientSize`'s height (632 × 680 → 632 × 728) was re-derived by
+  directly measuring the real, fixed-up control tree, not by hand arithmetic.** Given two consecutive
+  hand-derived-number mistakes already this session (the row-width template assumption, and the
+  DPI-scaling gap above), a throwaway console harness (outside the repo, in the scratch directory)
+  referenced `StopwatchApp.csproj`, constructed real `StopwatchControl`/`RecordsListControl`
+  instances, forced the worst-case simultaneous visibility (a restored paused session's "Resumed
+  from a pause" note; 3 laps; 5 records; "Clear All Records" visible), and read
+  `Control.GetPreferredSize()` directly: `StopwatchControl` = 183px, `RecordsListControl` = 468px, a
+  footer label built the same way as `MainForm`'s = 25px. Total = root `Padding` (24) + each card's
+  measured height plus its default `Control.Margin` (183+6, 468+6, 25+6) = 718px design pixels;
+  rounded up to **728** for a small safety margin, the same practice as the S14 width derivation's
+  11px slack. **This is genuinely taller than the old 680 in the strict worst case** — 680 was
+  implicitly under-provisioned to fit only ~4 records when every optional panel was visible at once,
+  whereas 728 guarantees the now-fixed 5. The perceptible fix the repo owner asked for is not a
+  smaller worst-case number; it is that the *common* case (no resumed note, no laps, a handful of
+  records) no longer renders a records card stretched with several rows of dead space, which the
+  `Dock.Top`/fixed-height change above eliminates regardless of the worst-case total. Flagged here
+  rather than silently resolved: if a strictly smaller absolute height is preferred over guaranteeing
+  the rare "note + full laps + 5 records + Clear-All" combination never crowds the footer, that is a
+  product trade-off for the repo owner to make, not an engineering default to assume.
+- **2026-09-12 — S14c: added a disabled `Manage Records` placeholder button, sized into
+  `FixedClientSize` now, ahead of the planned records-manager window.** Repo owner's request:
+  "calculate to show exactly 5 records and some space for the button of the records manager." Asked
+  and confirmed the button should render (not be pure blank space) but stay `Enabled = false` until
+  that window actually exists — matches this file's own convention of a real, testable, always-true
+  state rather than a TODO comment. Placed beside `Clear All Records` in a `FlowLayoutPanel`
+  (`actionButtonsRow`), always visible regardless of whether any records exist (unlike `Clear-All`,
+  which is gated on `Records.Count > 0`) since an empty manager should still be reachable.
+  **`FlowLayoutPanel.WrapContents` must be explicitly `false`.** Left at its default (`true`) while
+  re-measuring the height budget (same harness technique as the S14b entry above), the two-button row
+  silently wrapped to two lines during the `AutoSize` preferred-size query — even though the real
+  fixed-width window has comfortable room for both on one line — inflating the measured height by a
+  whole extra button row (468px → 518px) before this was caught and fixed. This is the same class of
+  "a control's `GetPreferredSize()` behaves differently, and can be flatly wrong, when queried
+  outside its real, width-constrained parent" as the S14a `Dock.Fill`/`AutoSize` entry — add it to
+  the same category of gotcha to check for whenever composing multiple buttons in one row. With the
+  fix, re-measuring the full worst case (resumed note, 3 laps, 5 records, `Clear All Records` +
+  `Manage Records` both visible) gave `RecordsListControl` = 474px (was 468px pre-button — the two
+  side-by-side buttons share one row's height, not two), for a new total of 724px design pixels;
+  rounded up to **732** (was 728) for the same small safety margin as S14b. `MainFormLayoutTests`
+  needed no change — it only pins the width derivation, which this did not touch.

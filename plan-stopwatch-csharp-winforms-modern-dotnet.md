@@ -523,6 +523,10 @@ log for anything discovered or decided while executing a stage — check it alon
 | S11c Tray icon: large minutes under an hour | ✅ Done | 2026-09-11 | Large-MM layout drawn by measured point, not centered RectangleF; `TrayIconLayout` tracked explicitly in the dirty-check tuple; follow-up: stacked layout's hours row is not zero-padded (`2`, not `02`) — a tray-icon-only exception (see `AGENTS.md` §17, dated 2026-09-11) |
 | S12 Theme/DPI/version polish | ✅ Done | 2026-09-11 | `Application.IsDarkModeEnabled` + `SystemEvents.UserPreferenceChanged` (`UserPreferenceCategory.General`) wired in `MainForm`; `DpiChanged` forces `TrayIconService.RefreshIcon()`; version footer label reads `Application.ProductVersion` (see `AGENTS.md` §17, dated 2026-09-11) |
 | S13 Publish | 🟡 Published, manual re-verification pending | 2026-09-11 | `dotnet publish -c Release -r win-x64 --self-contained false` succeeded; output at `StopwatchApp/bin/x64/Release/net10.0-windows/win-x64/publish/` launches and stays responsive (process-level smoke test only — no automated GUI driver was safe/reliable in this environment, see `AGENTS.md` §17, dated 2026-09-11). The full §6 re-verification this stage's done-when requires is still outstanding — needs a human pass |
+| S14 Window layout, type scale, and app icon | ✅ Done (superseded by S14a/S14b below) | 2026-09-12 | Fixed `FixedSingle` window with a working-area clamp; `Theme/Typography.cs` type scale (48px display/16px body/12px caption) on Cascadia Mono/Consolas; `ResizeRedraw` fix for the stale-border ghosting; `Anchor.None`-in-`TableLayoutPanel` centering; app icon sourced from Microsoft's Fluent System Icons "Timer" (filled), vendored + recolored via SVG.NET (`tools/IconGen`), embedded and wired via `<ApplicationIcon>`; `<Version>` bumped to `1.1.0` (see `AGENTS.md` §17, dated 2026-09-12). Shipped with two regressions the gate didn't catch — see S14a |
+| S14a Fix S14 layout regressions | ✅ Done | 2026-09-12 | The repo owner reported "nothing gets rendered": the stopwatch card had collapsed to an empty strip and record rows clipped. Root causes: `Dock.Fill` inside an `AutoSize` parent contributes nothing to that parent's preferred size (the card's interior layout collapsed to just its `Padding`); `AutoScaleMode.Dpi` alone doesn't scale a hard-coded `ClientSize` — the window stayed at literal 96dpi device pixels while the point-sized type-scale fonts rendered at the real 125% DPI. Fixed via `Dock.Top` for the interior layout, and `MainForm.ComputeFixedClientSize`/`RequiredClientWidth` explicitly scaling design-pixel literals to the live device DPI before assignment; `MainFormLayoutTests` reworked to test `RequiredClientWidth` as a pure function across 96/120/144/168dpi instead of the original DPI-blind measurement that had passed on the broken build (see `AGENTS.md` §17, dated 2026-09-12) |
+| S14b Center-always + records cap + height recompute | ✅ Done | 2026-09-12 | Two more repo-owner corrections after visually checking S14a's fix: (1) window position memory (S11b) reversed — "you added a functionality that i didn't ask for it" — the window now always centers, with the persistence plumbing kept (not removed) per the "never edit a shipped migration" rule but no longer called; (2) records display capped to the 5 most recent (`RecordsListControl.MaxDisplayedRecords`), which is also the actual fix for "the height of the app is too much" (the records card no longer stretches to fill leftover space regardless of content). `MainForm.FixedClientSize`'s height (632×680 → 632×728) was re-derived by directly measuring the real, fixed-up control tree in a throwaway harness rather than by hand arithmetic, given two prior hand-derived-number mistakes this session (see `AGENTS.md` §17, dated 2026-09-12) |
+| S14c Manage Records placeholder + height recompute | ✅ Done | 2026-09-12 | Repo owner: "fix the height of the tool, calculate to show exactly 5 records and some space for the button of the records manager." Added a `Manage Records` button beside `Clear All Records` — always visible, `Enabled = false` until the planned records-manager window exists — and re-measured `MainForm.FixedClientSize`'s height with the same harness technique as S14b: 632×728 → 632×732. Along the way, found and fixed `FlowLayoutPanel.WrapContents` defaulting to `true`, which silently wrapped the two-button row to two lines during the `AutoSize` preferred-size query and inflated the first re-measurement by a spurious extra button row (see `AGENTS.md` §17, dated 2026-09-12). The §4 manual/tray/DPI verification passes are still outstanding — needs a human pass |
 
 Project layout (unchanged by staging — every stage below adds to this tree):
 
@@ -1212,6 +1216,101 @@ part of a parallel wave.
   bullet in §6 against the shipped artifact.
 - **Out of scope:** installer/MSIX packaging, code signing (both explicitly out of scope per §1).
 
+### S14 — Window layout, type scale, and app icon
+
+- **Depends on:** S13 (post-hoc: a pass over the published/running window surfaced five
+  presentation defects the original roadmap never covered — see the plan and `AGENTS.md` §17,
+  dated 2026-09-12, for the full defect list and derivation).
+- **Files:** `Theme/Typography.cs` (new); `MainForm.cs`, `Controls/StopwatchControl.cs`,
+  `Controls/RecordsListControl.cs`, `Controls/ClearRecordsDialog.cs` (edited);
+  `Assets/app.ico` + `StopwatchApp.csproj` (`<ApplicationIcon>`, `<EmbeddedResource>`,
+  `<Version>` → `1.1.0`); `tools/IconGen/` (new, outside `StopwatchApp.slnx`, not a build/test
+  gate — regenerates the icon from vendored Fluent System Icons source, see its own `README.md`
+  and `AGENTS.md` §17).
+- **Build:** the standard `AGENTS.md` §4 gate — `csharpier format .` → `csharpier check .` →
+  `dotnet build -c Release` (zero warnings) → `dotnet test`.
+- **Public interface:** `Typography`'s four `Create*Font()` factories plus
+  `DisplayPointSize`/`BodyPointSize`/`CaptionPointSize`/`MonospaceFamilyName`, all documented as
+  caller-owns-disposal. `MainForm.FixedClientSize` is `internal` (not `private`) specifically so
+  `MainFormLayoutTests` can pin the row-width test to the real constant.
+- **Done when:** the chrono and button row are centered and re-center as the button set changes
+  state; the chrono, buttons, and record/lap rows render at 48px/16px/16px; no stale-border repaint
+  artifact behind either card on resize/theme-flip; the window is fixed-size
+  (`FormBorderStyle.FixedSingle`, no maximize box), clamped to the working area at construction and
+  on every `OnDpiChanged`; the stopwatch icon (Fluent "Timer" filled, recolored) shows in the title
+  bar, taskbar button, and built `.exe`; every `AGENTS.md` §4 gate step passes; the tray-icon
+  regression checklist (§4 step 5) still holds since `MainForm` changed.
+- **Owns acceptance criteria:** the new `[S14]` bullet in §6 below; supersedes the "resizing alone
+  never triggers a save" clause of the `[S11b]` bullet, which is now vacuous (there is no resize).
+- **Out of scope:** `TrayIconService`'s rendering, layout selection, and dark-mode tint (untouched);
+  the `📅 … ⏱ … ⏳ …` row templates themselves (only the font they render in changed); any
+  state-machine, persistence, or shortcut behavior; motion/animation (ruled out since S11a).
+
+### S14a — Fix S14 layout regressions (collapsed card + DPI overflow)
+
+- **Depends on:** S14. A full green gate (`csharpier`, zero-warning build, 74 tests, a launch smoke
+  test) shipped a build where the repo owner reported "nothing gets rendered" — the stopwatch card
+  was an empty strip and record rows clipped to `Dur...`. None of the gate steps can observe layout.
+- **Files:** `Controls/StopwatchControl.cs` (interior `contentLayout`: `Dock.Fill` → `Dock.Top`),
+  `MainForm.cs` (`AutoScaleDimensions` added; `ComputeFixedClientSize`/`ScaleToDpi`/
+  `RequiredClientWidth` added — design-pixel literals now explicitly scaled to the live device DPI
+  before assignment), `StopwatchApp.Tests/MainFormLayoutTests.cs` (rewritten to test
+  `RequiredClientWidth` as a pure function across 96/120/144/168dpi).
+- **Build:** the standard `AGENTS.md` §4 gate, plus a mandatory human visual pass — see `AGENTS.md`
+  §17's S14a entry for why the gate cannot substitute for this.
+- **Public interface:** `MainForm.RequiredClientWidth(Font, int deviceDpi)` — `internal static`,
+  covered directly by `MainFormLayoutTests`.
+- **Done when:** the stopwatch card shows its full content (not an empty strip) and record rows
+  render without `EndEllipsis` truncation at the repo owner's actual display scaling (125%),
+  confirmed by the repo owner looking at the running window, not by a green gate alone.
+- **Owns acceptance criteria:** none new — a bug-fix for `[S14]`'s own bullet, not an additional one.
+- **Out of scope:** anything not already in S14's scope.
+
+### S14b — Always-centered window, records display cap, height recompute
+
+- **Depends on:** S14a. After confirming the S14a fix visually, the repo owner gave two more pieces
+  of feedback: (1) "you added a functionality that i didn't ask for it... on initial position it
+  must always stay at the center" (S11b's window position memory); (2) "the height of the app is
+  too much, consider... only the last 5 records will be shown so make your calculations based on
+  that."
+- **Files:** `MainForm.cs` (`PositionWindowAsync`/`CurrentPersistableLocation`/
+  `SaveWindowPositionIfChangedAsync`/`_shownAtLocation` deleted; `HideToTray`/`ExitApplication` no
+  longer persist; `RestoreWindow` always calls `PositionWindowCentered()`; `FixedClientSize.Height`
+  632×680 → 632×728), `Controls/RecordsListControl.cs` (`MaxDisplayedRecords = 5`; `UpdateRecords`
+  now `records.Take(MaxDisplayedRecords)`; `AutoSize`/`AutoSizeMode.GrowAndShrink` added to the
+  control itself; internal `layout` and `recordsHost` changed from `Dock.Fill` to `Dock.Top` with a
+  known fixed height).
+- **Build:** the standard `AGENTS.md` §4 gate, plus the same human visual pass S14a required.
+- **Public interface:** none changed (`IStopwatchStore`'s window-position methods are kept per the
+  "never edit a shipped migration" rule, §9, but are no longer called by any application code).
+- **Done when:** the window always opens centered regardless of any prior drag, on every Open
+  transition; the records panel never lists more than 5 rows regardless of how many are persisted,
+  while "Clear All Records" still clears every persisted record; the fixed window fits the worst
+  case (resumed note + 3 laps + 5 records + Clear-All) with no clipping; every `AGENTS.md` §4 gate
+  step passes; the tray-icon regression checklist still holds since `MainForm` changed again.
+- **Owns acceptance criteria:** rewrites the `[S11b]` bullet in §6 below (drag-to-persist behavior
+  removed entirely, not just its resize clause) and adds a new `[S14b]` bullet for the records cap.
+- **Out of scope:** the planned history/records-manager window (view/edit/delete every record) —
+  explicitly deferred by the repo owner; the laps panel's own 3-row cap (unchanged, not part of this
+  request); `IStopwatchStore`/`Database`/the `window_position` migration (kept, not removed).
+
+### S14c — Manage Records placeholder + height recompute
+
+- **Depends on:** S14b. Repo owner: "fix the height of the tool, calculate to show exactly 5
+  records and some space for the button of the records manager." Clarified via `AskUserQuestion`
+  that the button should be visible but disabled, not pure blank space or a fully wired no-op.
+- **Files:** `Controls/RecordsListControl.cs` (`_manageRecordsButton` added, `Enabled = false`,
+  always visible; wrapped with `_clearAllButton` in a new `actionButtonsRow` `FlowLayoutPanel` with
+  `WrapContents = false`), `MainForm.cs` (`FixedClientSize.Height` 632×728 → 632×732).
+- **Build:** the standard `AGENTS.md` §4 gate, plus the same human visual pass S14a/S14b required.
+- **Public interface:** none changed.
+- **Done when:** `Manage Records` renders beside `Clear All Records`, always visible, always
+  disabled, never wraps to its own line; the fixed window still fits the worst case (resumed note +
+  3 laps + 5 records + both buttons) with no clipping; every `AGENTS.md` §4 gate step passes.
+- **Owns acceptance criteria:** adds a new `[S14c]` bullet in §6 below.
+- **Out of scope:** the records-manager window itself and any click behavior for the new button —
+  it is a reserved, disabled placeholder only.
+
 ---
 
 ## 6. Acceptance criteria
@@ -1250,13 +1349,26 @@ a running window (tray, hotkeys). Each bullet is tagged with the §5 stage that 
 - **[S11c]** Tray icon layout: while elapsed hours == 0, the icon shows large minute-only digits;
   once elapsed reaches 1 hour, it switches to the stacked hours-over-minutes layout at exactly that
   boundary; the tooltip's full `HH:MM:SS` text is unaffected by which layout is showing.
-- **[S11b]** Window position: with no saved position, the window opens centered on the primary
-  screen; after being dragged and then hidden-to-tray/exited, it reopens at that exact position
-  instead of centering; a saved position that no longer intersects any connected screen falls back
-  to centering rather than opening off-screen; resizing alone (no drag) never triggers a save.
+- **[S11b→S14b]** Window position: the window always opens centered on the primary screen — first
+  launch, tray Open/double-click, single-instance activation, and restore-from-minimize alike. It
+  never remembers or restores a previous position (reversed by S14b; the original "remembers the
+  last dragged position" behavior no longer applies).
+- **[S14]** Window/layout: the chrono and button row are centered and re-center as the button set
+  changes; type renders at 48px display/16px body/16px mono-body/12px caption; no stale-border
+  ghosting appears behind either card while resizing or theme-flipping; the frame cannot be
+  resized (no maximize box, no edge/corner drag) and stays clamped inside the working area at
+  100–175% DPI; the stopwatch icon (not the stock WinForms icon) shows in the title bar, taskbar
+  button, and built `.exe`.
+- **[S14b]** Records display cap: only the 5 most recent records are listed in the main window
+  regardless of how many are persisted; "Clear All Records" is visible based on the true total (not
+  the capped display count) and clears every persisted record when confirmed.
+- **[S14c]** Manage Records placeholder: a `Manage Records` button renders beside `Clear All
+  Records`, always visible, always disabled (there is no records-manager window yet), and never
+  wraps to its own line.
 
-`[S13]` re-verifies every bullet above, once, against the published build — it owns none of them
-individually but is the final gate that confirms none regressed in packaging.
+`[S13]` re-verifies every bullet above except `[S14]`/`[S14b]`/`[S14c]` (which postdate it), once,
+against the published build — it owns none of them individually but is the final gate that
+confirms none regressed in packaging.
 
 ---
 
