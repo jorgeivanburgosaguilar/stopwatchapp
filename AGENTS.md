@@ -52,7 +52,8 @@ StopwatchApp/
   Program.cs               single-instance mutex, ApplicationConfiguration.Initialize, SetColorMode, Application.Run
   MainForm.cs              thin orchestrator — wires controls and services, no business logic
   Assets/
-    app.ico                window/taskbar/.exe icon (§10.3), embedded resource — see tools/IconGen
+    app.ico                window/taskbar/.exe icon (§10.3), embedded resource
+    NOTICE.md              Fluent System Icons attribution and license for app.ico
   Controls/                rendering + event wiring only, no untestable business logic
     StopwatchControl.cs    timer state (§8) + control row (§8.5) + keyboard shortcuts (§10.4)
     StopwatchShortcut.cs   the three window-scoped shortcuts (§10.4)
@@ -76,8 +77,6 @@ StopwatchApp/
     Palette.cs             light/dark color tables (§11)
     Typography.cs          type scale + monospace font resolution (§11)
 StopwatchApp.Tests/        xUnit — formatters, transitions, database round-trip
-tools/IconGen/             one-off generator for StopwatchApp/Assets/app.ico (§17, S14); not in
-                            StopwatchApp.slnx, not a build/test gate — see its own README.md
 ```
 
 Controls hold rendering and event wiring only — no logic that can't be tested outside a form.
@@ -1706,18 +1705,9 @@ that now carries the actual rule.
   **Fluent System Icons** (`microsoft/fluentui-system-icons`, MIT License): there is no icon named
   "Stopwatch" in that set, but the **`Timer` (filled)** variant is exactly the classic stopwatch
   silhouette (case, crown, side button, hand as a negative-space cutout via opposite-winding
-  subpaths). The `16/20/24/32/48` px source SVGs are vendored verbatim under
-  `tools/IconGen/vendor/fluent-timer/` alongside the upstream `LICENSE` and a `NOTICE.md`
-  (source URL, fetch date, and the one modification made: recoloring the shipped `#212121` to
-  `Palette.LapButton.Base`, `#2563EB`) — vendored rather than fetched at generation time, so the
-  build is reproducible and the license position is explicit rather than implicit in a network
-  call. `tools/IconGen/Program.cs` loads each vendored SVG with the **`Svg`** NuGet package
-  (SVG.NET, MIT), recolors every paintable node, and rasterizes with `SvgDocument.Draw(w, h)` at
-  every size Explorer/the taskbar actually request, each rendered from the vendored source closest
-  at or above that target (Microsoft's own smaller variants are hand-re-hinted and must not be
-  downscaled from the 48px source). The generator stays outside `StopwatchApp.slnx` (see the
-  layout tree, §3) so it is not a build/test gate; the committed `.ico` is the artifact, the
-  generator exists only so it is re-derivable rather than opaque binary.
+  subpaths). The shipped, recolored icon is a committed binary asset; its attribution and MIT
+  license are retained in `StopwatchApp/Assets/NOTICE.md`. The one-off generator and its vendored
+  SVG inputs were removed on 2026-09-13 because icon regeneration is not an ongoing project need.
 - **2026-09-12 — S14a: shipped S14 with the stopwatch card rendering as an empty strip and record
   rows clipped, despite a full green gate (format/zero-warning build/74 tests/a launch smoke test).**
   Root causes, found only once the repo owner actually looked at the running window:

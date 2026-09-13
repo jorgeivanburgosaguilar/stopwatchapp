@@ -4,7 +4,7 @@ namespace StopwatchApp.Tests;
 /// Covers the embedded <c>Assets/app.ico</c> resource (S14, AGENTS.md §17) — a cheap guard against a
 /// truncated or accidentally single-size ICO being committed, which would still load via
 /// <see cref="MainForm"/>'s <c>LoadAppIcon</c> but render badly at taskbar/title-bar size. Parses the
-/// ICONDIR/ICONDIRENTRY header directly (the same layout <c>tools/IconGen</c> writes) rather than
+/// ICONDIR/ICONDIRENTRY header directly rather than
 /// going through <see cref="Icon"/>, whose size-matching constructors silently rescale to the
 /// requested size instead of reporting what is actually present.
 /// </summary>
@@ -46,8 +46,7 @@ public sealed class AppIconTests
   /// <summary>
   /// Reads the ICONDIR header and each ICONDIRENTRY's declared width/height, without going through
   /// <see cref="Icon"/>'s fuzzy size matching. Byte value <c>0</c> encodes <c>256</c> per the ICO
-  /// format (a single byte cannot hold 256 directly) — the same encoding <c>IconGen.WriteIcoFile</c>
-  /// writes.
+  /// format (a single byte cannot hold 256 directly).
   /// </summary>
   private static List<(int Width, int Height)> ReadDeclaredIconSizes()
   {

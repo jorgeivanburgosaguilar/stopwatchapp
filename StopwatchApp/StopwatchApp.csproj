@@ -30,7 +30,7 @@
 
     <!-- Explorer, the pinned taskbar entry, and the published .exe read this; MainForm separately
          loads the EmbeddedResource below to set the live title-bar/taskbar-button icon (S14,
-         AGENTS.md §17) — see StopwatchApp/Assets/README or tools/IconGen for provenance. -->
+         AGENTS.md §17) — see Assets/NOTICE.md for provenance. -->
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>
 
     <!-- Analyzers as real build gates -->
