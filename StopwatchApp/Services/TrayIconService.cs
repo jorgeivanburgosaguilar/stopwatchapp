@@ -50,7 +50,8 @@ public sealed partial class TrayIconService : IDisposable
   /// The stopwatch control the tray menu's transition items act on and whose state
   /// <see cref="UpdateDisplay"/> renders.
   /// </param>
-  /// <param name="onOpen">Invoked when the user opens the tray icon (double-click or the <c>Open</c> menu item).</param>
+  /// <param name="onOpen">Invoked when the user opens the tray icon (single left-click or the
+  /// <c>Open</c> menu item).</param>
   /// <param name="onExit">Invoked when the user selects the tray menu's <c>Exit</c> item.</param>
   public TrayIconService(StopwatchControl control, Action onOpen, Action onExit)
   {
@@ -60,7 +61,13 @@ public sealed partial class TrayIconService : IDisposable
 
     _contextMenu = BuildBaseMenu();
     _notifyIcon = new NotifyIcon { ContextMenuStrip = _contextMenu, Visible = true };
-    _notifyIcon.DoubleClick += (_, _) => _onOpen();
+    _notifyIcon.MouseClick += (_, e) =>
+    {
+      if (ShouldOpen(e.Button))
+      {
+        _onOpen();
+      }
+    };
 
     RebuildStateMenuItems(TrayState.Idle);
     UpdateDisplay(elapsedMs: 0, running: false, paused: false);
@@ -166,6 +173,14 @@ public sealed partial class TrayIconService : IDisposable
   /// true value. Internal (not private) so it can be unit tested without a real GDI+ handle.
   /// </summary>
   internal static string FormatHourText(int hours) => hours.ToString(CultureInfo.InvariantCulture);
+
+  /// <summary>
+  /// Returns whether a tray-icon mouse click should open the main window. Only a single left-click
+  /// opens it; right-click remains exclusively available for the context menu. Internal so the
+  /// input rule can be tested without constructing a native <see cref="NotifyIcon"/>.
+  /// </summary>
+  /// <param name="button">The mouse button reported by <see cref="NotifyIcon.MouseClick"/>.</param>
+  internal static bool ShouldOpen(MouseButtons button) => button == MouseButtons.Left;
 
   /// <inheritdoc />
   public void Dispose()

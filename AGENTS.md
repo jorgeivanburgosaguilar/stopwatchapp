@@ -332,7 +332,7 @@ Keep these set — they make lint and analyzers run on every `dotnet build` and 
     <ImplicitUsings>enable</ImplicitUsings>
     <Platforms>x64</Platforms>
     <Platform>x64</Platform>
-    <Version>1.1.0</Version>
+    <Version>1.3.0</Version>
 
     <!-- Required by LibraryImportAttribute-based source-generated interop (SYSLIB1062); see
          TrayIconService's DestroyIcon P/Invoke and §17. -->
@@ -379,7 +379,7 @@ Keep these set — they make lint and analyzers run on every `dotnet build` and 
   demotes only `CAxxxx` code-quality rules, not compiler warnings. Any suppression must be
   narrow — a justified `[SuppressMessage]` attribute or a scoped
   `#pragma warning disable ... / restore ...` pair — **never** a blanket `<NoWarn>` list.
-- The version lives in exactly one place (`<Version>` above, now `1.1.0`) and must also be
+- The version lives in exactly one place (`<Version>` above, now `1.3.0`) and must also be
   surfaced in the app's UI (e.g. a footer or an About entry in the tray menu). Bump it in the same
   change as any user-visible behavior change.
 - **CSharpier vs. these analyzers:** whitespace/formatting is owned entirely by CSharpier (§4), not
@@ -646,7 +646,9 @@ Rules:
   header-row buttons and `ClearRecordsDialog`'s confirm/cancel buttons can reuse the same rounded,
   palette-driven paint routine — with a `Glyph?` (nullable) glyph for a text-only button, and a
   muted, palette-driven `Enabled = false` visual state (blended toward `Palette.CardBackground`/
-  `Palette.MutedText`) instead of the stock gray.
+  `Palette.MutedText`) instead of the stock gray. S16 centers every label on the full button axis;
+  icon-bearing buttons reserve the glyph lane on both sides so their label remains centered without
+  overlapping the glyph.
 - A confirm dialog, titled `Clear All Records`, body text
   `Are you sure you want to clear all records? This action cannot be undone.`, buttons `Cancel` and
   `Clear All`, both the extracted `GlyphButton` (S15, §17) — `Clear All` red (`Palette.StopButton`),
@@ -819,8 +821,9 @@ hours, not run state.
 ### 10.2 Tray context menu
 
 Order: `Open`, separator, the state-appropriate action(s) from §8.5 (`Start`/`Pause`/`Continue`/
-`Lap`/`Stop`), separator, `Exit`. Double-clicking the tray icon opens (restores and activates) the
-main window. `Exit` is the only way to quit the application.
+`Lap`/`Stop`), separator, `Exit`. Single left-clicking the tray icon opens (restores and activates)
+the main window; right-click remains reserved for the context menu. `Exit` is the only way to quit
+the application.
 
 ### 10.3 Window behavior
 
@@ -902,7 +905,7 @@ handle. A direct, title-targeted `FindWindow` lookup is not subject to that excl
 **The window always centers itself and never remembers a position.** Added post-hoc at the repo
 owner's explicit request dated 2026-09-11, then reversed at the repo owner's explicit request dated
 2026-09-12 (see §17) — the app never should have remembered a position at all. Every "Open"
-transition (first launch, tray Open/double-click, single-instance activation, restore-from-minimize)
+transition (first launch, tray Open/single left-click, single-instance activation, restore-from-minimize)
 calls the same `PositionWindowCentered()`, unconditionally, with no history or saved state involved.
 
 The `IStopwatchStore.SaveWindowPositionAsync`/`LoadWindowPositionAsync` methods, `Database`'s
@@ -1017,7 +1020,7 @@ xUnit, in a `StopwatchApp.Tests` project.
 - Minimize-to-tray (S15, §10.3/§17 — fixes a regression where minimize left a taskbar button, and
   closing while minimized reopened the window still minimized): minimizing via the title-bar button
   removes the taskbar button exactly like Close does, and every "Open" transition (tray Open/
-  double-click, single-instance activation) always restores the window in its normal (not minimized)
+  single left-click, single-instance activation) always restores the window in its normal (not minimized)
   state, regardless of whether it was minimized when last hidden.
 - Tray icon layout: while elapsed hours == 0, the icon shows large minute-only digits; once elapsed
   reaches 1 hour, it switches to the stacked hours-over-minutes layout at exactly that boundary; the
@@ -1026,7 +1029,7 @@ xUnit, in a `StopwatchApp.Tests` project.
   laps, and `Enter` stops, matching the mouse-click behavior of the same buttons; none of the three
   fires while the window is hidden to the tray or while `ClearRecordsDialog` is open.
 - Window position (S14b, §10.6): the window always opens centered on the primary screen — on first
-  launch, tray Open/double-click, single-instance activation, and restore-from-minimize alike. It
+  launch, tray Open/single left-click, single-instance activation, and restore-from-minimize alike. It
   never remembers or restores a previous position, and cannot be dragged-then-resized since the frame
   itself is non-resizable (§10.3).
 - Window frame and icon (S14, §10.3): the frame cannot be resized (no maximize button, no drag on
@@ -1039,7 +1042,7 @@ xUnit, in a `StopwatchApp.Tests` project.
   or clear, and as the "Resumed from a pause" note appears/disappears — never a band of dead space
   to the right of or below the visible rows.
 - Title bar shows the version (S15, §17 — replaces the deleted version-footer label): the title bar
-  reads `Stopwatch v{Application.ProductVersion}` (e.g. `Stopwatch v1.2.0`).
+  reads `Stopwatch v{Application.ProductVersion}` (e.g. `Stopwatch v1.3.0`).
 - Records header row (S15, §8.5): `Records` sits left-aligned on the same line as, not stacked above,
   `Manage Records` (blue) and `Clear All Records` (red), both right-aligned in that order.
 - Row word-wrap (S15, §8.5): a record/lap row longer than the sized-for worst case (over
@@ -1053,6 +1056,10 @@ xUnit, in a `StopwatchApp.Tests` project.
   its own line regardless of window state.
 - Clear-all dialog styling (S15, §8.5): `Clear All` renders red and `Cancel` renders dark slate, and
   the two sit aligned on the same baseline.
+- Button labels (S16, §8.5/§17): every `GlyphButton` label is centered on the full button axis;
+  icon-bearing buttons keep their glyph without overlapping the centered label.
+- Tray open gesture (S16, §10.2/§17): a single left-click opens and activates the main window;
+  right-click remains exclusively available for the context menu.
 
 Implement these as automated tests wherever the behavior is UI-free, and as a manual check where it
 genuinely requires a running window (tray, hotkeys).
@@ -1898,3 +1905,10 @@ that now carries the actual rule.
   `Hide()`, and `RestoreWindow()` sets `ShowInTaskbar = true` **before** `Show()` (flipping
   `ShowInTaskbar` recreates the window handle; doing that while still hidden avoids any chance of the
   recreation observing a stale minimized state).
+- **2026-09-13 — S16: button labels center independently of their glyphs, and the tray opens on a
+  single left-click.** `GlyphButton.GetPreferredSize` now reserves the glyph lane symmetrically on
+  both sides of its label, while `OnPaint` centers the label against the full button width and draws
+  the glyph in the reserved left lane. This applies to every transport, records-header, and dialog
+  button through the shared control. `TrayIconService` now handles `NotifyIcon.MouseClick`, filters
+  for `MouseButtons.Left`, and leaves right-click exclusively to the context menu; the prior
+  `DoubleClick` handler was removed. `<Version>` advanced to `1.3.0` for these user-visible changes.

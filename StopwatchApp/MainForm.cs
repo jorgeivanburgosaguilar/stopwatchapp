@@ -277,7 +277,7 @@ public sealed class MainForm : Form
     // HideToTray first (first launch, single-instance activation).
     WindowState = FormWindowState.Normal;
     ShowInTaskbar = true;
-    // S14b (AGENTS.md §10.6/§17) — always centers; a tray Open/double-click, single-instance
+    // S14b/S16 (AGENTS.md §10.6/§17) — always centers; a tray Open/single left-click, single-instance
     // activation, or restore-from-minimize all route through here.
     PositionWindowCentered();
     Show();
@@ -511,7 +511,7 @@ public sealed class MainForm : Form
   /// Sets <see cref="Form.Location"/> to center the window (both axes) on the primary screen's
   /// working area (S14b, revised S15, AGENTS.md §10.6/§17) — called from <see cref="ResizeToContent"/>
   /// on every content-driven resize (so the window stays centered as it grows/shrinks with content,
-  /// not just on the "Open" transitions below) and separately from every tray Open/double-click,
+  /// not just on the "Open" transitions below) and separately from every tray Open/single click,
   /// single-instance activation, or restore-from-minimize via <see cref="RestoreWindow"/> (redundant
   /// with the resize that already happened via a live update, but cheap and keeps each Open path
   /// correct independently). The window never remembers or restores a previous position.

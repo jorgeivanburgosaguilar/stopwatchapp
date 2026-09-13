@@ -3,9 +3,9 @@ using StopwatchApp.Services;
 namespace StopwatchApp.Tests;
 
 /// <summary>
-/// Covers <see cref="TrayIconService.SelectLayout"/> and <see cref="TrayIconService.FormatHourText"/>,
-/// the two pure rules S11c factored out of the icon-drawing code (AGENTS.md §10.1/§17: which layout
-/// applies, and how the stacked layout's hours row is formatted). The rest of
+/// Covers the pure rules factored out of <see cref="TrayIconService"/>: which layout applies, how
+/// the stacked layout's hours row is formatted, and which tray-icon mouse button opens the window.
+/// The rest of
 /// <see cref="TrayIconService"/> renders raw GDI+ pixel output via a real <c>NotifyIcon</c>/HICON and
 /// is not unit tested, per AGENTS.md §13/§17.
 /// </summary>
@@ -45,5 +45,15 @@ public class TrayIconServiceTests
   public void FormatHourText_NeverZeroPads(int hours, string expected)
   {
     Assert.Equal(expected, TrayIconService.FormatHourText(hours));
+  }
+
+  [Theory]
+  [InlineData(MouseButtons.Left, true)]
+  [InlineData(MouseButtons.Right, false)]
+  [InlineData(MouseButtons.Middle, false)]
+  [InlineData(MouseButtons.None, false)]
+  public void ShouldOpen_OnlyAcceptsLeftClick(MouseButtons button, bool expected)
+  {
+    Assert.Equal(expected, TrayIconService.ShouldOpen(button));
   }
 }

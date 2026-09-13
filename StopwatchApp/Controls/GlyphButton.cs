@@ -74,7 +74,11 @@ internal sealed class GlyphButton : Button
     Size textSize = TextRenderer.MeasureText(Text, Font);
     int glyphBoxSize = _glyph.HasValue ? textSize.Height : 0;
     int glyphGutter = _glyph.HasValue ? Palette.SpacingXs : 0;
-    int width = Padding.Left + glyphBoxSize + glyphGutter + textSize.Width + Padding.Right;
+    // Reserve the glyph lane on both sides of the label. The glyph uses the left lane; the
+    // matching empty lane on the right keeps the label itself on the button's horizontal axis
+    // without allowing the glyph to overlap short labels such as "Lap" or "Stop".
+    int sideLaneWidth = glyphBoxSize + glyphGutter;
+    int width = Padding.Left + sideLaneWidth + textSize.Width + sideLaneWidth + Padding.Right;
     int height = Padding.Top + Math.Max(textSize.Height, glyphBoxSize) + Padding.Bottom;
     return new Size(width, height);
   }
@@ -174,21 +178,29 @@ internal sealed class GlyphButton : Button
       );
     }
 
-    int glyphSize = _glyph.HasValue ? TextRenderer.MeasureText(Text, Font).Height : 0;
-    int textLeft = Padding.Left;
+    Size textSize = TextRenderer.MeasureText(Text, Font);
+    int glyphSize = _glyph.HasValue ? textSize.Height : 0;
+    Rectangle textRect = new(
+      Padding.Left,
+      0,
+      Math.Max(0, Width - Padding.Left - Padding.Right),
+      Height
+    );
     if (_glyph.HasValue)
     {
-      Rectangle glyphRect = new(Padding.Left, (Height - glyphSize) / 2, glyphSize, glyphSize);
+      int centeredTextLeft = (Width - textSize.Width) / 2;
+      Rectangle glyphRect = new(
+        centeredTextLeft - Palette.SpacingXs - glyphSize,
+        (Height - glyphSize) / 2,
+        glyphSize,
+        glyphSize
+      );
       DrawGlyph(graphics, _glyph.Value, glyphRect, labelColor);
-      textLeft = glyphRect.Right + Palette.SpacingXs;
     }
 
-    // S15 follow-up (AGENTS.md §17) — HorizontalCenter, not Left: for an AutoSize button (the
-    // common case) this rect already matches the text's own width, so the two flags render
-    // identically there, but the repo owner asked explicitly for centered button text, and
-    // HorizontalCenter is correct/robust if a button is ever stretched wider than its own preferred
-    // size (e.g. shared-width buttons in a future layout).
-    Rectangle textRect = new(textLeft, 0, Math.Max(0, Width - textLeft - Padding.Right), Height);
+    // S16 (AGENTS.md §17) — center every label on the full button axis. Icon-bearing buttons reserve
+    // an equal-width lane opposite the glyph in GetPreferredSize, so the label and glyph cannot
+    // overlap even on short labels such as "Lap".
     TextRenderer.DrawText(
       graphics,
       Text,

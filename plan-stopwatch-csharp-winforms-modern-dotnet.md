@@ -339,8 +339,9 @@ elapsed hours, not on run state.
 ### 3.2 Tray context menu
 
 Order: `Open`, separator, the state-appropriate action(s) from §2.6 (`Start`/`Pause`/`Continue`/
-`Lap`/`Stop`), separator, `Exit`. Double-clicking the tray icon opens (restores and activates) the
-main window. `Exit` is the only way to quit the application.
+`Lap`/`Stop`), separator, `Exit`. Single left-clicking the tray icon opens (restores and activates)
+the main window; right-click remains reserved for the context menu. `Exit` is the only way to quit
+the application.
 
 ### 3.3 Window behavior
 
@@ -386,7 +387,7 @@ default every time it opens, but remembers the last position the user dragged it
 there instead — until it's dragged again.
 
 ```
-Open (first launch, tray Open/double-click, single-instance activation, or restore-from-minimize):
+Open (first launch, tray Open/single left-click, single-instance activation, or restore-from-minimize):
   if a saved WindowPosition exists AND its bounds intersect at least one current screen's working area:
     Location = (SavedX, SavedY)
   else:
@@ -528,6 +529,7 @@ log for anything discovered or decided while executing a stage — check it alon
 | S14b Center-always + records cap + height recompute | ✅ Done | 2026-09-12 | Two more repo-owner corrections after visually checking S14a's fix: (1) window position memory (S11b) reversed — "you added a functionality that i didn't ask for it" — the window now always centers, with the persistence plumbing kept (not removed) per the "never edit a shipped migration" rule but no longer called; (2) records display capped to the 5 most recent (`RecordsListControl.MaxDisplayedRecords`), which is also the actual fix for "the height of the app is too much" (the records card no longer stretches to fill leftover space regardless of content). `MainForm.FixedClientSize`'s height (632×680 → 632×728) was re-derived by directly measuring the real, fixed-up control tree in a throwaway harness rather than by hand arithmetic, given two prior hand-derived-number mistakes this session (see `AGENTS.md` §17, dated 2026-09-12) |
 | S14c Manage Records placeholder + height recompute | ✅ Done | 2026-09-12 | Repo owner: "fix the height of the tool, calculate to show exactly 5 records and some space for the button of the records manager." Added a `Manage Records` button beside `Clear All Records` — always visible, `Enabled = false` until the planned records-manager window exists — and re-measured `MainForm.FixedClientSize`'s height with the same harness technique as S14b: 632×728 → 632×732. Along the way, found and fixed `FlowLayoutPanel.WrapContents` defaulting to `true`, which silently wrapped the two-button row to two lines during the `AutoSize` preferred-size query and inflated the first re-measurement by a spurious extra button row (see `AGENTS.md` §17, dated 2026-09-12). The §4 manual/tray/DPI verification passes are still outstanding — needs a human pass |
 | S15 Content-driven sizing, header-row buttons, minimize-to-tray fix | ✅ Done | 2026-09-13 | Repo owner marked up a screenshot: everything past the visible chrono/buttons/record rows was "wasted space." Window sizing switched from `FixedClientSize` (a frozen worst-case constant, re-derived three times across S14/S14b/S14c) to `MainForm.ResizeToContent`, which measures the real, live control tree on every content change; width's worst case shrank from an absurd 9,999-hour/5-digit-lap-id bound to a realistic 24-hour session (`WorstCaseElapsedMinutes`), with word-wrap (`OwnerDrawVariable` + `RecordsListControl.MeasureRowHeight`, a new pure/testable function) as the fallback past it instead of ellipsis-clipping. `RecordsListControl`'s header row restructured to one line (`Records` left, `Manage Records` blue + `Clear All Records` red, right); `GlyphButton` extracted from `StopwatchControl` into its own file (optional glyph, disabled visual state) so the header-row and `ClearRecordsDialog` buttons could reuse it, and the dialog's misaligned Cancel/Clear-All margins were fixed. The version footer label was deleted; the version now lives in the title bar (`MainForm.WindowTitle`, computed). Minimize-to-tray was fixed at the root cause (`WM_SYSCOMMAND`/`SC_MINIMIZE` interception in `WndProc`, plus `WindowState`/`ShowInTaskbar` ordering in `HideToTray`/`RestoreWindow`) — a regression where minimizing left a taskbar button and reopening after closing-while-minimized came back still minimized. `<Version>` bumped to `1.2.0` (see `AGENTS.md` §17, dated 2026-09-13). Sizing verified with the same throwaway-harness technique as S14b/S14c (no live-window screenshot attempted, per the S13 unsafe-`CopyFromScreen` precedent) — the §4 manual tray/minimize verification pass is still outstanding, needs a human pass |
+| S16 Centered button labels + single-click tray open | ✅ Done | 2026-09-13 | All `GlyphButton` labels now center on the full button axis; icon-bearing buttons reserve a matching lane opposite the glyph to prevent overlap. `TrayIconService` opens on one left `MouseClick`, while right-click remains reserved for the context menu. Added a pure mouse-button rule test and bumped `<Version>` to `1.3.0`. |
 
 Project layout (unchanged by staging — every stage below adds to this tree):
 
@@ -1356,6 +1358,25 @@ part of a parallel wave.
   cap (`MaxDisplayedRecords = 5`, unchanged) or the laps 3-row cap; `IStopwatchStore`/`Database`/the
   `window_position` migration (untouched).
 
+### S16 — Centered button labels + single-click tray open
+
+- **Depends on:** S15. The repo owner requested that every button label align to the center and
+  reported that the tray icon still required a double-click to show the app.
+- **Files:** `Controls/GlyphButton.cs` (symmetric glyph-lane sizing and full-axis label centering),
+  `Services/TrayIconService.cs` (`MouseClick` with a left-button filter),
+  `StopwatchApp.Tests/TrayIconServiceTests.cs` (pure mouse-button rule coverage), `MainForm.cs`
+  (updated interaction comments), `StopwatchApp.csproj` (`<Version>` → `1.3.0`).
+- **Build:** the standard `AGENTS.md` §4 gate, plus the tray/manual visual pass because both tray
+  input and owner-drawn button layout changed.
+- **Public interface:** none changed. `TrayIconService.ShouldOpen(MouseButtons)` is internal and
+  exists only to test the input filter without constructing a native `NotifyIcon`.
+- **Done when:** every transport, records-header, and clear-dialog button label is centered on its
+  full button axis without overlapping its optional glyph; one left-click on the tray icon opens,
+  centers, and activates the normal window; right-click still opens only the context menu; every
+  `AGENTS.md` §4 gate step passes.
+- **Owns acceptance criteria:** the new `[S16]` button-label and tray-gesture bullets in §6.
+- **Out of scope:** changing tray menu contents, timer behavior, button colors, or button order.
+
 ---
 
 ## 6. Acceptance criteria
@@ -1388,16 +1409,17 @@ a running window (tray, hotkeys). Each bullet is tagged with the §5 stage that 
   with no exception thrown.
 - **[S3a]** A database created by an earlier build (tables present, no `user_version` stamp) opens
   without data loss and ends up stamped at the current schema version.
-- **[S8/S9→S15]** Tray: the icon updates while running and reflects the current hour/minute; the
+- **[S8/S9→S16]** Tray: the icon updates while running and reflects the current hour/minute; the
   tooltip shows the full `HH:MM:SS`; both close and minimize hide the window and remove its
   taskbar button; Exit terminates the process with no icon left behind in the tray. Every reopen
-  (tray Open/double-click, single-instance activation) restores a normal, not minimized, window
-  regardless of whether it was minimized when last hidden (S15 fixed a regression where it wasn't).
+  (tray Open/single left-click, single-instance activation) restores a normal, not minimized,
+  centered and active window regardless of whether it was minimized when last hidden. Right-click
+  remains reserved for the tray context menu (S16 replaced the prior double-click gesture).
 - **[S11c]** Tray icon layout: while elapsed hours == 0, the icon shows large minute-only digits;
   once elapsed reaches 1 hour, it switches to the stacked hours-over-minutes layout at exactly that
   boundary; the tooltip's full `HH:MM:SS` text is unaffected by which layout is showing.
 - **[S11b→S14b]** Window position: the window always opens centered on the primary screen — first
-  launch, tray Open/double-click, single-instance activation, and restore-from-minimize alike. It
+  launch, tray Open/single left-click, single-instance activation, and restore-from-minimize alike. It
   never remembers or restores a previous position (reversed by S14b; the original "remembers the
   last dragged position" behavior no longer applies).
 - **[S14→S15]** Window/layout: the chrono and button row are centered and re-center as the button
@@ -1424,8 +1446,11 @@ a running window (tray, hotkeys). Each bullet is tagged with the §5 stage that 
   deleted version-footer label.
 - **[S15]** Clear-all dialog styling: `Clear All` renders red, `Cancel` renders dark slate, and the
   two buttons are aligned on the same baseline.
+- **[S16]** Button labels: every transport, records-header, and clear-dialog button label is centered
+  on the full button axis; icon-bearing buttons keep their glyph without overlapping the label.
+- **[S16]** Tray gesture: one left-click opens the app; right-click opens only the context menu.
 
-`[S13]` re-verifies every bullet above except `[S14]`/`[S14b]`/`[S14c]`/`[S15]` (which postdate it),
+`[S13]` re-verifies every bullet above except `[S14]`/`[S14b]`/`[S14c]`/`[S15]`/`[S16]` (which postdate it),
 once, against the published build — it owns none of them individually but is the final gate that
 confirms none regressed in packaging.
 
