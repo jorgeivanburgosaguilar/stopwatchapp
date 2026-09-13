@@ -527,6 +527,7 @@ log for anything discovered or decided while executing a stage — check it alon
 | S14a Fix S14 layout regressions | ✅ Done | 2026-09-12 | The repo owner reported "nothing gets rendered": the stopwatch card had collapsed to an empty strip and record rows clipped. Root causes: `Dock.Fill` inside an `AutoSize` parent contributes nothing to that parent's preferred size (the card's interior layout collapsed to just its `Padding`); `AutoScaleMode.Dpi` alone doesn't scale a hard-coded `ClientSize` — the window stayed at literal 96dpi device pixels while the point-sized type-scale fonts rendered at the real 125% DPI. Fixed via `Dock.Top` for the interior layout, and `MainForm.ComputeFixedClientSize`/`RequiredClientWidth` explicitly scaling design-pixel literals to the live device DPI before assignment; `MainFormLayoutTests` reworked to test `RequiredClientWidth` as a pure function across 96/120/144/168dpi instead of the original DPI-blind measurement that had passed on the broken build (see `AGENTS.md` §17, dated 2026-09-12) |
 | S14b Center-always + records cap + height recompute | ✅ Done | 2026-09-12 | Two more repo-owner corrections after visually checking S14a's fix: (1) window position memory (S11b) reversed — "you added a functionality that i didn't ask for it" — the window now always centers, with the persistence plumbing kept (not removed) per the "never edit a shipped migration" rule but no longer called; (2) records display capped to the 5 most recent (`RecordsListControl.MaxDisplayedRecords`), which is also the actual fix for "the height of the app is too much" (the records card no longer stretches to fill leftover space regardless of content). `MainForm.FixedClientSize`'s height (632×680 → 632×728) was re-derived by directly measuring the real, fixed-up control tree in a throwaway harness rather than by hand arithmetic, given two prior hand-derived-number mistakes this session (see `AGENTS.md` §17, dated 2026-09-12) |
 | S14c Manage Records placeholder + height recompute | ✅ Done | 2026-09-12 | Repo owner: "fix the height of the tool, calculate to show exactly 5 records and some space for the button of the records manager." Added a `Manage Records` button beside `Clear All Records` — always visible, `Enabled = false` until the planned records-manager window exists — and re-measured `MainForm.FixedClientSize`'s height with the same harness technique as S14b: 632×728 → 632×732. Along the way, found and fixed `FlowLayoutPanel.WrapContents` defaulting to `true`, which silently wrapped the two-button row to two lines during the `AutoSize` preferred-size query and inflated the first re-measurement by a spurious extra button row (see `AGENTS.md` §17, dated 2026-09-12). The §4 manual/tray/DPI verification passes are still outstanding — needs a human pass |
+| S15 Content-driven sizing, header-row buttons, minimize-to-tray fix | ✅ Done | 2026-09-13 | Repo owner marked up a screenshot: everything past the visible chrono/buttons/record rows was "wasted space." Window sizing switched from `FixedClientSize` (a frozen worst-case constant, re-derived three times across S14/S14b/S14c) to `MainForm.ResizeToContent`, which measures the real, live control tree on every content change; width's worst case shrank from an absurd 9,999-hour/5-digit-lap-id bound to a realistic 24-hour session (`WorstCaseElapsedMinutes`), with word-wrap (`OwnerDrawVariable` + `RecordsListControl.MeasureRowHeight`, a new pure/testable function) as the fallback past it instead of ellipsis-clipping. `RecordsListControl`'s header row restructured to one line (`Records` left, `Manage Records` blue + `Clear All Records` red, right); `GlyphButton` extracted from `StopwatchControl` into its own file (optional glyph, disabled visual state) so the header-row and `ClearRecordsDialog` buttons could reuse it, and the dialog's misaligned Cancel/Clear-All margins were fixed. The version footer label was deleted; the version now lives in the title bar (`MainForm.WindowTitle`, computed). Minimize-to-tray was fixed at the root cause (`WM_SYSCOMMAND`/`SC_MINIMIZE` interception in `WndProc`, plus `WindowState`/`ShowInTaskbar` ordering in `HideToTray`/`RestoreWindow`) — a regression where minimizing left a taskbar button and reopening after closing-while-minimized came back still minimized. `<Version>` bumped to `1.2.0` (see `AGENTS.md` §17, dated 2026-09-13). Sizing verified with the same throwaway-harness technique as S14b/S14c (no live-window screenshot attempted, per the S13 unsafe-`CopyFromScreen` precedent) — the §4 manual tray/minimize verification pass is still outstanding, needs a human pass |
 
 Project layout (unchanged by staging — every stage below adds to this tree):
 
@@ -1311,6 +1312,50 @@ part of a parallel wave.
 - **Out of scope:** the records-manager window itself and any click behavior for the new button —
   it is a reserved, disabled placeholder only.
 
+### S15 — Content-driven window sizing, header-row buttons, minimize-to-tray fix
+
+- **Depends on:** S14c. Repo owner marked up a screenshot: everything past the visible
+  chrono/buttons/record rows read as "wasted space," the `Records` header and its buttons should
+  share one line with styled colors, and minimize left a taskbar button and reopened still
+  minimized.
+- **Files:** `MainForm.cs` (`FixedClientSize`/`ComputeFixedClientSize` deleted;
+  `ResizeToContent`/`ComputeFixedWidth`/`ClampLocationToWorkingArea` added;
+  `WorstCaseElapsedMinutes = 24 * 60` replaces the old 9,999-hour bound; `RequiredClientWidth`
+  re-derived; `WindowTitle` → computed `static readonly` carrying the version;
+  `WM_SYSCOMMAND`/`SC_MINIMIZE` interception added to `WndProc`; `HideToTray`/`RestoreWindow`
+  `WindowState`/`ShowInTaskbar` ordering fixed; version-footer `Label`/`_captionFont` deleted),
+  `Controls/RecordsListControl.cs` (header row restructured to one `TableLayoutPanel` row —
+  `Records` label left, `Manage Records`/`Clear All Records` right; both list boxes moved to
+  `DrawMode.OwnerDrawVariable` with word-wrap; `MeasureRowHeight` factored out as a pure, testable
+  function; `_recordsHost`/`_lapsListBox` heights recomputed on every update), `Controls/
+  GlyphButton.cs` (new — extracted from `StopwatchControl`, optional glyph, disabled visual state),
+  `Controls/StopwatchControl.cs` (nested `GlyphButton`/`Glyph` removed, usage unchanged),
+  `Controls/ClearRecordsDialog.cs` (stock `Button`s → `GlyphButton`, margins aligned,
+  `ApplyRoundedRegion` deleted), `Theme/Palette.cs` (`CancelButton` triplet added),
+  `StopwatchApp.csproj` (`<Version>` → `1.2.0`), `StopwatchApp.Tests/MainFormLayoutTests.cs`
+  (24-hour worst case), `StopwatchApp.Tests/RecordsListControlTests.cs` (word-wrap threshold test).
+- **Build:** the standard `AGENTS.md` §4 gate, plus a mandatory human visual pass (§17's standing
+  rule since S14a) — a live-window screenshot was not attempted per the S13 unsafe-`CopyFromScreen`
+  precedent (`AGENTS.md` §17, dated 2026-09-11); sizing was instead verified with the same
+  throwaway-harness technique S14b/S14c used, reading `Control.GetPreferredSize()` on the real,
+  fixed-up control tree across several record/lap counts to confirm the height actually shrinks.
+- **Public interface:** `RecordsListControl.MeasureRowHeight(string, Font, int)` — `internal
+  static`, covered directly by `RecordsListControlTests`, the same pure-function-over-a-real-control
+  convention `MainForm.RequiredClientWidth` already established.
+- **Done when:** the window's width fits the widest realistic (24-hour) row and its height ends a
+  few pixels below the last visible row, both growing/shrinking live as content changes; the
+  `Records` header and its two styled buttons render on one line; a row past the 24-hour/3-digit-lap
+  worst case wraps instead of clipping; the title bar reads `Stopwatch v{version}`; minimizing
+  leaves no taskbar button and every reopen restores a normal (not minimized) window; the confirm
+  dialog's two buttons are aligned and colored (red `Clear All`, dark-slate `Cancel`); every
+  `AGENTS.md` §4 gate step passes.
+- **Owns acceptance criteria:** rewrites the `[S14]` window/layout bullet in §6 below (fixed size →
+  content-driven) and adds new `[S15]` bullets for the header row, word-wrap, title-bar version, and
+  the minimize-to-tray fix.
+- **Out of scope:** the planned history/records-manager window; any change to the records display
+  cap (`MaxDisplayedRecords = 5`, unchanged) or the laps 3-row cap; `IStopwatchStore`/`Database`/the
+  `window_position` migration (untouched).
+
 ---
 
 ## 6. Acceptance criteria
@@ -1343,9 +1388,11 @@ a running window (tray, hotkeys). Each bullet is tagged with the §5 stage that 
   with no exception thrown.
 - **[S3a]** A database created by an earlier build (tables present, no `user_version` stamp) opens
   without data loss and ends up stamped at the current schema version.
-- **[S8/S9]** Tray: the icon updates while running and reflects the current hour/minute; the
+- **[S8/S9→S15]** Tray: the icon updates while running and reflects the current hour/minute; the
   tooltip shows the full `HH:MM:SS`; both close and minimize hide the window and remove its
-  taskbar button; Exit terminates the process with no icon left behind in the tray.
+  taskbar button; Exit terminates the process with no icon left behind in the tray. Every reopen
+  (tray Open/double-click, single-instance activation) restores a normal, not minimized, window
+  regardless of whether it was minimized when last hidden (S15 fixed a regression where it wasn't).
 - **[S11c]** Tray icon layout: while elapsed hours == 0, the icon shows large minute-only digits;
   once elapsed reaches 1 hour, it switches to the stacked hours-over-minutes layout at exactly that
   boundary; the tooltip's full `HH:MM:SS` text is unaffected by which layout is showing.
@@ -1353,21 +1400,33 @@ a running window (tray, hotkeys). Each bullet is tagged with the §5 stage that 
   launch, tray Open/double-click, single-instance activation, and restore-from-minimize alike. It
   never remembers or restores a previous position (reversed by S14b; the original "remembers the
   last dragged position" behavior no longer applies).
-- **[S14]** Window/layout: the chrono and button row are centered and re-center as the button set
-  changes; type renders at 48px display/16px body/16px mono-body/12px caption; no stale-border
-  ghosting appears behind either card while resizing or theme-flipping; the frame cannot be
-  resized (no maximize box, no edge/corner drag) and stays clamped inside the working area at
-  100–175% DPI; the stopwatch icon (not the stock WinForms icon) shows in the title bar, taskbar
-  button, and built `.exe`.
+- **[S14→S15]** Window/layout: the chrono and button row are centered and re-center as the button
+  set changes; type renders at 48px display/16px body/16px mono-body; no stale-border ghosting
+  appears behind either card while resizing or theme-flipping; the frame cannot be resized (no
+  maximize box, no edge/corner drag) and stays clamped inside the working area at 100–175% DPI; the
+  stopwatch icon (not the stock WinForms icon) shows in the title bar, taskbar button, and built
+  `.exe`. **Revised by S15:** the window is no longer a fixed size — width fits the widest realistic
+  (24-hour) row and height ends a few pixels below whatever is actually shown, both resizing live as
+  content changes (records added/cleared, laps appearing/clearing, the resumed-pause note
+  toggling).
 - **[S14b]** Records display cap: only the 5 most recent records are listed in the main window
   regardless of how many are persisted; "Clear All Records" is visible based on the true total (not
   the capped display count) and clears every persisted record when confirmed.
 - **[S14c]** Manage Records placeholder: a `Manage Records` button renders beside `Clear All
   Records`, always visible, always disabled (there is no records-manager window yet), and never
   wraps to its own line.
+- **[S15]** Records header row: `Records` sits left-aligned on the same line as `Manage Records`
+  (blue) and `Clear All Records` (red), both right-aligned in that order — not stacked as separate
+  rows.
+- **[S15]** Row word-wrap: a record/lap row longer than the 24-hour/3-digit-lap-id worst case wraps
+  to a second line inside its row card instead of clipping or ellipsizing.
+- **[S15]** Title bar shows the version (`Stopwatch v{Application.ProductVersion}`), replacing the
+  deleted version-footer label.
+- **[S15]** Clear-all dialog styling: `Clear All` renders red, `Cancel` renders dark slate, and the
+  two buttons are aligned on the same baseline.
 
-`[S13]` re-verifies every bullet above except `[S14]`/`[S14b]`/`[S14c]` (which postdate it), once,
-against the published build — it owns none of them individually but is the final gate that
+`[S13]` re-verifies every bullet above except `[S14]`/`[S14b]`/`[S14c]`/`[S15]` (which postdate it),
+once, against the published build — it owns none of them individually but is the final gate that
 confirms none regressed in packaging.
 
 ---

@@ -129,4 +129,16 @@ public static class Palette
       Color.FromArgb(0xB9, 0x1C, 0x1C),
       Color.FromArgb(0x99, 0x1B, 0x1B)
     );
+
+  /// <summary>
+  /// Gets the Cancel/dismiss button's base, hover, and pressed colors (dark slate; same in both
+  /// themes) — used for a dialog's non-destructive action, paired against a destructive action in
+  /// <see cref="StopButton"/> red (S15, AGENTS.md §17).
+  /// </summary>
+  public static (Color Base, Color Hover, Color Pressed) CancelButton { get; } =
+    (
+      Color.FromArgb(0x33, 0x41, 0x55),
+      Color.FromArgb(0x1E, 0x29, 0x3B),
+      Color.FromArgb(0x0F, 0x17, 0x2A)
+    );
 }

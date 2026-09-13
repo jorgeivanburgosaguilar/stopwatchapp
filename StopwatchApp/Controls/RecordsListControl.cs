@@ -24,8 +24,9 @@ public sealed class RecordsListControl : UserControl
   private readonly ListBox _lapsListBox;
   private readonly ListBox _recordsListBox;
   private readonly Label _emptyStateLabel;
-  private readonly Button _clearAllButton;
-  private readonly Button _manageRecordsButton;
+  private readonly GlyphButton _clearAllButton;
+  private readonly GlyphButton _manageRecordsButton;
+  private readonly Panel _recordsHost;
   private readonly Font _rowFont;
   private bool _dark;
 
@@ -44,8 +45,12 @@ public sealed class RecordsListControl : UserControl
     AutoSize = true;
     AutoSizeMode = AutoSizeMode.GrowAndShrink;
     // S11a card treatment, matching StopwatchControl: an explicit palette background plus an
-    // inset so the rounded border drawn in OnPaint doesn't clip the content.
-    Padding = new Padding(Palette.SpacingLg);
+    // inset so the rounded border drawn in OnPaint doesn't clip the content. S15 (AGENTS.md §17) —
+    // the bottom inset is 0, not SpacingLg: MainForm's own root Padding (also bottom-0) plus this
+    // card's 1px OnPaint border and the TableLayoutPanel cell's default 3px margin are what leave
+    // the ~6px gap the owner asked for between the last record row and the window edge; a bottom
+    // Padding here on top of those would double it.
+    Padding = new Padding(Palette.SpacingLg, Palette.SpacingLg, Palette.SpacingLg, 0);
     DoubleBuffered = true;
     // S14 (AGENTS.md §17) — same ResizeRedraw fix as StopwatchControl: without it, the rounded
     // border this control's own OnPaint draws at Width-1/Height-1 stays visible at its old position
@@ -76,14 +81,17 @@ public sealed class RecordsListControl : UserControl
       Font = _rowFont,
     };
     ConfigureRowRendering(_lapsListBox);
-    // Three rows tall, in terms of the new type scale's actual row height, not a stale pixel literal.
-    _lapsListBox.Height = 3 * _lapsListBox.ItemHeight;
+    // Starts empty; UpdateLaps sizes it to the actual laps shown (S15, AGENTS.md §17) — capped at 3
+    // rows, summing each row's real (possibly wrapped) height rather than a flat multiple of a
+    // single-line ItemHeight.
+    _lapsListBox.Height = 0;
 
-    Label recordsHeader = new()
+    Label recordsLabel = new()
     {
       Text = "Records",
       AutoSize = true,
-      Margin = new Padding(0, 0, 0, Palette.SpacingXs),
+      Anchor = AnchorStyles.Left,
+      Margin = new Padding(0, 0, 0, 0),
     };
     _recordsListBox = new ListBox
     {
@@ -101,51 +109,69 @@ public sealed class RecordsListControl : UserControl
       Visible = false,
     };
 
-    _clearAllButton = new Button
+    // S15 (AGENTS.md §17) — both header-row buttons are now the extracted GlyphButton (text-only,
+    // glyph: null) instead of stock Buttons, so they carry the same rounded, palette-driven paint as
+    // the stopwatch card's transport buttons. Order left-to-right is Manage Records then
+    // Clear All Records, both right-aligned beside the "Records" label per the owner's markup.
+    _manageRecordsButton = new GlyphButton("Manage Records", glyph: null, Palette.LapButton)
     {
-      Text = "Clear All Records",
-      AutoSize = true,
-      Margin = new Padding(0, Palette.SpacingSm, Palette.SpacingSm, Palette.SpacingSm),
+      // S14c (AGENTS.md §17) — a disabled placeholder for the planned (not yet built) records
+      // history/manager window: always visible (unlike Clear-All, it isn't gated on having any
+      // records — an empty manager is still openable once it exists) but Enabled = false until that
+      // window is actually implemented.
+      Enabled = false,
+      Margin = new Padding(0, 0, Palette.SpacingSm, 0),
+    };
+
+    _clearAllButton = new GlyphButton("Clear All Records", glyph: null, Palette.StopButton)
+    {
+      Margin = new Padding(0),
       Visible = false,
     };
     _clearAllButton.Click += (_, _) => ClearAllRequested?.Invoke();
 
-    // S14c (AGENTS.md §17) — a disabled placeholder for the planned (not yet built) records
-    // history/manager window: always visible (unlike Clear-All, it isn't gated on having any
-    // records — an empty manager is still openable once it exists) but Enabled = false until that
-    // window is actually implemented, so its space is reserved in the fixed layout now rather than
-    // requiring another height recalculation later.
-    _manageRecordsButton = new Button
-    {
-      Text = "Manage Records",
-      AutoSize = true,
-      Enabled = false,
-      Margin = new Padding(0, Palette.SpacingSm, 0, Palette.SpacingSm),
-    };
-
-    FlowLayoutPanel actionButtonsRow = new()
+    FlowLayoutPanel headerButtonsRow = new()
     {
       FlowDirection = FlowDirection.LeftToRight,
       AutoSize = true,
       AutoSizeMode = AutoSizeMode.GrowAndShrink,
+      Anchor = AnchorStyles.Right,
       // Both buttons must always render on one line, never wrap: WrapContents defaults to true,
       // which — observed while re-deriving the S14c height budget — can wrap to a second line
       // during an AutoSize preferred-size query even though the real fixed window is comfortably
       // wide enough for both, silently inflating the computed height by a whole button row.
       WrapContents = false,
     };
-    actionButtonsRow.Controls.Add(_clearAllButton);
-    actionButtonsRow.Controls.Add(_manageRecordsButton);
+    headerButtonsRow.Controls.Add(_manageRecordsButton);
+    headerButtonsRow.Controls.Add(_clearAllButton);
+
+    // S15 (AGENTS.md §17) — one row, two columns: "Records" left (AutoSize column, Anchor.Left) and
+    // the button row right (Percent(100) column, Anchor.Right) — replaces the previous stacked
+    // header-label-then-button-row layout per the owner's markup ("the buttons and the title
+    // 'Records List' should be on the same line").
+    TableLayoutPanel headerRow = new()
+    {
+      Dock = DockStyle.Top,
+      AutoSize = true,
+      AutoSizeMode = AutoSizeMode.GrowAndShrink,
+      ColumnCount = 2,
+      RowCount = 1,
+      Margin = new Padding(0, 0, 0, Palette.SpacingSm),
+    };
+    headerRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+    headerRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+    headerRow.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+    headerRow.Controls.Add(recordsLabel, 0, 0);
+    headerRow.Controls.Add(headerButtonsRow, 1, 0);
 
     // S14b (AGENTS.md §17) — Dock.Top with an explicit Height (not Dock.Fill inside a Percent(100)
-    // row) so this host's height is a small, known constant — MaxDisplayedRecords rows' worth —
-    // instead of stretching to fill whatever's left in the fixed window. Height is assigned right
-    // after construction, mirroring _lapsListBox.Height above: it needs _recordsListBox.ItemHeight,
-    // already computed by ConfigureRowRendering above.
-    Panel recordsHost = new() { Dock = DockStyle.Top };
-    recordsHost.Controls.Add(_recordsListBox);
-    recordsHost.Controls.Add(_emptyStateLabel);
-    recordsHost.Height = MaxDisplayedRecords * _recordsListBox.ItemHeight;
+    // row) so this host's height is a small, known constant instead of stretching to fill whatever's
+    // left in the fixed window. S15: the height is now recomputed on every UpdateRecords call (the
+    // record count, and therefore the true content height, changes at runtime) rather than fixed to
+    // MaxDisplayedRecords rows regardless of how many records actually exist.
+    _recordsHost = new Panel { Dock = DockStyle.Top };
+    _recordsHost.Controls.Add(_recordsListBox);
+    _recordsHost.Controls.Add(_emptyStateLabel);
 
     TableLayoutPanel layout = new()
     {
@@ -157,7 +183,7 @@ public sealed class RecordsListControl : UserControl
       AutoSize = true,
       AutoSizeMode = AutoSizeMode.GrowAndShrink,
       ColumnCount = 1,
-      RowCount = 5,
+      RowCount = 4,
     };
     // S14 (AGENTS.md §17) — without an explicit ColumnStyle, a single-column TableLayoutPanel falls
     // back to an implicit AutoSize column that only happens to span the control's width; pinning it
@@ -167,16 +193,12 @@ public sealed class RecordsListControl : UserControl
     layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
     layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
     layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-    // S14b (AGENTS.md §17) — AutoSize, not Percent(100): recordsHost above now carries its own
-    // fixed height (MaxDisplayedRecords rows), so this row sizes to match instead of stretching.
-    layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-    // Rows, top to bottom: laps header, laps list, records header, action buttons row
-    // (Clear All Records + the disabled Manage Records placeholder), records host.
+    // Rows, top to bottom: laps header, laps list, header row (Records label + Manage Records/Clear
+    // All Records buttons), records host.
     layout.Controls.Add(_lapsHeader, 0, 0);
     layout.Controls.Add(_lapsListBox, 0, 1);
-    layout.Controls.Add(recordsHeader, 0, 2);
-    layout.Controls.Add(actionButtonsRow, 0, 3);
-    layout.Controls.Add(recordsHost, 0, 4);
+    layout.Controls.Add(headerRow, 0, 2);
+    layout.Controls.Add(_recordsHost, 0, 3);
 
     Controls.Add(layout);
 
@@ -217,7 +239,10 @@ public sealed class RecordsListControl : UserControl
   /// Toggles the empty state and the "Clear All Records" button's visibility. Only the most recent
   /// <see cref="MaxDisplayedRecords"/> are actually listed (S14b, AGENTS.md §17) — a future
   /// history/records-manager window will offer the full list; "Clear All Records" still clears
-  /// every persisted record, not just the ones shown here.
+  /// every persisted record, not just the ones shown here. The records host's height is recomputed
+  /// to fit exactly the rows now shown (S15, AGENTS.md §17) — 1 row's worth for the empty state, or
+  /// the true (possibly word-wrapped) height of however many of the capped records are displayed —
+  /// instead of a fixed height sized for the worst case.
   /// </summary>
   /// <param name="records">The records to display.</param>
   public void UpdateRecords(IReadOnlyList<StopwatchRecord> records)
@@ -234,10 +259,17 @@ public sealed class RecordsListControl : UserControl
     _recordsListBox.Visible = hasRecords;
     _emptyStateLabel.Visible = !hasRecords;
     _clearAllButton.Visible = hasRecords;
+
+    int shownCount = Math.Min(records.Count, MaxDisplayedRecords);
+    _recordsHost.Height = hasRecords
+      ? SumItemHeights(_recordsListBox, shownCount)
+      : _emptyStateLabel.PreferredSize.Height;
   }
 
   /// <summary>
-  /// Replaces the displayed laps, expected newest first. Toggles the laps panel's visibility.
+  /// Replaces the displayed laps, expected newest first. Toggles the laps panel's visibility. The
+  /// laps list's height is recomputed to fit exactly the (up to 3) most recent laps shown (S15,
+  /// AGENTS.md §17), rather than a flat multiple of a single-line row height.
   /// </summary>
   /// <param name="laps">The laps to display.</param>
   public void UpdateLaps(IReadOnlyList<Lap> laps)
@@ -253,6 +285,23 @@ public sealed class RecordsListControl : UserControl
     bool hasLaps = laps.Count > 0;
     _lapsHeader.Visible = hasLaps;
     _lapsListBox.Visible = hasLaps;
+    _lapsListBox.Height = SumItemHeights(_lapsListBox, Math.Min(laps.Count, 3));
+  }
+
+  /// <summary>
+  /// Sums the real (possibly word-wrapped, per <see cref="ConfigureRowRendering"/>'s
+  /// <c>MeasureItem</c> handler) height of the first <paramref name="count"/> items in
+  /// <paramref name="listBox"/> — the actual content height a fixed-count row cap needs, since rows
+  /// no longer share one flat <c>ItemHeight</c> (S15, AGENTS.md §17).
+  /// </summary>
+  private static int SumItemHeights(ListBox listBox, int count)
+  {
+    int total = 0;
+    for (int i = 0; i < count; i++)
+    {
+      total += listBox.GetItemHeight(i);
+    }
+    return total;
   }
 
   /// <summary>
@@ -307,6 +356,13 @@ public sealed class RecordsListControl : UserControl
     _lapsListBox.BackColor = cardBackground;
     _recordsListBox.BackColor = cardBackground;
     _emptyStateLabel.ForeColor = Palette.EmptyStateText(_dark);
+    // S15 (AGENTS.md §17) — the header-row buttons are now GlyphButtons, which resolve their
+    // dark-mode-only hover/press top-edge highlight and their disabled-state blend from this flag,
+    // same as StopwatchControl's transport buttons.
+    _manageRecordsButton.DarkMode = _dark;
+    _clearAllButton.DarkMode = _dark;
+    _manageRecordsButton.Invalidate();
+    _clearAllButton.Invalidate();
     // Row colors are read from _dark at paint time (DrawRow below), so a theme flip just needs a
     // repaint, not a rebuild of the (unchanged) row text.
     _lapsListBox.Invalidate();
@@ -314,22 +370,62 @@ public sealed class RecordsListControl : UserControl
   }
 
   /// <summary>
-  /// Switches a records/laps <see cref="ListBox"/> to the S11a row treatment: fixed-height owner
-  /// drawing so each row renders as a small rounded card (<see cref="Palette.RowBackground"/> fill,
-  /// <see cref="Palette.Border"/> outline) with its own inset spacing, instead of the plain
-  /// default-drawn text rows the control used before this stage. Selection is turned off — these
-  /// rows are a read-only log, and the stock selection highlight would clash with the custom paint.
+  /// Switches a records/laps <see cref="ListBox"/> to the S11a row treatment: variable-height owner
+  /// drawing (S15, AGENTS.md §17 — was fixed-height; a row now word-wraps instead of ellipsizing
+  /// past the window's sized-for width) so each row renders as a small rounded card
+  /// (<see cref="Palette.RowBackground"/> fill, <see cref="Palette.Border"/> outline) with its own
+  /// inset spacing, instead of the plain default-drawn text rows the control used before S11a.
+  /// Selection is turned off — these rows are a read-only log, and the stock selection highlight
+  /// would clash with the custom paint.
   /// </summary>
   /// <param name="listBox">The list box to configure.</param>
   private void ConfigureRowRendering(ListBox listBox)
   {
     listBox.SelectionMode = SelectionMode.None;
-    listBox.DrawMode = DrawMode.OwnerDrawFixed;
-    listBox.ItemHeight =
-      TextRenderer.MeasureText("Xg", listBox.Font).Height
-      + (Palette.SpacingSm * 2)
-      + Palette.SpacingXs;
+    listBox.DrawMode = DrawMode.OwnerDrawVariable;
+    listBox.MeasureItem += (_, e) =>
+    {
+      int availableWidth = Math.Max(
+        1,
+        listBox.ClientSize.Width
+          - (Palette.SpacingSm * 2)
+          - SystemInformation.VerticalScrollBarWidth
+      );
+      e.ItemHeight = MeasureRowHeight(
+        listBox.Items[e.Index]?.ToString() ?? string.Empty,
+        listBox.Font,
+        availableWidth
+      );
+    };
     listBox.DrawItem += (_, e) => DrawRow(listBox, e);
+  }
+
+  /// <summary>
+  /// Measures the height a row needs to render <paramref name="text"/> word-wrapped to
+  /// <paramref name="availableWidth"/> in <paramref name="font"/> (S15, AGENTS.md §17). A pure
+  /// function of its three inputs — no <see cref="ListBox"/> needed — so
+  /// <c>RecordsListControlTests</c> can cover the word-wrap threshold directly, the same
+  /// pure-function-over-a-real-control convention <see cref="MainForm.RequiredClientWidth"/> already
+  /// uses (AGENTS.md §13/§17). The caller (<see cref="ConfigureRowRendering"/>'s <c>MeasureItem</c>
+  /// handler) is responsible for deriving <paramref name="availableWidth"/> from the real list box's
+  /// current width, reserving <see cref="SystemInformation.VerticalScrollBarWidth"/> — a plain Win32
+  /// list box does not shrink <see cref="Control.ClientSize"/> for its own scrollbar, and the laps
+  /// list (unlike the height-capped records list) can genuinely scroll — so a row measured while the
+  /// scrollbar isn't yet showing doesn't wrap differently once it appears.
+  /// </summary>
+  /// <param name="text">The row text to measure.</param>
+  /// <param name="font">The row font.</param>
+  /// <param name="availableWidth">The width, in pixels, available for the text itself (chrome
+  /// already excluded).</param>
+  internal static int MeasureRowHeight(string text, Font font, int availableWidth)
+  {
+    Size measured = TextRenderer.MeasureText(
+      text,
+      font,
+      new Size(Math.Max(1, availableWidth), 0),
+      TextFormatFlags.WordBreak | TextFormatFlags.NoPadding
+    );
+    return measured.Height + (Palette.SpacingSm * 2) + Palette.SpacingXs;
   }
 
   private void DrawRow(ListBox listBox, DrawItemEventArgs e)
@@ -366,13 +462,13 @@ public sealed class RecordsListControl : UserControl
       listBox.Font,
       textBounds,
       Palette.Text(_dark),
-      // S14 (AGENTS.md §17) — EndEllipsis degrades a pathologically long row (well beyond the
-      // measured worst case the fixed window's width is sized for) to a clipped-with-ellipsis
-      // string instead of clipping mid-glyph with no indication.
+      // S15 (AGENTS.md §17) — WordBreak, not EndEllipsis: a row past the window's sized-for worst
+      // case (a session over 24h, a 4-digit lap id) now wraps to a second line — matching
+      // MeasureRowHeight above — instead of clipping to an ellipsis.
       TextFormatFlags.VerticalCenter
         | TextFormatFlags.Left
         | TextFormatFlags.NoPadding
-        | TextFormatFlags.EndEllipsis
+        | TextFormatFlags.WordBreak
     );
   }
 }

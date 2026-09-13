@@ -16,31 +16,30 @@ public sealed class MainForm : Form
 {
   /// <summary>
   /// The window title, also used by <see cref="Program"/> to locate this window from a second
-  /// instance (AGENTS.md §10.5).
+  /// instance (AGENTS.md §10.5). S15 (AGENTS.md §17) — carries the version, replacing the deleted
+  /// version footer label: <c>Application.ProductVersion</c> needs no live <see cref="MainForm"/>
+  /// instance to read (it comes from the assembly's own version metadata), so this stays a value
+  /// computable before <see cref="Program"/> ever constructs one, matching how §10.5's
+  /// second-instance path already used it.
   /// </summary>
-  internal const string WindowTitle = "Stopwatch";
+  internal static readonly string WindowTitle = $"Stopwatch v{Application.ProductVersion}";
 
-  // S14/S14a/S14b/S14c (AGENTS.md §17) — the window's fixed content size, expressed in *design*
-  // pixels at the 96dpi baseline. Width is driven by the widest realistic records/laps row rendered
-  // in the mono body font (a 5-digit lap id with a 4-digit elapsed hour count). Height
-  // (632x680 -> 632x728 in S14b -> 632x732 in S14c) is the worst case with the resumed-pause note,
-  // the laps panel, 5 records, "Clear All Records", and the disabled "Manage Records" placeholder
-  // all visible at once, measured directly from the real, fixed-up control tree rather than hand
-  // arithmetic (see §17's S14b/S14c entries for the exact measured numbers) — records are capped to
-  // MaxDisplayedRecords, so this worst case is a genuine, known constant instead of "however much
-  // space happens to be left." This literal alone is never assigned to ClientSize —
-  // ComputeFixedClientSize scales it to the window's real device DPI first, and widens it further
-  // if the live-DPI row measurement needs more than this design width provides. Internal (not
-  // private) so MainFormLayoutTests can pin the row-width test to this literal instead of
-  // duplicating it.
-  internal static readonly Size FixedClientSize = new(632, 732);
+  // S15 (AGENTS.md §17) — the design-pixel worst case a records/laps row is sized for: a session
+  // that ran for a full 24 hours (FormatElapsed(24 * 60) -> "24:00"). Replaces S14's deliberately
+  // absurd 9,999-hour/5-digit-lap-id bound — anything longer than this now word-wraps to a second
+  // line (RecordsListControl.ConfigureRowRendering) instead of forcing every window wider to fit an
+  // unrealistic case. Internal so MainFormLayoutTests can pin its row-width test to this same bound.
+  internal const int WorstCaseElapsedMinutes = 24 * 60;
 
-  // S14a (AGENTS.md §17) — the non-text chrome a records/laps row must fit alongside, in the same
-  // 96dpi design pixels as FixedClientSize above: RecordsListControl.DrawRow's text inset, the
-  // laps/records ListBox's own vertical scrollbar, RecordsListControl's card Padding, the
-  // TableLayoutPanel cell's default Margin, and MainForm's own root layout Padding. Kept as design
-  // constants (not read from SystemInformation at call time) so RequiredClientWidth stays a pure
-  // function of its dpi parameter and is testable across DPIs the test host isn't actually running.
+  // S14a (AGENTS.md §17) — the non-text chrome a records/laps row must fit alongside, in 96dpi
+  // design pixels: RecordsListControl.DrawRow's text inset, RecordsListControl's card Padding, the
+  // TableLayoutPanel cell's default Margin, and MainForm's own root layout Padding.
+  // DesignScrollBarWidth is budgeted separately, only against the laps row (S15, AGENTS.md §17) —
+  // the laps list is the only one of the two that can actually scroll (laps are not capped the way
+  // records are); the records list is height-capped to its own content so its row never sits behind
+  // a scrollbar. Kept as design constants (not read from SystemInformation at call time) so
+  // RequiredClientWidth stays a pure function of its dpi parameter and is testable across DPIs the
+  // test host isn't actually running.
   private const int DesignRowTextInset = Palette.SpacingSm * 2;
   private const int DesignScrollBarWidth = 17; // SystemInformation.VerticalScrollBarWidth at 96dpi
   private const int DesignCardPadding = Palette.SpacingLg * 2;
@@ -51,9 +50,8 @@ public sealed class MainForm : Form
   private readonly StopwatchControl _stopwatchControl;
   private readonly RecordsListControl _recordsListControl;
   private readonly TrayIconService _trayIconService;
-  private readonly Label _versionLabel;
+  private readonly TableLayoutPanel _rootLayout;
   private readonly Font _bodyFont;
-  private readonly Font _captionFont;
   private readonly Icon _appIcon;
   private readonly int _activateMessage;
 
@@ -80,20 +78,13 @@ public sealed class MainForm : Form
     AutoScaleDimensions = new SizeF(96F, 96F);
     DoubleBuffered = true;
     _bodyFont = Typography.CreateBodyFont();
-    _captionFont = Typography.CreateCaptionFont();
     Font = _bodyFont;
     _appIcon = LoadAppIcon();
     Icon = _appIcon;
-    // Clamped so a fixed (non-draggable) window can never end up taller than the screen at high
-    // DPI — the user has no resize handle to rescue it with (AGENTS.md §17). DeviceDpi is a
-    // reasonable value even before the handle exists (the system DPI); OnDpiChanged re-derives
-    // this once the window is actually placed on a specific monitor.
-    ClientSize = ClampToWorkingArea(ComputeFixedClientSize(DeviceDpi));
-    // Manual, not CenterScreen: S11b (AGENTS.md §10.6) owns initial placement so a saved manual
-    // position (loaded from the database once it's ready, in InitializeAsync below) can override
-    // the synchronous default center set here.
+    // Manual, not CenterScreen: the window is sized from its own content below before it is first
+    // centered, so the synchronous framework-driven CenterScreen (which needs a size before the
+    // content exists) would center the wrong size.
     StartPosition = FormStartPosition.Manual;
-    PositionWindowCentered();
 
     _database = new Database(Database.DefaultDatabasePath);
     _stopwatchControl = new StopwatchControl(_database, TimeProvider.System)
@@ -103,47 +94,49 @@ public sealed class MainForm : Form
     _recordsListControl = new RecordsListControl();
     _trayIconService = new TrayIconService(_stopwatchControl, RestoreWindow, ExitApplication);
     _activateMessage = (int)Program.RegisterWindowMessage(Program.ActivateMessageName);
-    // S12 (AGENTS.md §6/§15/§17) — the version footer; <Version> in the .csproj flows through to
-    // Application.ProductVersion via the SDK's generated AssemblyInformationalVersionAttribute.
-    _versionLabel = new Label
-    {
-      Dock = DockStyle.Fill,
-      TextAlign = ContentAlignment.MiddleRight,
-      AutoSize = false,
-      Text = $"Stopwatch v{Application.ProductVersion}",
-      Padding = new Padding(0, Palette.SpacingXs, 0, 0),
-      Font = _captionFont,
-    };
 
-    TableLayoutPanel layout = new()
+    // S15 (AGENTS.md §17) — two rows now, not three: the version footer row is gone (the version
+    // moved into the title bar, WindowTitle above). Bottom Padding is 0, not SpacingMd — together
+    // with RecordsListControl's own bottom-0 card Padding, its 1px OnPaint border, and this cell's
+    // default 3px margin, that is what leaves the ~6px gap the owner asked for between the last
+    // record row and the window's bottom edge, instead of the old footer's dead space.
+    _rootLayout = new TableLayoutPanel
     {
       Dock = DockStyle.Fill,
       ColumnCount = 1,
-      RowCount = 3,
-      Padding = new Padding(Palette.SpacingMd),
+      RowCount = 2,
+      Padding = new Padding(Palette.SpacingMd, Palette.SpacingMd, Palette.SpacingMd, 0),
     };
     // S14 (AGENTS.md §17) — without an explicit ColumnStyle, a single-column TableLayoutPanel falls
     // back to an implicit AutoSize column that only happens to span the window's width; pinning it
     // to 100% makes that span structural instead of incidental.
-    layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-    layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-    // S14b (AGENTS.md §17) — AutoSize, not Percent(100): RecordsListControl now reports a real,
-    // bounded preferred height (records capped at MaxDisplayedRecords), so it no longer needs to
-    // stretch and fill whatever's left of the fixed window — that stretch was the actual source of
-    // "the window is too tall" in typical use, where far fewer than the worst-case row count show.
-    layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-    layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-    layout.Controls.Add(_stopwatchControl, 0, 0);
-    layout.Controls.Add(_recordsListControl, 0, 1);
-    layout.Controls.Add(_versionLabel, 0, 2);
-    Controls.Add(layout);
+    _rootLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+    // S14b (AGENTS.md §17) — AutoSize, not Percent(100): RecordsListControl reports a real content
+    // height (S15: now the *actual* shown row count, not a worst-case constant), so it no longer
+    // needs to stretch and fill whatever's left of the window.
+    _rootLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+    _rootLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+    _rootLayout.Controls.Add(_stopwatchControl, 0, 0);
+    _rootLayout.Controls.Add(_recordsListControl, 0, 1);
+    Controls.Add(_rootLayout);
 
+    // S15 (AGENTS.md §17) — RefreshLaps itself calls ResizeToContent after every update (below), so
+    // subscribing it to StateChanged is also what re-fits the window when only the "Resumed from a
+    // pause" note's visibility changes (e.g. after RestoreAsync) without the laps list itself
+    // changing — no separate StateChanged subscription is needed for that.
     _stopwatchControl.Timer.RecordsChanged += RefreshRecords;
     _stopwatchControl.StateChanged += RefreshLaps;
     _stopwatchControl.StateChanged += RefreshTray;
     _stopwatchControl.Tick += RefreshTray;
     _recordsListControl.ClearAllRequested += ClearRecordsAsync;
     Load += InitializeAsync;
+
+    // S15 (AGENTS.md §17) — sized from the actual (idle, empty-records) control tree just built
+    // above; ResizeToContent itself centers on that final size (below) — replaces S14's fixed
+    // design-pixel literal. DeviceDpi is a reasonable value even before the handle exists (the
+    // system DPI); OnDpiChanged re-derives this once the window is actually placed on a specific
+    // monitor.
+    ResizeToContent(DeviceDpi);
 
     // S12 (AGENTS.md §7/§11/§17) — apply the OS's current effective dark/light state once at
     // startup, then keep it live for the rest of the process by reacting to SystemEvents.
@@ -171,6 +164,11 @@ public sealed class MainForm : Form
   protected override void OnResize(EventArgs e)
   {
     base.OnResize(e);
+    // S15 (AGENTS.md §17) — a fallback, not the primary mechanism: WndProc's WM_SYSCOMMAND/
+    // SC_MINIMIZE interception above stops the window ever entering Minimized via its own title-bar
+    // button, but a path that bypasses WM_SYSCOMMAND entirely (e.g. a shell-driven minimize) would
+    // still land here with WindowState already Minimized — hide to tray rather than let it sit
+    // minimized with a taskbar button.
     if (WindowState == FormWindowState.Minimized)
     {
       HideToTray();
@@ -204,6 +202,20 @@ public sealed class MainForm : Form
       return;
     }
 
+    // S15 (AGENTS.md §10.3/§17) — intercept the minimize system command itself, rather than reacting
+    // to OnResize after the fact: swallowing WM_SYSCOMMAND/SC_MINIMIZE here (not calling
+    // base.WndProc) means the window never actually enters FormWindowState.Minimized, so Windows
+    // never gives it a minimized taskbar button to leave behind in the first place. WParam's low
+    // nibble carries flags Windows itself may set; masking them off is the documented way to compare
+    // a WM_SYSCOMMAND WParam against an SC_* constant.
+    const int WM_SYSCOMMAND = 0x0112;
+    const int SC_MINIMIZE = 0xF020;
+    if (m.Msg == WM_SYSCOMMAND && ((int)m.WParam & 0xFFF0) == SC_MINIMIZE)
+    {
+      HideToTray();
+      return;
+    }
+
     base.WndProc(ref m);
   }
 
@@ -215,13 +227,13 @@ public sealed class MainForm : Form
     // layout changes (AGENTS.md §10.1) — none of which a DPI change alone affects — so force a
     // fresh render explicitly here instead (AGENTS.md §7/§17).
     _trayIconService.RefreshIcon();
-    // S14 (AGENTS.md §17) — re-clamp on every DPI change, not just at startup: moving this
-    // fixed-size, non-resizable window to a higher-DPI monitor must not leave it taller than that
+    // S14/S15 (AGENTS.md §17) — re-size on every DPI change, not just at startup: moving this
+    // fixed-width, non-resizable window to a higher-DPI monitor must not leave it wider than that
     // monitor's working area, since the user has no resize handle to shrink it back with.
     // S14a: re-derive from the *new* DPI (e.DeviceDpiNew), not the old size — the previous version
     // reset ClientSize to raw design pixels here, undoing whatever PerformAutoScale had just
     // correctly done for the new monitor.
-    ClientSize = ClampToWorkingArea(ComputeFixedClientSize(e.DeviceDpiNew));
+    ResizeToContent(e.DeviceDpiNew);
   }
 
   /// <inheritdoc />
@@ -237,7 +249,6 @@ public sealed class MainForm : Form
       // native GDI handles and are never disposed by the base Form; each factory/loader here is
       // documented as caller-owned, so ownership is discharged here.
       _bodyFont.Dispose();
-      _captionFont.Dispose();
       _appIcon.Dispose();
     }
 
@@ -246,22 +257,30 @@ public sealed class MainForm : Form
 
   private void HideToTray()
   {
+    // S15 (AGENTS.md §10.3/§17) — WindowState is normalized *before* Hide(), not after: this window
+    // must never sit hidden while Minimized, or the next RestoreWindow() call brings it back still
+    // minimized (the bug the repo owner reported — closing while minimized reopened minimized).
+    // WM_SYSCOMMAND/SC_MINIMIZE is intercepted in WndProc before the window ever becomes Minimized
+    // through its own title-bar button, so this mainly guards the OnResize fallback path above.
+    WindowState = FormWindowState.Normal;
     Hide();
     ShowInTaskbar = false;
   }
 
   private void RestoreWindow()
   {
-    // WindowState is reset to Normal *before* positioning: Location reads/writes while
-    // WindowState is Minimized are unreliable (Windows tracks a minimized window's actual on-screen
-    // rect separately from its "restore" position). Safe on a hidden form — this just updates
-    // placement, nothing is drawn until Show() below.
+    // S15 (AGENTS.md §17) — ShowInTaskbar is set back to true *before* Show(), not after: flipping
+    // ShowInTaskbar recreates the window handle, and doing that while the form is still hidden
+    // avoids any chance of the handle recreation observing (and reinstating) a stale minimized
+    // state. WindowState is already Normal from HideToTray's own normalization above, but is
+    // reasserted here too since RestoreWindow is also reached from paths that never called
+    // HideToTray first (first launch, single-instance activation).
     WindowState = FormWindowState.Normal;
+    ShowInTaskbar = true;
     // S14b (AGENTS.md §10.6/§17) — always centers; a tray Open/double-click, single-instance
     // activation, or restore-from-minimize all route through here.
     PositionWindowCentered();
     Show();
-    ShowInTaskbar = true;
     Activate();
   }
 
@@ -296,86 +315,174 @@ public sealed class MainForm : Form
   }
 
   /// <summary>
-  /// Computes this window's fixed <see cref="Form.ClientSize"/> for a given device DPI (S14a,
-  /// AGENTS.md §17): <see cref="FixedClientSize"/> scaled from its 96dpi design baseline up to
-  /// <paramref name="deviceDpi"/>, widened if necessary to <see cref="RequiredClientWidth"/> so the
-  /// widest realistic records/laps row never clips at that DPI. The result still needs
-  /// <see cref="ClampToWorkingArea"/> applied before assignment.
+  /// Resizes the window to fit its actual current content at <paramref name="deviceDpi"/> (S15,
+  /// AGENTS.md §17) — replaces S14's fixed design-pixel <c>FixedClientSize</c> literal. Width comes
+  /// from <see cref="RequiredClientWidth"/> (the sized-for worst-case row, §17's <see
+  /// cref="WorstCaseElapsedMinutes"/>); height comes from asking <see cref="_rootLayout"/> for its
+  /// real preferred size at that width, so the window always ends a few pixels below whatever is
+  /// actually shown (idle vs. running, 0 vs. 5 records, laps present or not) instead of a constant
+  /// sized for the worst case of everything visible at once. Call after any change that can affect
+  /// the control tree's preferred size — <see cref="RefreshRecords"/>, <see cref="RefreshLaps"/>, a
+  /// <see cref="StopwatchControl.StateChanged"/> (the resumed-pause note toggling), and
+  /// <see cref="OnDpiChanged"/> — as well as once at construction.
   /// </summary>
-  /// <param name="deviceDpi">The device DPI to size for — <see cref="Control.DeviceDpi"/> at
-  /// construction, or <see cref="DpiChangedEventArgs.DeviceDpiNew"/> from <see cref="OnDpiChanged"/>.</param>
-  private static Size ComputeFixedClientSize(int deviceDpi)
+  /// <param name="deviceDpi">The device DPI to size for — <see cref="Control.DeviceDpi"/> in the
+  /// common case, or <see cref="DpiChangedEventArgs.DeviceDpiNew"/> from <see cref="OnDpiChanged"/>.</param>
+  private void ResizeToContent(int deviceDpi)
   {
-    Size scaledDesignSize = ScaleToDpi(FixedClientSize, deviceDpi);
+    int width = ComputeFixedWidth(deviceDpi);
+    // Ask the real control tree for its preferred height at this width, with no height constraint
+    // (0) — the same "measure the actual fixed-up tree" technique AGENTS.md §17's S14b/S14c entries
+    // used via a throwaway harness, now run live on every content change instead of hand-derived
+    // once.
+    int height = _rootLayout.GetPreferredSize(new Size(width, 0)).Height;
+    Size clamped = ClampToWorkingArea(new Size(width, height));
+    if (ClientSize != clamped)
+    {
+      ClientSize = clamped;
+    }
+    // S15 (AGENTS.md §10.6/§17) — re-center on every content-driven resize, not just the explicit
+    // Open transitions: keeping Location fixed while Size changes grows/shrinks the window from its
+    // top-left corner, so once real content loads asynchronously (RestoreAsync populating records/
+    // laps after the constructor's own initial, empty-state centering) the window visibly drifts
+    // off-center both horizontally and vertically. Centering here — the same "always centered, never
+    // remembers a position" rule §10.6 already applies to Open transitions — keeps every resize
+    // centered too, and as a side effect keeps the window on-screen without a separate clamp: a size
+    // already clamped to the working area, centered on that same working area, is always fully
+    // visible.
+    PositionWindowCentered();
+  }
+
+  /// <summary>Computes the DPI-scaled fixed window width for <paramref name="deviceDpi"/> (S15,
+  /// AGENTS.md §17) — <see cref="RequiredClientWidth"/> at that DPI, using a throwaway probe font
+  /// the way <see cref="OnDpiChanged"/> and the constructor both need without duplicating the
+  /// font-creation call at each site.</summary>
+  private static int ComputeFixedWidth(int deviceDpi)
+  {
     using Font monoProbeFont = Typography.CreateMonospaceBodyFont();
-    int requiredWidth = RequiredClientWidth(monoProbeFont, deviceDpi);
-    // The fixed width is a floor, not a bare literal: it must never end up narrower than what the
-    // widest realistic row actually needs at this DPI, since the frame cannot be dragged wider.
-    return new Size(Math.Max(scaledDesignSize.Width, requiredWidth), scaledDesignSize.Height);
+    return RequiredClientWidth(monoProbeFont, deviceDpi);
   }
 
   /// <summary>
-  /// Scales a size expressed in 96dpi design pixels up to <paramref name="deviceDpi"/> device
-  /// pixels (S14a, AGENTS.md §17) — the same linear ratio WinForms' own <c>PerformAutoScale</c>
-  /// applies for <see cref="AutoScaleMode.Dpi"/>.
-  /// </summary>
-  private static Size ScaleToDpi(Size designSize, int deviceDpi)
-  {
-    float scale = deviceDpi / 96f;
-    return new Size(
-      (int)Math.Ceiling(designSize.Width * scale),
-      (int)Math.Ceiling(designSize.Height * scale)
-    );
-  }
-
-  /// <summary>
-  /// Measures the widest row <see cref="RecordsListControl"/> can realistically render — a 5-digit
-  /// lap id with a 4-digit elapsed-hour count (AGENTS.md §8.5) — in <paramref name="monoBodyFont"/>
-  /// as it will actually render at <paramref name="deviceDpi"/>, and adds the itemized non-text
-  /// chrome budget (<see cref="DesignRowTextInset"/> etc.) scaled to the same DPI. A <see cref="Font"/>'s
-  /// point size is otherwise measured against a fixed 96dpi baseline regardless of the caller's
-  /// actual DPI context (S14a, AGENTS.md §17) — the very mismatch that let record rows clip at
-  /// anything above 100% scaling — so the font is rebuilt at an equivalent, pre-scaled size before
-  /// measuring rather than measured as-is.
+  /// Computes the minimum client width for two independent needs, at <paramref name="deviceDpi"/>,
+  /// and returns whichever is larger: the widest row <see cref="RecordsListControl"/> is sized for —
+  /// a session that ran a full 24 hours (<see cref="WorstCaseElapsedMinutes"/>, AGENTS.md §8.5/§17; a
+  /// row past this word-wraps instead of clipping, per <see cref="RecordsListControl"/>'s own row
+  /// rendering) — measured in <paramref name="monoBodyFont"/> as it will actually render, plus its
+  /// itemized non-text chrome budget (<see cref="DesignRowTextInset"/> etc.); and the records header
+  /// row's own content (<see cref="HeaderRowWidth"/> — "Records" plus the "Manage Records"/
+  /// "Clear All Records" buttons, in the proportional body font, S15 follow-up, AGENTS.md §17: a
+  /// window sized only from the mono row left this row free to overflow past the window's right edge
+  /// whenever it needed more room than the mono row did). A <see cref="Font"/>'s point size is
+  /// otherwise measured against a fixed 96dpi baseline regardless of the caller's actual DPI context
+  /// (S14a, AGENTS.md §17) — the very mismatch that let record rows clip at anything above 100%
+  /// scaling — so every font used here is rebuilt at an equivalent, pre-scaled size before measuring
+  /// rather than measured as-is. The laps row (capped at a realistic 3-digit lap id) also reserves
+  /// scrollbar chrome the records row does not (S15, AGENTS.md §17): the laps list is the only one of
+  /// the two that can genuinely scroll.
   /// </summary>
   /// <param name="monoBodyFont">The unscaled monospace body font (<see cref="Typography.CreateMonospaceBodyFont"/>).</param>
   /// <param name="deviceDpi">The device DPI to measure for.</param>
   /// <returns>The minimum client width, in device pixels at <paramref name="deviceDpi"/>, that fits
-  /// the widest row without clipping.</returns>
+  /// both the widest row and the header row without clipping.</returns>
   internal static int RequiredClientWidth(Font monoBodyFont, int deviceDpi)
   {
     float scale = deviceDpi / 96f;
-    Lap worstCaseLap = new(
-      Id: 99_999,
-      StartTimestamp: 0,
-      EndTimestamp: 60_000,
-      ElapsedMinutes: 9_999 * 60
-    );
-    string worstCaseRow = RecordsListControl.FormatLapRow(worstCaseLap);
 
-    using Font scaledFont = new(
+    StopwatchRecord worstCaseRecord = new(
+      Id: 1,
+      StartTimestamp: 0,
+      EndTimestamp: 0,
+      ElapsedMinutes: WorstCaseElapsedMinutes
+    );
+    Lap worstCaseLap = new(
+      Id: 999,
+      StartTimestamp: 0,
+      EndTimestamp: 0,
+      ElapsedMinutes: WorstCaseElapsedMinutes
+    );
+
+    using Font scaledMonoFont = new(
       monoBodyFont.FontFamily,
       monoBodyFont.Size * scale,
       monoBodyFont.Style
     );
-    int rowTextWidth = TextRenderer
+    int recordRowWidth = MeasureRowWidth(
+      RecordsListControl.FormatRecordRow(worstCaseRecord),
+      scaledMonoFont
+    );
+    int lapRowWidth =
+      MeasureRowWidth(RecordsListControl.FormatLapRow(worstCaseLap), scaledMonoFont)
+      + (int)Math.Ceiling(DesignScrollBarWidth * scale);
+
+    int designChrome =
+      DesignRowTextInset + DesignCardPadding + DesignCellMargin + DesignRootPadding;
+    int scaledChrome = (int)Math.Ceiling(designChrome * scale);
+    int rowWidth = Math.Max(recordRowWidth, lapRowWidth) + scaledChrome;
+
+    // S15 follow-up (AGENTS.md §17) — a second, independent floor for the header row ("Records" +
+    // Manage Records + Clear All Records), which this window's width had never accounted for at
+    // all: sizing purely from the mono row left the header row's own content — in the proportional
+    // body font, not measured anywhere else — free to overflow past the window's right edge at any
+    // DPI where it happens to need more room than the mono row does. Uses the same pre-scaled-font
+    // measuring technique as the mono row above, and the same GlyphButton Padding formula
+    // (Palette.SpacingMd left/right, no glyph/gutter for a text-only button) its real buttons use.
+    return Math.Max(rowWidth, HeaderRowWidth(scale));
+  }
+
+  private static int MeasureRowWidth(string row, Font scaledFont) =>
+    TextRenderer
       .MeasureText(
-        worstCaseRow,
+        row,
         scaledFont,
         Size.Empty,
         TextFormatFlags.NoPadding | TextFormatFlags.SingleLine
       )
       .Width;
 
-    int designChrome =
-      DesignRowTextInset
-      + DesignScrollBarWidth
-      + DesignCardPadding
-      + DesignCellMargin
-      + DesignRootPadding;
-    int scaledChrome = (int)Math.Ceiling(designChrome * scale);
+  /// <summary>
+  /// Computes the minimum client width the records header row ("Records" label, left; "Manage
+  /// Records"/"Clear All Records" buttons, right — <see cref="RecordsListControl"/>) needs at
+  /// <paramref name="scale"/> (S15, AGENTS.md §17), so <see cref="RequiredClientWidth"/> can floor
+  /// the window's width against it the same way it already does for the mono record/lap row.
+  /// </summary>
+  private static int HeaderRowWidth(float scale)
+  {
+    using Font unscaledBodyFont = Typography.CreateBodyFont();
+    using Font scaledBodyFont = new(
+      unscaledBodyFont.FontFamily,
+      unscaledBodyFont.Size * scale,
+      unscaledBodyFont.Style
+    );
 
-    return rowTextWidth + scaledChrome;
+    int TextWidth(string text) =>
+      TextRenderer
+        .MeasureText(
+          text,
+          scaledBodyFont,
+          Size.Empty,
+          TextFormatFlags.NoPadding | TextFormatFlags.SingleLine
+        )
+        .Width;
+    // A text-only GlyphButton's own preferred width is Padding.Left + textWidth + Padding.Right,
+    // with no glyph square or gutter (GlyphButton.GetPreferredSize); its Padding.Left/Right are
+    // both Palette.SpacingMd (GlyphButton's constructor).
+    int buttonPadding = (int)Math.Ceiling(Palette.SpacingMd * 2 * scale);
+    int recordsLabelWidth = TextWidth("Records");
+    int manageButtonWidth = buttonPadding + TextWidth("Manage Records");
+    int clearButtonWidth = buttonPadding + TextWidth("Clear All Records");
+    // The gap between the two buttons in their FlowLayoutPanel is Manage Records' own right
+    // Margin, Palette.SpacingSm (RecordsListControl's header row construction).
+    int interButtonGap = (int)Math.Ceiling(Palette.SpacingSm * scale);
+    int headerRowContentWidth =
+      recordsLabelWidth + manageButtonWidth + interButtonGap + clearButtonWidth;
+
+    // Same card/cell/root chrome as the mono row's budget, minus the row-specific text inset and
+    // scrollbar width — this row isn't drawn by RecordsListControl.DrawRow and never scrolls.
+    int headerRowChrome = DesignCardPadding + DesignCellMargin + DesignRootPadding;
+    int scaledHeaderRowChrome = (int)Math.Ceiling(headerRowChrome * scale);
+
+    return headerRowContentWidth + scaledHeaderRowChrome;
   }
 
   /// <summary>
@@ -401,11 +508,13 @@ public sealed class MainForm : Form
   }
 
   /// <summary>
-  /// Sets <see cref="Form.Location"/> to center the window on the primary screen's working area
-  /// (S14b, AGENTS.md §10.6/§17) — called every time the window is shown: the constructor's
-  /// synchronous default, and every tray Open/double-click, single-instance activation, or
-  /// restore-from-minimize via <see cref="RestoreWindow"/>. The window never remembers or restores
-  /// a previous position.
+  /// Sets <see cref="Form.Location"/> to center the window (both axes) on the primary screen's
+  /// working area (S14b, revised S15, AGENTS.md §10.6/§17) — called from <see cref="ResizeToContent"/>
+  /// on every content-driven resize (so the window stays centered as it grows/shrinks with content,
+  /// not just on the "Open" transitions below) and separately from every tray Open/double-click,
+  /// single-instance activation, or restore-from-minimize via <see cref="RestoreWindow"/> (redundant
+  /// with the resize that already happened via a live update, but cheap and keeps each Open path
+  /// correct independently). The window never remembers or restores a previous position.
   /// </summary>
   private void PositionWindowCentered()
   {
@@ -420,9 +529,9 @@ public sealed class MainForm : Form
   /// <summary>
   /// Applies the current effective OS dark/light state (AGENTS.md §7/§11/§17) to every theme-aware
   /// surface: <see cref="StopwatchControl.DarkMode"/> and <see cref="RecordsListControl.Dark"/>
-  /// (whose setters already trigger their own repaint), <see cref="TrayIconService.DarkMode"/>, and
-  /// the version footer's muted-text color. Called once at startup and again on every live OS theme
-  /// change via <see cref="OnUserPreferenceChanged"/>.
+  /// (whose setters already trigger their own repaint) and <see cref="TrayIconService.DarkMode"/>.
+  /// Called once at startup and again on every live OS theme change via
+  /// <see cref="OnUserPreferenceChanged"/>.
   /// </summary>
   private void ApplyDarkMode()
   {
@@ -430,7 +539,6 @@ public sealed class MainForm : Form
     _stopwatchControl.DarkMode = dark;
     _recordsListControl.Dark = dark;
     _trayIconService.DarkMode = dark;
-    _versionLabel.ForeColor = Palette.MutedText(dark);
   }
 
   /// <summary>
@@ -522,10 +630,22 @@ public sealed class MainForm : Form
   }
 
   private void RefreshRecords() =>
-    InvokeOnUiThread(() => _recordsListControl.UpdateRecords(_stopwatchControl.Timer.Records));
+    InvokeOnUiThread(() =>
+    {
+      _recordsListControl.UpdateRecords(_stopwatchControl.Timer.Records);
+      // S15 (AGENTS.md §17) — the records card's preferred height just changed (a row was added,
+      // removed by Clear All, or the empty state toggled), so the window must re-fit it.
+      ResizeToContent(DeviceDpi);
+    });
 
   private void RefreshLaps() =>
-    InvokeOnUiThread(() => _recordsListControl.UpdateLaps(_stopwatchControl.Timer.Laps));
+    InvokeOnUiThread(() =>
+    {
+      _recordsListControl.UpdateLaps(_stopwatchControl.Timer.Laps);
+      // S15 (AGENTS.md §17) — the laps panel appearing/disappearing, or growing/shrinking up to its
+      // 3-row cap, changes the records card's preferred height.
+      ResizeToContent(DeviceDpi);
+    });
 
   private void RefreshTray() =>
     InvokeOnUiThread(() =>
