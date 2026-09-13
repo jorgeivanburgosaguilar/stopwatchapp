@@ -24,6 +24,12 @@ internal sealed class FakeStopwatchStore : IStopwatchStore
   public Task<IReadOnlyList<StopwatchRecord>> GetAllRecordsAsync() =>
     Task.FromResult<IReadOnlyList<StopwatchRecord>>([.. _records]);
 
+  public Task DeleteRecordAsync(long id)
+  {
+    _records.RemoveAll(record => record.Id == id);
+    return Task.CompletedTask;
+  }
+
   public Task ClearAllRecordsAsync()
   {
     _records.Clear();

@@ -4,7 +4,7 @@ namespace StopwatchApp.Services;
 
 /// <summary>
 /// The persistence surface for completed records and the single saved-session slot. Deliberately
-/// minimal — no update, no delete-by-id, no range query. Every implementation must wrap each
+/// minimal — no update or range query. Every implementation must wrap each
 /// method body in try/catch and swallow errors: a corrupt or unreadable saved session returns
 /// <see langword="null"/> rather than throwing, and a failed write must never surface an exception
 /// to the UI (AGENTS.md §9).
@@ -24,6 +24,12 @@ public interface IStopwatchStore
   /// Loads every persisted record, newest first.
   /// </summary>
   Task<IReadOnlyList<StopwatchRecord>> GetAllRecordsAsync();
+
+  /// <summary>
+  /// Deletes one persisted record by its identifier. A missing identifier is a harmless no-op.
+  /// </summary>
+  /// <param name="id">The primary-key identifier of the record to delete.</param>
+  Task DeleteRecordAsync(long id);
 
   /// <summary>
   /// Deletes every persisted record.

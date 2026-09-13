@@ -83,6 +83,20 @@ public sealed class DatabaseTests : IAsyncLifetime
   }
 
   [Fact]
+  public async Task DeleteRecordAsync_RemovesOnlyTheRequestedRecord()
+  {
+    long firstId = await _database.SaveRecordAsync(0, 1000, 60_000);
+    long secondId = await _database.SaveRecordAsync(1, 2000, 120_000);
+    long thirdId = await _database.SaveRecordAsync(2, 3000, 180_000);
+
+    await _database.DeleteRecordAsync(secondId);
+    await _database.DeleteRecordAsync(id: 999_999);
+
+    IReadOnlyList<StopwatchRecord> records = await _database.GetAllRecordsAsync();
+    Assert.Equal([thirdId, firstId], records.Select(record => record.Id));
+  }
+
+  [Fact]
   public async Task LoadPausedSessionAsync_WithNoSavedSession_ReturnsNull()
   {
     PausedSession? session = await _database.LoadPausedSessionAsync();
