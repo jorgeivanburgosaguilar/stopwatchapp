@@ -99,6 +99,7 @@ public interface IStopwatchStore
 {
     Task<long> SaveRecordAsync(long startTimestamp, long endTimestamp, long elapsedMs);
     Task<IReadOnlyList<StopwatchRecord>> GetAllRecordsAsync();
+    Task DeleteRecordAsync(long id);
     Task ClearAllRecordsAsync();
     Task SavePausedSessionAsync(PausedSession session);
     Task<PausedSession?> LoadPausedSessionAsync();
@@ -130,6 +131,7 @@ public sealed class StopwatchTimer
     public void Lap();
     public Task StopAsync();
     public Task ClearRecordsAsync();
+    public Task DeleteRecordAsync(long id);
     public void Tick();                 // called once/second by the UI-side Timer
     public Task RestoreAsync();         // startup: loads a saved paused session, if any
 
@@ -638,9 +640,11 @@ Rules:
   capped display count) and, when clicked and confirmed, clears every persisted record — not just
   the 5 shown. Styled red (`Palette.StopButton`, S15, §17) via the extracted `GlyphButton` (below),
   matching the destructive-action color used elsewhere.
-- A **`Manage Records`** button (S14c, §17) sits beside `Clear All Records`, always visible but
-  **`Enabled = false`** — a reserved placeholder for the planned history/records-manager window
-  above. Styled blue (`Palette.LapButton`, S15, §17).
+- A **`Manage Records`** button (S17, §17) sits beside `Clear All Records`, is always enabled, and
+  opens one modeless manager window. Styled blue (`Palette.LapButton`).
+- The manager lists every saved record newest first, 10 per page, with Previous/Next navigation and
+  confirmed per-row `Delete` actions. Its header also has a confirmed `Clear All Records` action;
+  the main card's own Clear All shortcut remains.
 - **`GlyphButton` (S15, §17):** the S11a owner-drawn rounded button, originally private to
   `StopwatchControl`, is extracted to its own `Controls/GlyphButton.cs` so `RecordsListControl`'s
   header-row buttons and `ClearRecordsDialog`'s confirm/cancel buttons can reuse the same rounded,
@@ -1051,9 +1055,10 @@ xUnit, in a `StopwatchApp.Tests` project.
 - Records display cap (S14b, §8.5): only the 5 most recent records are listed in the main window
   regardless of how many are persisted; "Clear All Records" still clears every persisted record, and
   its own visibility still reflects the true total, not the capped display count.
-- Manage Records placeholder (S14c, §8.5): a `Manage Records` button is always visible beside
-  `Clear All Records`, always disabled (there is no records-manager window yet), and never wraps to
-  its own line regardless of window state.
+- Manage Records window (S17, §8.5): `Manage Records` is enabled and opens a single modeless,
+  owner-managed window that lists all records newest first, paginated at 10 rows per page. Each row
+  has a confirmed Delete action; the header has a confirmed Clear All action. Add/edit behavior is
+  out of scope, and the main card's Clear All shortcut remains.
 - Clear-all dialog styling (S15, §8.5): `Clear All` renders red and `Cancel` renders dark slate, and
   the two sit aligned on the same baseline.
 - Button labels (S16, §8.5/§17): every `GlyphButton` label is centered on the full button axis;
@@ -1912,3 +1917,8 @@ that now carries the actual rule.
   button through the shared control. `TrayIconService` now handles `NotifyIcon.MouseClick`, filters
   for `MouseButtons.Left`, and leaves right-click exclusively to the context menu; the prior
   `DoubleClick` handler was removed. `<Version>` advanced to `1.3.0` for these user-visible changes.
+- **2026-09-13 — S17: Manage Records is now a modeless manager window.** It shows every persisted
+  record newest first in pages of 10, supports confirmed per-row deletion and a confirmed top-level
+  clear-all action, and synchronizes through `StopwatchTimer.RecordsChanged` with the main window's
+  five-row preview. `IStopwatchStore`/`Database`/`StopwatchTimer` gained delete-by-id support; no
+  schema migration is needed. `<Version>` advanced to `1.4.0`.

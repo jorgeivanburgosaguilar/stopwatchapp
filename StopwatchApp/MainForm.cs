@@ -54,6 +54,7 @@ public sealed class MainForm : Form
   private readonly Font _bodyFont;
   private readonly Icon _appIcon;
   private readonly int _activateMessage;
+  private ManageRecordsForm? _manageRecordsForm;
 
   /// <summary>
   /// Initializes a new instance of the <see cref="MainForm"/> class.
@@ -129,6 +130,7 @@ public sealed class MainForm : Form
     _stopwatchControl.StateChanged += RefreshTray;
     _stopwatchControl.Tick += RefreshTray;
     _recordsListControl.ClearAllRequested += ClearRecordsAsync;
+    _recordsListControl.ManageRecordsRequested += OpenManageRecords;
     Load += InitializeAsync;
 
     // S15 (AGENTS.md §17) — sized from the actual (idle, empty-records) control tree just built
@@ -263,6 +265,7 @@ public sealed class MainForm : Form
     // WM_SYSCOMMAND/SC_MINIMIZE is intercepted in WndProc before the window ever becomes Minimized
     // through its own title-bar button, so this mainly guards the OnResize fallback path above.
     WindowState = FormWindowState.Normal;
+    _manageRecordsForm?.Close();
     Hide();
     ShowInTaskbar = false;
   }
@@ -538,6 +541,10 @@ public sealed class MainForm : Form
     bool dark = Application.IsDarkModeEnabled;
     _stopwatchControl.DarkMode = dark;
     _recordsListControl.Dark = dark;
+    if (_manageRecordsForm is not null && !_manageRecordsForm.IsDisposed)
+    {
+      _manageRecordsForm.DarkMode = dark;
+    }
     _trayIconService.DarkMode = dark;
   }
 
@@ -623,6 +630,27 @@ public sealed class MainForm : Form
     await _stopwatchControl.Timer.ClearRecordsAsync();
   }
 
+  private void OpenManageRecords()
+  {
+    if (_manageRecordsForm is not null && !_manageRecordsForm.IsDisposed)
+    {
+      _manageRecordsForm.Activate();
+      return;
+    }
+
+    ManageRecordsForm form = new(
+      _stopwatchControl.Timer.Records,
+      _stopwatchControl.Timer.DeleteRecordAsync,
+      _stopwatchControl.Timer.ClearRecordsAsync
+    )
+    {
+      DarkMode = Application.IsDarkModeEnabled,
+    };
+    form.FormClosed += (_, _) => _manageRecordsForm = null;
+    _manageRecordsForm = form;
+    form.Show(this);
+  }
+
   private void RefreshLists()
   {
     RefreshRecords();
@@ -633,6 +661,10 @@ public sealed class MainForm : Form
     InvokeOnUiThread(() =>
     {
       _recordsListControl.UpdateRecords(_stopwatchControl.Timer.Records);
+      if (_manageRecordsForm is not null && !_manageRecordsForm.IsDisposed)
+      {
+        _manageRecordsForm.UpdateRecords(_stopwatchControl.Timer.Records);
+      }
       // S15 (AGENTS.md §17) — the records card's preferred height just changed (a row was added,
       // removed by Clear All, or the empty state toggled), so the window must re-fit it.
       ResizeToContent(DeviceDpi);

@@ -9,7 +9,8 @@ namespace StopwatchApp.Controls;
 /// Renders the laps panel (shown only while there is at least one lap) and the records panel
 /// (always shown, with a "No records yet" empty state), per AGENTS.md §8.5. Data is pushed in via
 /// <see cref="UpdateRecords"/>/<see cref="UpdateLaps"/> — this control never reads
-/// <c>IStopwatchStore</c> itself; it only raises <see cref="ClearAllRequested"/> and
+/// <c>IStopwatchStore</c> itself; it only raises <see cref="ClearAllRequested"/> or
+/// <see cref="ManageRecordsRequested"/> and
 /// lets its owner (<c>MainForm</c>, S7) perform the actual clear.
 /// </summary>
 public sealed class RecordsListControl : UserControl
@@ -115,13 +116,9 @@ public sealed class RecordsListControl : UserControl
     // Clear All Records, both right-aligned beside the "Records" label per the owner's markup.
     _manageRecordsButton = new GlyphButton("Manage Records", glyph: null, Palette.LapButton)
     {
-      // S14c (AGENTS.md §17) — a disabled placeholder for the planned (not yet built) records
-      // history/manager window: always visible (unlike Clear-All, it isn't gated on having any
-      // records — an empty manager is still openable once it exists) but Enabled = false until that
-      // window is actually implemented.
-      Enabled = false,
       Margin = new Padding(0, 0, Palette.SpacingSm, 0),
     };
+    _manageRecordsButton.Click += (_, _) => ManageRecordsRequested?.Invoke();
 
     _clearAllButton = new GlyphButton("Clear All Records", glyph: null, Palette.StopButton)
     {
@@ -209,6 +206,9 @@ public sealed class RecordsListControl : UserControl
 
   /// <summary>Fires when the user clicks the "Clear All Records" button.</summary>
   public event Action? ClearAllRequested;
+
+  /// <summary>Fires when the user clicks the "Manage Records" button.</summary>
+  public event Action? ManageRecordsRequested;
 
   /// <summary>
   /// Gets or sets whether dark-theme colors should be used for the surfaces

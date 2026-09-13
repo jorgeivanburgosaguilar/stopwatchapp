@@ -143,6 +143,22 @@ public sealed class Database : IStopwatchStore, IAsyncDisposable
   }
 
   /// <inheritdoc />
+  public async Task DeleteRecordAsync(long id)
+  {
+    try
+    {
+      SqliteConnection connection = RequireConnection();
+      await connection
+        .ExecuteAsync("DELETE FROM records WHERE id = @id;", new { id })
+        .ConfigureAwait(false);
+    }
+    catch (Exception)
+    {
+      // Deliberate per AGENTS.md §9: a failed write must never surface to the UI.
+    }
+  }
+
+  /// <inheritdoc />
   public async Task ClearAllRecordsAsync()
   {
     try

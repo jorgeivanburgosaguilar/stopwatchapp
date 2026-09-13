@@ -213,6 +213,17 @@ public sealed class StopwatchTimer
   }
 
   /// <summary>
+  /// Deletes one persisted record and reloads the timer-owned records list. A missing identifier is
+  /// harmless; storage failures follow the store's deliberate swallow-and-reload behavior.
+  /// </summary>
+  /// <param name="id">The primary-key identifier of the record to delete.</param>
+  public async Task DeleteRecordAsync(long id)
+  {
+    await _store.DeleteRecordAsync(id).ConfigureAwait(false);
+    await ReloadRecordsAsync().ConfigureAwait(false);
+  }
+
+  /// <summary>
   /// The tick body: recomputes <see cref="ElapsedMs"/> from the wall clock and raises
   /// <see cref="OnTick"/> at 5-second boundaries. No-op while not running. Called once a second by
   /// the UI-side <see cref="System.Windows.Forms.Timer"/> (owned by <c>StopwatchControl</c>, not
