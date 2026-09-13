@@ -12,6 +12,7 @@
 *.gitignore text eol=lf
 *.sql text eol=crlf
 *.bat text eol=crlf
+LICENSE text eol=lf
 
 #################################
 # .NET

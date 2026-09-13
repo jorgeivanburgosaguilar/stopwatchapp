@@ -7,6 +7,10 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Platforms>x64</Platforms>
     <Platform>x64</Platform>
+    <!-- Make a plain `dotnet publish` target 64-bit Windows while requiring the installed
+         .NET 10 Desktop Runtime instead of bundling it into a self-contained deployment. -->
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <PublishSelfContained>false</PublishSelfContained>
     <Version>1.6.0</Version>
 
     <!-- S14a (AGENTS.md §17) — without this, the SDK appends the git SourceRevisionId to
