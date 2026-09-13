@@ -50,32 +50,25 @@ public static class ClearRecordsDialog
       Dock = DockStyle.Top,
     };
 
-    Button clearAllButton = new()
+    // S15 (AGENTS.md §17) — both buttons are now GlyphButton (text-only, glyph: null), the same
+    // rounded, palette-driven paint as the main window's transport and header-row buttons: "Clear
+    // All" red (matching RecordsListControl's "Clear All Records") and "Cancel" dark slate
+    // (Palette.CancelButton) — a non-destructive action must not read the same as the destructive
+    // one it sits beside. Explicit equal-looking margins (0 vs. right-SpacingSm) keep both on the
+    // same baseline in the FlowLayoutPanel below, instead of the mismatched default/explicit margins
+    // that misaligned them before this change.
+    bool dark = Application.IsDarkModeEnabled;
+    GlyphButton clearAllButton = new("Clear All", glyph: null, Palette.StopButton)
     {
-      Text = "Clear All",
       DialogResult = DialogResult.Yes,
-      AutoSize = true,
-      FlatStyle = FlatStyle.Flat,
-      Padding = new Padding(
-        Palette.SpacingMd,
-        Palette.SpacingXs,
-        Palette.SpacingMd,
-        Palette.SpacingXs
-      ),
+      Margin = new Padding(0),
+      DarkMode = dark,
     };
-    Button cancelButton = new()
+    GlyphButton cancelButton = new("Cancel", glyph: null, Palette.CancelButton)
     {
-      Text = "Cancel",
       DialogResult = DialogResult.Cancel,
-      AutoSize = true,
-      FlatStyle = FlatStyle.Flat,
-      Padding = new Padding(
-        Palette.SpacingMd,
-        Palette.SpacingXs,
-        Palette.SpacingMd,
-        Palette.SpacingXs
-      ),
       Margin = new Padding(0, 0, Palette.SpacingSm, 0),
+      DarkMode = dark,
     };
 
     FlowLayoutPanel buttonPanel = new()
@@ -101,22 +94,13 @@ public static class ClearRecordsDialog
     // No AcceptButton: Enter should never trigger the destructive action by default.
     dialog.CancelButton = cancelButton;
 
-    // S11a: round the two buttons' corners (AGENTS.md §11/§17). A Region clip on an already-Flat
-    // button is a cheap, one-time (no per-frame owner paint) way to do this for a dialog that never
-    // resizes — PerformLayout first so Width/Height reflect the final AutoSize result.
-    dialog.PerformLayout();
-    ApplyRoundedRegion(clearAllButton);
-    ApplyRoundedRegion(cancelButton);
-
+    // S15 (AGENTS.md §17) — GlyphButton owner-paints its own rounded corners (the same routine
+    // StopwatchControl's transport buttons use), so the S11a Region-clip-on-a-Flat-button technique
+    // this dialog used for plain stock Buttons is no longer needed.
+    //
     // The dialog's own outer corners are not rounded here: Windows 11 already rounds top-level
     // window frames at the DWM level by default, so AGENTS.md §11's DialogCornerRadius token needs
     // no extra rendering — see AGENTS.md §17.
     return dialog.ShowDialog(owner);
-  }
-
-  private static void ApplyRoundedRegion(Control control)
-  {
-    Rectangle bounds = new(0, 0, control.Width, control.Height);
-    control.Region = new Region(RoundedRectangle.Path(bounds, Palette.ControlCornerRadius));
   }
 }

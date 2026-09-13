@@ -56,6 +56,8 @@ StopwatchApp/
   Controls/                rendering + event wiring only, no untestable business logic
     StopwatchControl.cs    timer state (§8) + control row (§8.5) + keyboard shortcuts (§10.4)
     StopwatchShortcut.cs   the three window-scoped shortcuts (§10.4)
+    GlyphButton.cs         the S11a owner-drawn rounded button (§8.5/§17); extracted (S15) from
+                            StopwatchControl so RecordsListControl and ClearRecordsDialog reuse it
     RecordsListControl.cs  records and laps list rendering
     ClearRecordsDialog.cs  confirm dialog
   Models/                  one record type per file (§5)
@@ -604,9 +606,11 @@ Rules:
 - Stop while idle is a harmless no-op (the `ElapsedMs > 0 && SessionStartMs > 0` guard in `Stop()`
   absorbs it).
 - **Type scale (S14, §17), defined centrally in `Theme/Typography.cs`:** display (elapsed-time
-  readout) 36pt/48px bold; body (buttons, headers, dialogs, list rows) 12pt/16px; caption (version
-  footer) 9pt/12px — all at the 96dpi design baseline (`1pt = 4/3px`), scaling further with the OS
-  DPI setting via `MainForm`'s `AutoScaleMode.Dpi`.
+  readout) 36pt/48px bold; body (buttons, headers, dialogs, list rows) 12pt/16px; caption 9pt/12px —
+  all at the 96dpi design baseline (`1pt = 4/3px`), scaling further with the OS DPI setting via
+  `MainForm`'s `AutoScaleMode.Dpi`. The caption size has had no consumer since S15 removed the
+  version footer (below) but stays defined — it is still §11's third type-scale step, and
+  `TypographyTests` still covers `Typography.CreateCaptionFont`.
 - The large elapsed-time display and the records/laps rows both use a monospace, tabular-figure font
   (`Typography.MonospaceFamilyName` — Cascadia Mono or Consolas) so digits don't shift width as they
   change and so dates/times column-align down the list.
@@ -614,21 +618,41 @@ Rules:
   stopwatch card's horizontal axis via `Anchor = AnchorStyles.None` inside a `TableLayoutPanel` cell
   (not `Dock` + `TextAlign`, which is a no-op on an `AutoSize` control). The button row re-centers
   automatically as buttons swap per state.
-- A **Laps** panel is shown only when `Laps.Count > 0`, newest first, scrollable.
+- A **Laps** panel is shown only when `Laps.Count > 0`, newest first, scrollable — capped to 3 rows
+  tall (S15, §17: the tallest 3 rows actually shown, not a flat multiple of a single-line height).
 - A **Records** panel is always shown, newest first, with an empty state reading `No records yet`
   when there are none. **Only the most recent 5 are listed** (S14b, §17,
   `RecordsListControl.MaxDisplayedRecords`) — a planned, out-of-scope-for-now history/records-manager
   window will offer the full list with edit/delete; this panel is capped, not scrollable.
+- **Header row (S15, §17):** the `Records` label and the two action buttons below share one line —
+  `Records` left-aligned, `Manage Records` then `Clear All Records` right-aligned — replacing S14's
+  stacked label-then-button-row layout, per the repo owner's markup of a screenshot: "the buttons and
+  the title 'Records List' should be on the same line."
+- **Row word-wrap, not clip (S15, §17):** a records/laps row past the sized-for worst case (a session
+  over `MainForm.WorstCaseElapsedMinutes`, a lap id past 3 digits) word-wraps to a second line
+  (`RecordsListControl.MeasureRowHeight`/owner-drawn `DrawMode.OwnerDrawVariable`), instead of S14's
+  `EndEllipsis` clipping. Each list box's, and the records host panel's, height is recomputed on
+  every `UpdateRecords`/`UpdateLaps` call from the real (possibly wrapped) height of the rows actually
+  shown — never a flat per-row constant — so the window (§10.3) can size itself to match.
 - A `Clear All Records` button is visible only when `Records.Count > 0` (the *actual* total, not the
   capped display count) and, when clicked and confirmed, clears every persisted record — not just
-  the 5 shown.
+  the 5 shown. Styled red (`Palette.StopButton`, S15, §17) via the extracted `GlyphButton` (below),
+  matching the destructive-action color used elsewhere.
 - A **`Manage Records`** button (S14c, §17) sits beside `Clear All Records`, always visible but
   **`Enabled = false`** — a reserved placeholder for the planned history/records-manager window
-  above. Its space is accounted for in `MainForm.FixedClientSize`'s height now, rather than
-  requiring another recalculation once that window exists.
+  above. Styled blue (`Palette.LapButton`, S15, §17).
+- **`GlyphButton` (S15, §17):** the S11a owner-drawn rounded button, originally private to
+  `StopwatchControl`, is extracted to its own `Controls/GlyphButton.cs` so `RecordsListControl`'s
+  header-row buttons and `ClearRecordsDialog`'s confirm/cancel buttons can reuse the same rounded,
+  palette-driven paint routine — with a `Glyph?` (nullable) glyph for a text-only button, and a
+  muted, palette-driven `Enabled = false` visual state (blended toward `Palette.CardBackground`/
+  `Palette.MutedText`) instead of the stock gray.
 - A confirm dialog, titled `Clear All Records`, body text
   `Are you sure you want to clear all records? This action cannot be undone.`, buttons `Cancel` and
-  `Clear All`. Confirming clears the records table and reloads the (now empty) list.
+  `Clear All`, both the extracted `GlyphButton` (S15, §17) — `Clear All` red (`Palette.StopButton`),
+  `Cancel` dark slate (`Palette.CancelButton`, a new non-destructive-action token) — with equal
+  top/bottom margins so the two sit on the same baseline (S14's mismatched default/explicit margins
+  had misaligned them). Confirming clears the records table and reloads the (now empty) list.
 - A note reading `Resumed from a pause on {date} at {time}` (via `FormatDate`/`FormatTimeOnly` on
   `RestoredPausedAtMs`) appears under the timer only after restoring a saved session. It persists
   through Continue and is cleared by Stop or a fresh Start.
@@ -810,15 +834,22 @@ remaining. Opening from the tray restores and re-activates the window.
 the `NotifyIcon` — otherwise a ghost icon lingers in the tray until the user hovers over its former
 location.
 
-**The window is fixed-size and non-resizable (S14, §17).** `FormBorderStyle.FixedSingle`,
-`MaximizeBox = false`, `ClientSize` fixed at `MainForm.FixedClientSize` (632 × 732 design pixels at
-96dpi, scaled to the live device DPI and widened if needed — see §17's S14a/S14b/S14c entries for
-the derivation and why a hand-typed literal was replaced with DPI-aware, then measured, values). The
-frame cannot be dragged wider or taller by the user, so `MainForm` clamps that fixed size to
-`Screen.PrimaryScreen.WorkingArea` at construction and again on every `OnDpiChanged` — at higher OS
-scaling the requested size could otherwise exceed the working area with no way for the user to
-shrink it back. This is a deliberate layout choice, independent of the `ControlStyles.ResizeRedraw`
-fix that stops the stale-border repaint artifact (§17) — the two are not the same thing.
+**The window is non-resizable by the user, but not a fixed size (S14, revised S15, §17).**
+`FormBorderStyle.FixedSingle`, `MaximizeBox = false` — the frame cannot be dragged wider or taller.
+Width is `MainForm.RequiredClientWidth` (a session that ran a full 24 hours,
+`MainForm.WorstCaseElapsedMinutes`, is the design worst case a row is sized for; anything longer
+word-wraps per §8.5 instead of widening the window further), scaled to the live device DPI. **Height
+is content-driven** (S15, §17: `MainForm.ResizeToContent`) — the window ends a few pixels below
+whatever is actually shown (idle vs. running, how many records/laps), recomputed on every content
+change (`RefreshRecords`, `RefreshLaps`, the stopwatch card's `StateChanged`, `OnDpiChanged`) by
+asking the real, live control tree for its preferred size, rather than S14's single constant sized
+for the worst case of everything visible at once. Both dimensions are clamped to
+`Screen.PrimaryScreen.WorkingArea` on every resize — at higher OS scaling the requested width could
+otherwise exceed the working area with no way for the user to shrink it back — and the window's
+`Location` is nudged back on-screen (`ClampLocationToWorkingArea`) if a resize would otherwise push
+part of it past the working area's edge. This sizing behavior is independent of the
+`ControlStyles.ResizeRedraw` fix that stops the stale-border repaint artifact (§17) — the two are not
+the same thing.
 
 **Window and taskbar icon (S14, §17).** `MainForm.Icon` is set from the embedded
 `Assets/app.ico` resource (`StopwatchApp.Assets.app.ico`) at construction; see §6 for why both
@@ -852,10 +883,12 @@ shortcut pressed in a state where it doesn't apply.
 ### 10.5 Single instance
 
 Named `System.Threading.Mutex` created at startup. If a second instance detects the mutex already
-exists, it locates the first instance's window with `FindWindow` (matched by the fixed window
-title, `MainForm.WindowTitle`) and sends it a registered window message (via
-`RegisterWindowMessage` + `PostMessage`) asking it to restore and activate itself, then exits
-immediately — never runs a second copy.
+exists, it locates the first instance's window with `FindWindow` (matched by `MainForm.WindowTitle`
+— **fixed for the life of one build**, not literally constant text: S15, §17 folds the version into
+it, `$"Stopwatch v{Application.ProductVersion}"`, replacing the deleted version footer label, §8.5 —
+but both the running instance and the one calling `FindWindow` are the same build, so the strings
+always match) and sends it a registered window message (via `RegisterWindowMessage` + `PostMessage`)
+asking it to restore and activate itself, then exits immediately — never runs a second copy.
 
 **Not `PostMessage(HWND_BROADCAST, ...)`**, despite that being the originally-planned mechanism
 (§17, dated 2026-09-11): once hidden to tray, §10.3's `ShowInTaskbar = false` gives the window an
@@ -904,8 +937,9 @@ Button colors (base / hover / pressed), same in both themes:
 |---|---|---|---|
 | Start / Continue (green) | `#16A34A` | `#15803D` | `#166534` |
 | Pause (yellow) | `#CA8A04` | `#A16207` | `#854D0E` |
-| Lap (blue) | `#2563EB` | `#1D4ED8` | `#1E40AF` |
-| Stop (red) | `#DC2626` | `#B91C1C` | `#991B1B` |
+| Lap (blue) — also `Manage Records` (S15) | `#2563EB` | `#1D4ED8` | `#1E40AF` |
+| Stop (red) — also `Clear All Records`/dialog `Clear All` (S15) | `#DC2626` | `#B91C1C` | `#991B1B` |
+| Cancel (dark slate, S15, §17) — dialog `Cancel` | `#334155` | `#1E293B` | `#0F172A` |
 
 `Theme/Palette.cs` holds the color and spacing tokens above; `Theme/Typography.cs` (S14, §17) is the
 second token file, holding the type scale (§8.5) and the shared monospace-family resolution.
@@ -980,6 +1014,11 @@ xUnit, in a `StopwatchApp.Tests` project.
 - Tray: the icon updates while running and reflects the current hour/minute; the tooltip shows the
   full `HH:MM:SS`; both close and minimize hide the window and remove its taskbar button; Exit
   terminates the process with no icon left behind in the tray.
+- Minimize-to-tray (S15, §10.3/§17 — fixes a regression where minimize left a taskbar button, and
+  closing while minimized reopened the window still minimized): minimizing via the title-bar button
+  removes the taskbar button exactly like Close does, and every "Open" transition (tray Open/
+  double-click, single-instance activation) always restores the window in its normal (not minimized)
+  state, regardless of whether it was minimized when last hidden.
 - Tray icon layout: while elapsed hours == 0, the icon shows large minute-only digits; once elapsed
   reaches 1 hour, it switches to the stacked hours-over-minutes layout at exactly that boundary; the
   tooltip's full `HH:MM:SS` text is unaffected by which layout is showing.
@@ -988,18 +1027,32 @@ xUnit, in a `StopwatchApp.Tests` project.
   fires while the window is hidden to the tray or while `ClearRecordsDialog` is open.
 - Window position (S14b, §10.6): the window always opens centered on the primary screen — on first
   launch, tray Open/double-click, single-instance activation, and restore-from-minimize alike. It
-  never remembers or restores a previous position, and cannot be dragged-then-resized since it is
-  fixed-size (§10.3).
+  never remembers or restores a previous position, and cannot be dragged-then-resized since the frame
+  itself is non-resizable (§10.3).
 - Window frame and icon (S14, §10.3): the frame cannot be resized (no maximize button, no drag on
   any edge/corner); the stopwatch icon shows in the title bar, the taskbar button, and on the built
   `.exe` in Explorer; the chrono, buttons, and record/lap rows render at the S14 type scale
   (48px/16px/16px) and stay centered as the button set changes state.
+- Window sizes to content, not a fixed constant (S15, §10.3/§17): the window's width fits the
+  sized-for-24-hours record/lap row and its height ends a few pixels below whatever is actually
+  shown, growing/shrinking live as records are added or cleared, as laps appear (up to 3 rows tall)
+  or clear, and as the "Resumed from a pause" note appears/disappears — never a band of dead space
+  to the right of or below the visible rows.
+- Title bar shows the version (S15, §17 — replaces the deleted version-footer label): the title bar
+  reads `Stopwatch v{Application.ProductVersion}` (e.g. `Stopwatch v1.2.0`).
+- Records header row (S15, §8.5): `Records` sits left-aligned on the same line as, not stacked above,
+  `Manage Records` (blue) and `Clear All Records` (red), both right-aligned in that order.
+- Row word-wrap (S15, §8.5): a record/lap row longer than the sized-for worst case (over
+  `MainForm.WorstCaseElapsedMinutes`, or a lap id past 3 digits) wraps to a second line inside its row
+  card instead of clipping or ellipsizing.
 - Records display cap (S14b, §8.5): only the 5 most recent records are listed in the main window
   regardless of how many are persisted; "Clear All Records" still clears every persisted record, and
   its own visibility still reflects the true total, not the capped display count.
 - Manage Records placeholder (S14c, §8.5): a `Manage Records` button is always visible beside
   `Clear All Records`, always disabled (there is no records-manager window yet), and never wraps to
   its own line regardless of window state.
+- Clear-all dialog styling (S15, §8.5): `Clear All` renders red and `Cancel` renders dark slate, and
+  the two sit aligned on the same baseline.
 
 Implement these as automated tests wherever the behavior is UI-free, and as a manual check where it
 genuinely requires a running window (tray, hotkeys).
@@ -1767,3 +1820,81 @@ that now carries the actual rule.
   side-by-side buttons share one row's height, not two), for a new total of 724px design pixels;
   rounded up to **732** (was 728) for the same small safety margin as S14b. `MainFormLayoutTests`
   needed no change — it only pins the width derivation, which this did not touch.
+- **2026-09-13 — S15: window sizing switched from a fixed worst-case constant to content-driven,
+  ending S14/S14b/S14c's cycle of re-deriving one hand-picked height.** Repo owner's markup of a
+  screenshot: everything past the visible chrono/buttons/record rows was "wasted space" — the window
+  should match the widest record and end "a couple of pixeles (like 5px)" below the last row.
+  `MainForm.FixedClientSize` is deleted; width is `RequiredClientWidth` (unchanged shape, new worst
+  case below) and height is `MainForm.ResizeToContent(deviceDpi)`, which asks the real, live
+  `_rootLayout.GetPreferredSize(new Size(width, 0))` for its preferred height and re-runs on every
+  content change (`RefreshRecords`, `RefreshLaps`, the stopwatch card's `StateChanged`,
+  `OnDpiChanged`), not once at construction. This is a deliberate reversal of S14b/S14c's own
+  practice of freezing one hand/harness-measured worst-case number — the harness technique itself
+  (§17 below) confirmed the live approach actually shrinks (0 records: 266px; 2: 327px; 5: 450px;
+  running + 3 laps + 5 records: 489px, all at 96dpi client height) instead of sitting at a constant
+  732 regardless of content. `ClampToWorkingArea` is applied on every resize, not just at
+  construction, and a new `ClampLocationToWorkingArea` nudges `Location` back on-screen if a resize
+  pushes the window past the working area's edge (an ordinary content resize keeps `Location`
+  otherwise — only the explicit "Open" transitions re-center via `PositionWindowCentered`).
+- **2026-09-13 — S15: the width worst case shrank from an absurd 9,999-hour/5-digit-lap-id bound to a
+  24-hour session, with word-wrap as the fallback past it.** Repo owner: "the worst case scenario
+  should [be] the stopwatch running for 24 hours to be honest... everything else sh[oul]d word wrap."
+  `MainForm.WorstCaseElapsedMinutes = 24 * 60`; `RequiredClientWidth` now measures a 24-hour record
+  row and a 24-hour/3-digit-lap-id lap row (the latter plus `DesignScrollBarWidth`, now budgeted only
+  against the laps row — the only one of the two that can genuinely scroll, since records are
+  height-capped to their own content). A row past this bound (a longer session, a 4-digit lap id)
+  word-wraps instead of clipping: both list boxes moved from `DrawMode.OwnerDrawFixed` to
+  `OwnerDrawVariable` with a `MeasureItem` handler, `DrawRow` swapped `EndEllipsis` for `WordBreak`,
+  and the pure measuring logic was factored into `RecordsListControl.MeasureRowHeight(string text,
+  Font font, int availableWidth)` — no `ListBox` parameter — specifically so it stays unit-testable
+  the same way `RequiredClientWidth` already is (AGENTS.md §13), rather than requiring a real,
+  handle-created `ListBox` in a test. `RecordsListControlTests` covers the word-wrap threshold
+  directly; `MainFormLayoutTests`' worst-case row templates were updated to the 24-hour/999-id case
+  (the old 9,999-hour/99,999-id assertions still happened to pass numerically, by coincidence of the
+  chrome budget's margin, but tested the wrong premise post-change).
+- **2026-09-13 — S15: `GlyphButton` extracted from `StopwatchControl` into its own file, with an
+  optional glyph and a disabled visual state, so the header-row and dialog buttons could reuse it.**
+  Repo owner: style `Clear All Records` red and add a blue `Manage Records`, restyle the confirm
+  dialog's buttons, and put `Records` and the two action buttons on one line. Plain stock `Button`s
+  in `RecordsListControl` and `ClearRecordsDialog` couldn't carry the app's palette colors without
+  duplicating `GlyphButton`'s whole paint routine, so it moved to `Controls/GlyphButton.cs` as
+  `internal sealed class GlyphButton : Button` with two additions: `Glyph?` (nullable) instead of
+  `Glyph`, so a text-only button skips the glyph square and its gutter in both `GetPreferredSize` and
+  `OnPaint`; and an `Enabled == false` branch in `OnPaint` that blends the base color 60% toward
+  `Palette.CardBackground(DarkMode)` and swaps the label to `Palette.MutedText(DarkMode)`, replacing
+  the stock gray disabled look for the permanently-disabled `Manage Records` placeholder. A new
+  `Palette.CancelButton` dark-slate triplet (`#334155`/`#1E293B`/`#0F172A`) gives the dialog's
+  `Cancel` a color distinct from the destructive `StopButton` red its `Clear All` now also uses.
+  `ClearRecordsDialog`'s S11a Region-clip-for-rounded-corners technique (`ApplyRoundedRegion`,
+  `dialog.PerformLayout()` called only to feed it) was deleted — `GlyphButton` owner-paints its own
+  rounded corners already — and its two buttons' mismatched margins (one at the WinForms default, one
+  explicit) were made equal top/bottom, fixing a visible misalignment the repo owner flagged directly
+  ("check the modal the buttons for confirm and cancel are not aligned").
+- **2026-09-13 — S15: the version footer label is deleted; the version moved into the window title,
+  and `MainForm.WindowTitle` became a computed `static readonly` instead of a literal `const`.**
+  Freeing the whole bottom strip (the last of the marked-up "wasted space") meant the version had
+  nowhere left to render as a dedicated row; the title bar was the next-most-visible surface. Since
+  `WindowTitle` is read by `Program.cs`'s single-instance `FindWindow` lookup *before* any `MainForm`
+  is ever constructed (§10.5), it had to stay computable as a bare static value —
+  `Application.ProductVersion` needs no live `Form` instance, so `$"Stopwatch v{Application.
+  ProductVersion}"` works identically there. `Theme/Typography.cs`'s caption font/size step (9pt/12px)
+  is kept — `TypographyTests` still covers it, and it remains §11's documented third type-scale
+  step — even though this removal leaves it with no current consumer in `MainForm`.
+- **2026-09-13 — S15: minimize now actually hides to tray with no taskbar button, and reopening is
+  always Normal — fixing a repo-owner-reported regression from §10.3's own already-written spec.**
+  Repo owner: "minize, minizes to task bar (the title in task bar stays there) and this causes a
+  behavior that if you close the app while minized when it comebacks it stays minimized when the open
+  should always start maximized [i.e. Normal, not Maximized — this app has no maximize button at
+  all, §10.3]." The pre-S15 code only reacted to `OnResize` after `WindowState` had already become
+  `Minimized`, calling `Hide()` without first resetting `WindowState` back to `Normal` — so the
+  window sat hidden *while still minimized*, and the next `RestoreWindow()` call's `Show()` revealed
+  it still minimized. Two fixes, both in `MainForm.cs`: (1) `WndProc` now intercepts
+  `WM_SYSCOMMAND`/`SC_MINIMIZE` directly (masking `WParam`'s low nibble per the documented pattern for
+  comparing against an `SC_*` constant) and calls `HideToTray()` without forwarding to
+  `base.WndProc` — the window never actually enters `FormWindowState.Minimized` through its own
+  title-bar button, so Windows never gives it a taskbar entry to leave behind in the first place; the
+  existing `OnResize`-based check is kept only as a fallback for a minimize path that bypasses
+  `WM_SYSCOMMAND` entirely. (2) `HideToTray()` now sets `WindowState = FormWindowState.Normal` before
+  `Hide()`, and `RestoreWindow()` sets `ShowInTaskbar = true` **before** `Show()` (flipping
+  `ShowInTaskbar` recreates the window handle; doing that while still hidden avoids any chance of the
+  recreation observing a stale minimized state).

@@ -5,12 +5,15 @@ using StopwatchApp.Theme;
 namespace StopwatchApp.Tests;
 
 /// <summary>
-/// Pins <see cref="MainForm.RequiredClientWidth"/> — the DPI-aware floor under
-/// <see cref="MainForm.FixedClientSize"/>'s width (S14a, AGENTS.md §17) — to the actual §8.5 row
-/// templates, across every DPI Windows actually ships. The window cannot be widened by the user at
-/// any DPI, so if a future change to those templates, the mono body font, or the DPI-scaling math
-/// makes the worst-case row wider than what this method returns, it must fail here instead of
-/// silently clipping in a window nobody can resize.
+/// Pins <see cref="MainForm.RequiredClientWidth"/> to the actual §8.5 row templates at the S15
+/// design worst case — a session that ran a full 24 hours
+/// (<see cref="MainForm.WorstCaseElapsedMinutes"/>) — across every DPI Windows actually ships. The
+/// window cannot be widened by the user at any DPI, so if a future change to those templates, the
+/// mono body font, or the DPI-scaling math makes the worst-case row wider than what this method
+/// returns, it must fail here instead of silently clipping in a window nobody can resize. A row
+/// longer than this worst case is expected to word-wrap instead (S15,
+/// <see cref="RecordsListControl.MeasureRowHeight"/>), not to widen the window further — that
+/// behavior is covered directly in <c>RecordsListControlTests</c>.
 ///
 /// No <see cref="MainForm"/> instance is constructed (it opens the real database and a
 /// <c>NotifyIcon</c>) — <see cref="MainForm.RequiredClientWidth"/> is a pure function of a font and
@@ -28,13 +31,13 @@ public sealed class MainFormLayoutTests
   [InlineData(120)] // 125% — the repo owner's actual display (S14a, AGENTS.md §17)
   [InlineData(144)] // 150%
   [InlineData(168)] // 175%
-  public void RequiredClientWidth_FitsWorstCaseLapRowAtGivenDpi(int deviceDpi)
+  public void RequiredClientWidth_FitsWorstCase24HourLapRowAtGivenDpi(int deviceDpi)
   {
     Lap worstCaseLap = new(
-      Id: 99_999,
+      Id: 999,
       StartTimestamp: 0,
-      EndTimestamp: 60_000,
-      ElapsedMinutes: 9_999 * 60
+      EndTimestamp: 0,
+      ElapsedMinutes: MainForm.WorstCaseElapsedMinutes
     );
     string row = RecordsListControl.FormatLapRow(worstCaseLap);
 
@@ -44,9 +47,10 @@ public sealed class MainFormLayoutTests
 
     Assert.True(
       requiredWidth >= actualRowWidth,
-      $"MainForm.RequiredClientWidth({deviceDpi}) returned {requiredWidth}px, but the worst-case "
-        + $"lap row \"{row}\" alone measures {actualRowWidth}px at that DPI — the returned width "
-        + "must always be at least the row's own text width, or the window would clip it."
+      $"MainForm.RequiredClientWidth({deviceDpi}) returned {requiredWidth}px, but the 24-hour "
+        + $"worst-case lap row \"{row}\" alone measures {actualRowWidth}px at that DPI — the "
+        + "returned width must always be at least the row's own text width, or the window would "
+        + "clip it."
     );
   }
 
@@ -55,13 +59,13 @@ public sealed class MainFormLayoutTests
   [InlineData(120)]
   [InlineData(144)]
   [InlineData(168)]
-  public void RequiredClientWidth_FitsWorstCaseRecordRowAtGivenDpi(int deviceDpi)
+  public void RequiredClientWidth_FitsWorstCase24HourRecordRowAtGivenDpi(int deviceDpi)
   {
     StopwatchRecord worstCaseRecord = new(
-      Id: 99_999,
+      Id: 1,
       StartTimestamp: 0,
-      EndTimestamp: 60_000,
-      ElapsedMinutes: 9_999 * 60
+      EndTimestamp: 0,
+      ElapsedMinutes: MainForm.WorstCaseElapsedMinutes
     );
     string row = RecordsListControl.FormatRecordRow(worstCaseRecord);
 
@@ -71,8 +75,8 @@ public sealed class MainFormLayoutTests
 
     Assert.True(
       requiredWidth >= actualRowWidth,
-      $"MainForm.RequiredClientWidth({deviceDpi}) returned {requiredWidth}px, but the worst-case "
-        + $"record row \"{row}\" alone measures {actualRowWidth}px at that DPI."
+      $"MainForm.RequiredClientWidth({deviceDpi}) returned {requiredWidth}px, but the 24-hour "
+        + $"worst-case record row \"{row}\" alone measures {actualRowWidth}px at that DPI."
     );
   }
 

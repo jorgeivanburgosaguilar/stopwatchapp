@@ -1,6 +1,7 @@
 using StopwatchApp.Controls;
 using StopwatchApp.Formatting;
 using StopwatchApp.Models;
+using StopwatchApp.Theme;
 
 namespace StopwatchApp.Tests;
 
@@ -42,6 +43,58 @@ public sealed class RecordsListControlTests
     Assert.Equal(
       $"📅 {expectedDate} ⏱ {expectedStart}-{expectedEnd} ⏳ Lap {lap.Id}: {expectedElapsed}",
       row
+    );
+  }
+
+  // S15 (AGENTS.md §17) — MeasureRowHeight is a pure function (no ListBox needed), the same
+  // pure-function-over-a-real-control convention MainForm.RequiredClientWidth already uses
+  // (AGENTS.md §13), so the word-wrap threshold a row past MainForm.WorstCaseElapsedMinutes/a
+  // 4-digit lap id crosses can be tested directly instead of driving a real owner-drawn ListBox.
+  [Fact]
+  public void MeasureRowHeight_WrapsWhenTextExceedsAvailableWidth()
+  {
+    using Font font = Typography.CreateMonospaceBodyFont();
+    Lap withinWorstCase = new(
+      Id: 999,
+      StartTimestamp: 0,
+      EndTimestamp: 0,
+      ElapsedMinutes: MainForm.WorstCaseElapsedMinutes
+    );
+    Lap pastWorstCase = new(
+      Id: 9_999,
+      StartTimestamp: 0,
+      EndTimestamp: 0,
+      ElapsedMinutes: MainForm.WorstCaseElapsedMinutes * 10
+    );
+
+    // The available width is the widest the 24-hour worst-case row is actually sized to need — a
+    // row past that (a longer session, a 4-digit lap id) should now wrap to a second line instead
+    // of clipping.
+    int availableWidth = TextRenderer
+      .MeasureText(
+        RecordsListControl.FormatLapRow(withinWorstCase),
+        font,
+        Size.Empty,
+        TextFormatFlags.NoPadding | TextFormatFlags.SingleLine
+      )
+      .Width;
+
+    int heightAtWorstCase = RecordsListControl.MeasureRowHeight(
+      RecordsListControl.FormatLapRow(withinWorstCase),
+      font,
+      availableWidth
+    );
+    int heightPastWorstCase = RecordsListControl.MeasureRowHeight(
+      RecordsListControl.FormatLapRow(pastWorstCase),
+      font,
+      availableWidth
+    );
+
+    Assert.True(
+      heightPastWorstCase > heightAtWorstCase,
+      $"A row past the sized-for worst case measured {heightPastWorstCase}px tall, no taller than "
+        + $"the worst-case row's {heightAtWorstCase}px — it should have wrapped to a second line "
+        + "instead of clipping."
     );
   }
 }
