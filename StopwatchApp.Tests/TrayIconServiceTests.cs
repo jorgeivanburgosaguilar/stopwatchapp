@@ -3,48 +3,56 @@ using StopwatchApp.Services;
 namespace StopwatchApp.Tests;
 
 /// <summary>
-/// Covers the pure rules factored out of <see cref="TrayIconService"/>: which layout applies, how
-/// the stacked layout's hours row is formatted, and which tray-icon mouse button opens the window.
+/// Covers the pure rules factored out of <see cref="TrayIconService"/>: the simplified layouts and
+/// formatting rules, plus which tray-icon mouse button opens the window.
 /// The rest of
 /// <see cref="TrayIconService"/> renders raw GDI+ pixel output via a real <c>NotifyIcon</c>/HICON and
 /// is not unit tested, per AGENTS.md §13/§17.
 /// </summary>
 public class TrayIconServiceTests
 {
-  // InlineData can't carry the internal TrayIconLayout enum as a public-method parameter type (the
-  // accessibility mismatch is a compile error, CS0051) even with InternalsVisibleTo, so the expected
-  // layout is passed as a bool ("is the large-minutes layout expected") and compared against the
-  // enum value inside the test body instead.
   [Theory]
-  [InlineData(0, true)]
-  [InlineData(1, false)]
-  [InlineData(2, false)]
-  [InlineData(23, false)]
-  [InlineData(100, false)]
-  public void SelectLayout_ByElapsedHours_MatchesSpec(int hours, bool expectLargeMinutes)
+  [InlineData(0, 0, 0, 0)]
+  [InlineData(59, 0, 59, 0)]
+  [InlineData(60, 1, 0, 1)]
+  [InlineData(119, 1, 0, 1)]
+  [InlineData(120, 1, 0, 2)]
+  [InlineData(1439, 1, 0, 23)]
+  [InlineData(1440, 2, 0, 1)]
+  [InlineData(2879, 2, 0, 1)]
+  [InlineData(2880, 2, 0, 2)]
+  public void GetDisplayValues_UsesMinutesThenHoursThenDays(
+    long totalMinutes,
+    int expectedLayout,
+    int expectedMinutes,
+    long expectedValue
+  )
   {
-    TrayIconService.TrayIconLayout expected = expectLargeMinutes
-      ? TrayIconService.TrayIconLayout.LargeMinutes
-      : TrayIconService.TrayIconLayout.StackedHoursMinutes;
+    (long value, int minutes, TrayIconService.TrayIconLayout layout) =
+      TrayIconService.GetDisplayValues(totalMinutes * 60000);
 
-    Assert.Equal(expected, TrayIconService.SelectLayout(hours));
+    Assert.Equal(expectedValue, value);
+    Assert.Equal(expectedMinutes, minutes);
+    Assert.Equal((TrayIconService.TrayIconLayout)expectedLayout, layout);
   }
 
-  // Covers TrayIconService.FormatHourText, the pure formatting rule behind the S11c follow-up: the
-  // stacked layout's hours row is deliberately not zero-padded, unlike every other digit display in
-  // this app (AGENTS.md §17). The single-digit case (2h -> "2", not "02") is the one the repo owner
-  // specifically called out.
   [Theory]
-  [InlineData(0, "0")]
-  [InlineData(1, "1")]
-  [InlineData(2, "2")]
-  [InlineData(9, "9")]
-  [InlineData(10, "10")]
-  [InlineData(23, "23")]
-  [InlineData(100, "100")]
-  public void FormatHourText_NeverZeroPads(int hours, string expected)
+  [InlineData(1, "1H")]
+  [InlineData(9, "9H")]
+  [InlineData(10, "10H")]
+  [InlineData(23, "23H")]
+  public void FormatHourLabel_UsesAnUnpaddedUppercaseUnit(long hours, string expected)
   {
-    Assert.Equal(expected, TrayIconService.FormatHourText(hours));
+    Assert.Equal(expected, TrayIconService.FormatHourLabel(hours));
+  }
+
+  [Theory]
+  [InlineData(1, "1D")]
+  [InlineData(2, "2D")]
+  [InlineData(10, "10D")]
+  public void FormatDayLabel_UsesAnUnpaddedUppercaseUnit(long days, string expected)
+  {
+    Assert.Equal(expected, TrayIconService.FormatDayLabel(days));
   }
 
   [Theory]

@@ -334,7 +334,7 @@ Keep these set — they make lint and analyzers run on every `dotnet build` and 
     <ImplicitUsings>enable</ImplicitUsings>
     <Platforms>x64</Platforms>
     <Platform>x64</Platform>
-    <Version>1.3.0</Version>
+    <Version>1.8.0</Version>
 
     <!-- Required by LibraryImportAttribute-based source-generated interop (SYSLIB1062); see
          TrayIconService's DestroyIcon P/Invoke and §17. -->
@@ -381,7 +381,7 @@ Keep these set — they make lint and analyzers run on every `dotnet build` and 
   demotes only `CAxxxx` code-quality rules, not compiler warnings. Any suppression must be
   narrow — a justified `[SuppressMessage]` attribute or a scoped
   `#pragma warning disable ... / restore ...` pair — **never** a blanket `<NoWarn>` list.
-- The version lives in exactly one place (`<Version>` above, now `1.3.0`) and must also be
+- The version lives in exactly one place (`<Version>` above, now `1.8.0`) and must also be
   surfaced in the app's UI (e.g. a footer or an About entry in the tray menu). Bump it in the same
   change as any user-visible behavior change.
 - **CSharpier vs. these analyzers:** whitespace/formatting is owned entirely by CSharpier (§4), not
@@ -796,31 +796,28 @@ re-anchors `StartTime` from the current clock, exactly as an in-app pause/resume
 
 ### 10.1 Tray icon rendering
 
-Render a 32×32 icon with GDI+ and convert it to an `HICON`. **Two layouts, chosen by elapsed hours**
-(added S11c, 2026-09-11 — see §17 for why a two-`NotifyIcon`-instances "wide" layout was considered
-and rejected first):
+Render a 32×32 icon with GDI+ and convert it to an `HICON`. It uses one simple, unbounded
+progression while the tooltip remains authoritative:
 
-- **Elapsed hours == 0** (the common case): a single large two-digit **MM** readout, centered and
-  sized to fill as much of the 32×32 canvas as legibility at the 16 px scaled-down display size
-  allows.
-- **Elapsed hours ≥ 1**: the original two stacked rows — hours on top, minutes below. **The hours row
-  is not zero-padded** (`2`, not `02`; `10` stays two digits; no digit-count cap beyond that) —
-  a deliberate, tray-icon-only exception to this app's otherwise-always-zero-padded digit formatting
-  (contrast `TimeFormat.FormatTime`, §8.4, whose tooltip stays fully zero-padded regardless), added
-  post-hoc at the repo owner's request so the row reads like a clock time ("2:01", not "02:01") — see
-  §17's S11c follow-up entry. The minutes row is unaffected: always two digits, zero-padded.
+- **Elapsed time under one hour**: a single large two-digit **MM** readout, centered and sized to
+  fill as much of the 32×32 canvas as legibility at the 16 px scaled-down display size allows.
+- **Elapsed time from one hour through 23:59**: a single large unpadded whole-hour label, `1H`
+  through `23H`; it changes only at the next whole hour.
+- **Elapsed time from one day onward**: a single large unpadded whole-day label, `1D`, `2D`, and so
+  on; it changes only at the next whole day.
 
-Update the icon at most once per second, and only when the displayed value **or the active layout**
-changes — track both explicitly in the dirty-check state rather than relying on the fact that a
-layout switch happens to coincide with a minute-digit change (`:59` → `:00` at the hour boundary).
+Hour and day labels are rendered at the largest font size that fits their actual text, so the common
+`1H`/`1D` labels are not constrained by the width of `23H`. A paused stopwatch freezes whichever
+layout it reached; running, paused, and idle may differ in tint but not layout.
+
+Update the icon at most once per second, and only when the displayed visual-day value **or the active
+layout** changes — track both explicitly in the dirty-check state.
 
 **Call `DestroyIcon` on the previous handle every time you replace it.** Forgetting this is the
 single most common bug in this pattern and leaks GDI handles until the process is killed.
 
-Tooltip text is `FormatTime(ElapsedMs)` — the full `HH:MM:SS` value — plain text, no prefix, no
-emoji, regardless of which layout is active. Idle, paused, and running states may differ in icon
-tint but never in which of the two layouts above is showing — that choice depends only on elapsed
-hours, not run state.
+Tooltip text is `FormatTime(ElapsedMs)` — the full, unbounded `HH:MM:SS` value — plain text, no
+prefix or emoji, regardless of which layout is active.
 
 ### 10.2 Tray context menu
 
@@ -1913,3 +1910,17 @@ that now carries the actual rule.
   clear-all action, and synchronizes through `StopwatchTimer.RecordsChanged` with the main window's
   five-row preview. `IStopwatchStore`/`Database`/`StopwatchTimer` gained delete-by-id support; no
   schema migration is needed. `<Version>` advanced to `1.4.0`.
+- **2026-09-14 — S18: the tray icon now uses a simplified visual-day display.** The 32×32 bitmap
+  repeats every 24 hours while its `NotifyIcon.Text` tooltip and the main chrono retain the full,
+  unbounded duration. It shows large `MM` digits in the visual day's first hour, large `1h`–`23h`
+  labels after that, and switches to a stacked zero-padded `HH`/`MM` layout for the full minute at
+  each positive five-minute boundary (`01:05` through `01:05:59`, then back to `1h` at `01:06`).
+  `23:59` intentionally advances to `00`, then `01`; no day indicator is rendered. The pure
+  visual-day and layout rules are exposed internally for unit coverage without a native
+  `NotifyIcon`/HICON. `<Version>` advanced to `1.7.0`.
+- **2026-09-14 — S19: the tray display was simplified again after live visual review.** The
+  five-minute stacked milestone mode and 24-hour bitmap rollover are removed: elapsed time is now
+  large `MM` below an hour, large `1H`–`23H` from one hour, then large `1D`, `2D`, and so on from one
+  day. Units are uppercase. A dynamic measured-font loop replaces the fixed 18px hour font so `1H`
+  and `1D` use materially more of the 32×32 canvas while wider labels shrink only as needed.
+  `<Version>` advanced to `1.8.0`.
