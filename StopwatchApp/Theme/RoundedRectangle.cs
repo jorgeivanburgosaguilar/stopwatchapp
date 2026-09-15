@@ -5,7 +5,7 @@ namespace StopwatchApp.Theme;
 /// <summary>
 /// Builds the rounded-rectangle <see cref="GraphicsPath"/> shared by every owner-drawn surface this
 /// app paints (buttons, the stopwatch card, list rows, dialog buttons) so the corner-radius math
-/// lives in exactly one place (AGENTS.md §11/§17, S11a). Internal — not part of §3.1's fixed
+/// lives in exactly one place (AGENTS.md §11). Internal — not part of §3.1's fixed
 /// contracts, so it carries no <c>GenerateDocumentationFile</c> obligation, but is documented anyway
 /// to match the project's style for internal helpers.
 /// </summary>

@@ -7,7 +7,7 @@ namespace StopwatchApp.Tests;
 /// formatting rules, plus which tray-icon mouse button opens the window.
 /// The rest of
 /// <see cref="TrayIconService"/> renders raw GDI+ pixel output via a real <c>NotifyIcon</c>/HICON and
-/// is not unit tested, per AGENTS.md §13/§17.
+/// is not unit tested, per AGENTS.md §13/§14.
 /// </summary>
 public class TrayIconServiceTests
 {

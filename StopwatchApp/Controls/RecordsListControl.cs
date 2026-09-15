@@ -11,11 +11,11 @@ namespace StopwatchApp.Controls;
 /// <see cref="UpdateRecords"/>/<see cref="UpdateLaps"/> — this control never reads
 /// <c>IStopwatchStore</c> itself; it only raises <see cref="ClearAllRequested"/> or
 /// <see cref="ManageRecordsRequested"/> and
-/// lets its owner (<c>MainForm</c>, S7) perform the actual clear.
+/// lets its owner (<c>MainForm</c>, AGENTS.md §3) perform the actual clear.
 /// </summary>
 public sealed class RecordsListControl : UserControl
 {
-  // S14b (AGENTS.md §17) — only the most recent MaxDisplayedRecords are shown in this main window;
+  // AGENTS.md §8.5 — only the most recent MaxDisplayedRecords are shown in this main window;
   // a future history/records-manager window (out of scope for now) will offer the full list with
   // edit/delete. Bounding the display count is also what lets this control's height be a small,
   // fixed constant instead of stretching to fill whatever space MainForm's fixed window has left.
@@ -37,7 +37,7 @@ public sealed class RecordsListControl : UserControl
   public RecordsListControl()
   {
     Dock = DockStyle.Fill;
-    // S14b (AGENTS.md §17) — this card's own preferred height must now genuinely reflect its
+    // AGENTS.md §8.5/§10.3 — this card's preferred height must genuinely reflect its
     // (bounded) content, since MainForm.FixedClientSize's height derivation reads it: capping
     // records to MaxDisplayedRecords is what makes that height a small, known constant instead of
     // "whatever's left over," which is the actual fix for "the window is too tall." GrowOnly (the
@@ -45,15 +45,15 @@ public sealed class RecordsListControl : UserControl
     // panel appearing) — the same pitfall already documented for StopwatchControl's card.
     AutoSize = true;
     AutoSizeMode = AutoSizeMode.GrowAndShrink;
-    // S11a card treatment, matching StopwatchControl: an explicit palette background plus an
-    // inset so the rounded border drawn in OnPaint doesn't clip the content. S15 (AGENTS.md §17) —
+    // AGENTS.md §11 card treatment, matching StopwatchControl: an explicit palette background plus
+    // an inset so the rounded border drawn in OnPaint doesn't clip the content. Per §8.5,
     // the bottom inset is 0, not SpacingLg: MainForm's own root Padding (also bottom-0) plus this
     // card's 1px OnPaint border and the TableLayoutPanel cell's default 3px margin are what leave
     // the ~6px gap the owner asked for between the last record row and the window edge; a bottom
     // Padding here on top of those would double it.
     Padding = new Padding(Palette.SpacingLg, Palette.SpacingLg, Palette.SpacingLg, 0);
     DoubleBuffered = true;
-    // S14 (AGENTS.md §17) — same ResizeRedraw fix as StopwatchControl: without it, the rounded
+    // AGENTS.md §10.3 — same ResizeRedraw fix as StopwatchControl: without it, the rounded
     // border this control's own OnPaint draws at Width-1/Height-1 stays visible at its old position
     // after a resize.
     SetStyle(
@@ -77,12 +77,12 @@ public sealed class RecordsListControl : UserControl
       IntegralHeight = false,
       Margin = new Padding(0, 0, 0, Palette.SpacingSm),
       BorderStyle = BorderStyle.None,
-      // S14 (AGENTS.md §17) — assigned before ConfigureRowRendering below, which derives
+      // AGENTS.md §8.5/§11 — assigned before ConfigureRowRendering below, which derives
       // ItemHeight from this Font; setting it after would size rows off the stale default font.
       Font = _rowFont,
     };
     ConfigureRowRendering(_lapsListBox);
-    // Starts empty; UpdateLaps sizes it to the actual laps shown (S15, AGENTS.md §17) — capped at 3
+    // Starts empty; UpdateLaps sizes it to the actual laps shown (AGENTS.md §8.5) — capped at 3
     // rows, summing each row's real (possibly wrapped) height rather than a flat multiple of a
     // single-line ItemHeight.
     _lapsListBox.Height = 0;
@@ -110,7 +110,7 @@ public sealed class RecordsListControl : UserControl
       Visible = false,
     };
 
-    // S15 (AGENTS.md §17) — both header-row buttons are now the extracted GlyphButton (text-only,
+    // AGENTS.md §8.5 — both header-row buttons use the shared GlyphButton (text-only,
     // glyph: null) instead of stock Buttons, so they carry the same rounded, palette-driven paint as
     // the stopwatch card's transport buttons. Order left-to-right is Manage Records then
     // Clear All Records, both right-aligned beside the "Records" label per the owner's markup.
@@ -134,7 +134,7 @@ public sealed class RecordsListControl : UserControl
       AutoSizeMode = AutoSizeMode.GrowAndShrink,
       Anchor = AnchorStyles.Right,
       // Both buttons must always render on one line, never wrap: WrapContents defaults to true,
-      // which — observed while re-deriving the S14c height budget — can wrap to a second line
+      // which can wrap to a second line during preferred-size measurement
       // during an AutoSize preferred-size query even though the real fixed window is comfortably
       // wide enough for both, silently inflating the computed height by a whole button row.
       WrapContents = false,
@@ -161,9 +161,9 @@ public sealed class RecordsListControl : UserControl
     headerRow.Controls.Add(recordsLabel, 0, 0);
     headerRow.Controls.Add(headerButtonsRow, 0, 1);
 
-    // S14b (AGENTS.md §17) — Dock.Top with an explicit Height (not Dock.Fill inside a Percent(100)
+    // AGENTS.md §8.5/§10.3 — Dock.Top with an explicit Height (not Dock.Fill inside a Percent(100)
     // row) so this host's height is a small, known constant instead of stretching to fill whatever's
-    // left in the fixed window. S15: the height is now recomputed on every UpdateRecords call (the
+    // left in the window. The height is recomputed on every UpdateRecords call (the
     // record count, and therefore the true content height, changes at runtime) rather than fixed to
     // MaxDisplayedRecords rows regardless of how many records actually exist.
     _recordsHost = new Panel { Dock = DockStyle.Top };
@@ -172,9 +172,9 @@ public sealed class RecordsListControl : UserControl
 
     TableLayoutPanel layout = new()
     {
-      // S14a/S14b (AGENTS.md §17) — Dock.Top, not Fill: this control is itself AutoSize now (see
+      // AGENTS.md §8.5/§10.3 — Dock.Top, not Fill: this control is itself AutoSize (see
       // the constructor), and a Dock.Fill child never contributes to an AutoSize parent's own
-      // preferred size (the exact StopwatchControl.contentLayout bug from S14a) — Dock.Top still
+      // preferred size — Dock.Top still
       // spans the full width while contributing a real preferred height.
       Dock = DockStyle.Top,
       AutoSize = true,
@@ -182,7 +182,7 @@ public sealed class RecordsListControl : UserControl
       ColumnCount = 1,
       RowCount = 4,
     };
-    // S14 (AGENTS.md §17) — without an explicit ColumnStyle, a single-column TableLayoutPanel falls
+    // AGENTS.md §10.3 — without an explicit ColumnStyle, a single-column TableLayoutPanel falls
     // back to an implicit AutoSize column that only happens to span the control's width; pinning it
     // to 100% makes that span structural instead of incidental.
     layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
@@ -214,7 +214,7 @@ public sealed class RecordsListControl : UserControl
   /// Gets or sets whether dark-theme colors should be used for the surfaces
   /// <see cref="Theme.Palette"/> covers (e.g. the empty-state text). Stock controls already follow
   /// <c>Application.SetColorMode</c> on their own; this only affects the colors Palette supplies.
-  /// Defaults to <see langword="false"/> — wiring it to the live OS setting is <c>S12</c>'s job.
+  /// Defaults to <see langword="false"/>; <c>MainForm</c> wires it to the live OS setting (§7/§11).
   /// </summary>
   [System.ComponentModel.DesignerSerializationVisibility(
     System.ComponentModel.DesignerSerializationVisibility.Hidden
@@ -237,10 +237,10 @@ public sealed class RecordsListControl : UserControl
   /// <summary>
   /// Replaces the displayed records, expected newest first (per <c>IStopwatchStore.GetAllRecordsAsync</c>).
   /// Toggles the empty state and the "Clear All Records" button's visibility. Only the most recent
-  /// <see cref="MaxDisplayedRecords"/> are actually listed (S14b, AGENTS.md §17) — a future
-  /// history/records-manager window will offer the full list; "Clear All Records" still clears
+  /// <see cref="MaxDisplayedRecords"/> are actually listed (AGENTS.md §8.5); the records manager
+  /// offers the full list. "Clear All Records" still clears
   /// every persisted record, not just the ones shown here. The records host's height is recomputed
-  /// to fit exactly the rows now shown (S15, AGENTS.md §17) — 1 row's worth for the empty state, or
+  /// to fit exactly the rows now shown (AGENTS.md §8.5/§10.3) — 1 row's worth for the empty state, or
   /// the true (possibly word-wrapped) height of however many of the capped records are displayed —
   /// instead of a fixed height sized for the worst case.
   /// </summary>
@@ -268,8 +268,8 @@ public sealed class RecordsListControl : UserControl
 
   /// <summary>
   /// Replaces the displayed laps, expected newest first. Toggles the laps panel's visibility. The
-  /// laps list's height is recomputed to fit exactly the (up to 3) most recent laps shown (S15,
-  /// AGENTS.md §17), rather than a flat multiple of a single-line row height.
+  /// laps list's height is recomputed to fit exactly the (up to 3) most recent laps shown
+  /// (AGENTS.md §8.5), rather than a flat multiple of a single-line row height.
   /// </summary>
   /// <param name="laps">The laps to display.</param>
   public void UpdateLaps(IReadOnlyList<Lap> laps)
@@ -292,7 +292,7 @@ public sealed class RecordsListControl : UserControl
   /// Sums the real (possibly word-wrapped, per <see cref="ConfigureRowRendering"/>'s
   /// <c>MeasureItem</c> handler) height of the first <paramref name="count"/> items in
   /// <paramref name="listBox"/> — the actual content height a fixed-count row cap needs, since rows
-  /// no longer share one flat <c>ItemHeight</c> (S15, AGENTS.md §17).
+  /// no longer share one flat <c>ItemHeight</c> (AGENTS.md §8.5).
   /// </summary>
   private static int SumItemHeights(ListBox listBox, int count)
   {
@@ -331,7 +331,7 @@ public sealed class RecordsListControl : UserControl
   {
     base.OnPaint(e);
     // Same low-risk "thin rounded outline" resting-elevation treatment as StopwatchControl's card
-    // (AGENTS.md §17) — kept as one technique reused via RoundedRectangle rather than reinvented.
+    // (AGENTS.md §11) — kept as one technique reused via RoundedRectangle rather than reinvented.
     e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
     Rectangle bounds = new(0, 0, Width - 1, Height - 1);
     using GraphicsPath path = RoundedRectangle.Path(bounds, Palette.CardCornerRadius);
@@ -356,7 +356,7 @@ public sealed class RecordsListControl : UserControl
     _lapsListBox.BackColor = cardBackground;
     _recordsListBox.BackColor = cardBackground;
     _emptyStateLabel.ForeColor = Palette.EmptyStateText(_dark);
-    // S15 (AGENTS.md §17) — the header-row buttons are now GlyphButtons, which resolve their
+    // AGENTS.md §8.5/§11 — the header-row buttons are GlyphButtons, which resolve their
     // dark-mode-only hover/press top-edge highlight and their disabled-state blend from this flag,
     // same as StopwatchControl's transport buttons.
     _manageRecordsButton.DarkMode = _dark;
@@ -370,11 +370,11 @@ public sealed class RecordsListControl : UserControl
   }
 
   /// <summary>
-  /// Switches a records/laps <see cref="ListBox"/> to the S11a row treatment: variable-height owner
-  /// drawing (S15, AGENTS.md §17 — was fixed-height; a row now word-wraps instead of ellipsizing
+  /// Switches a records/laps <see cref="ListBox"/> to the documented row treatment: variable-height
+  /// owner drawing (AGENTS.md §8.5; a row word-wraps instead of ellipsizing
   /// past the window's sized-for width) so each row renders as a small rounded card
   /// (<see cref="Palette.RowBackground"/> fill, <see cref="Palette.Border"/> outline) with its own
-  /// inset spacing, instead of the plain default-drawn text rows the control used before S11a.
+  /// inset spacing, instead of plain default-drawn text rows.
   /// Selection is turned off — these rows are a read-only log, and the stock selection highlight
   /// would clash with the custom paint.
   /// </summary>
@@ -402,11 +402,11 @@ public sealed class RecordsListControl : UserControl
 
   /// <summary>
   /// Measures the height a row needs to render <paramref name="text"/> word-wrapped to
-  /// <paramref name="availableWidth"/> in <paramref name="font"/> (S15, AGENTS.md §17). A pure
+  /// <paramref name="availableWidth"/> in <paramref name="font"/> (AGENTS.md §8.5). A pure
   /// function of its three inputs — no <see cref="ListBox"/> needed — so
   /// <c>RecordsListControlTests</c> can cover the word-wrap threshold directly, the same
   /// pure-function-over-a-real-control convention <see cref="MainForm.RequiredClientWidth"/> already
-  /// uses (AGENTS.md §13/§17). The caller (<see cref="ConfigureRowRendering"/>'s <c>MeasureItem</c>
+  /// uses (AGENTS.md §13). The caller (<see cref="ConfigureRowRendering"/>'s <c>MeasureItem</c>
   /// handler) is responsible for deriving <paramref name="availableWidth"/> from the real list box's
   /// current width, reserving <see cref="SystemInformation.VerticalScrollBarWidth"/> — a plain Win32
   /// list box does not shrink <see cref="Control.ClientSize"/> for its own scrollbar, and the laps
@@ -462,7 +462,7 @@ public sealed class RecordsListControl : UserControl
       listBox.Font,
       textBounds,
       Palette.Text(_dark),
-      // S15 (AGENTS.md §17) — WordBreak, not EndEllipsis: a row past the window's sized-for worst
+      // AGENTS.md §8.5 — WordBreak, not EndEllipsis: a row past the window's sized-for worst
       // case (a session over 24h, a 4-digit lap id) now wraps to a second line — matching
       // MeasureRowHeight above — instead of clipping to an ellipsis.
       TextFormatFlags.VerticalCenter

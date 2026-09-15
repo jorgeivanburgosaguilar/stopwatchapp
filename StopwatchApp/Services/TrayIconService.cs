@@ -78,7 +78,7 @@ public sealed partial class TrayIconService : IDisposable
 
   /// <summary>
   /// Gets or sets whether the tray icon renders its state tint from the dark-mode palette. Defaults
-  /// to <see langword="false"/>; wiring this to the live OS setting is S12's job (AGENTS.md §11/§17),
+  /// to <see langword="false"/>; <c>MainForm</c> wires this to the live OS setting (AGENTS.md §7/§11),
   /// matching the precedent set by <see cref="StopwatchControl.DarkMode"/>.
   /// </summary>
   public bool DarkMode
@@ -142,7 +142,7 @@ public sealed partial class TrayIconService : IDisposable
   /// <summary>
   /// Forces the tray icon bitmap to be re-rendered from its current display values, bypassing
   /// <see cref="UpdateDisplay"/>'s once-per-second dirty-check. Used by <c>MainForm</c> on
-  /// <see cref="Form.DpiChanged"/> (AGENTS.md §7/§17): a DPI change alone never changes the
+  /// <see cref="Form.DpiChanged"/> (AGENTS.md §7/§10.1): a DPI change alone never changes the
   /// displayed hour/minute/state/layout, so <see cref="UpdateDisplay"/> would otherwise skip the
   /// redraw entirely.
   /// </summary>
@@ -400,7 +400,7 @@ public sealed partial class TrayIconService : IDisposable
   }
 
   // Draws `text` centered within `bounds` by measuring it and computing an explicit origin point,
-  // instead of handing StringFormat.Alignment/LineAlignment a RectangleF (AGENTS.md §10.1/§17):
+  // instead of handing StringFormat.Alignment/LineAlignment a RectangleF (AGENTS.md §10.1):
   // whenever the measured text width can be close to or exceed the bounds' width — the large "MM"
   // readout, or an hour count that isn't reliably two digits — that combination was observed
   // (empirically, rendering to a Bitmap and inspecting pixel alpha) to silently drop a trailing
@@ -428,7 +428,7 @@ public sealed partial class TrayIconService : IDisposable
     graphics.DrawString(text, font, brush, origin);
   }
 
-  // A single large MM readout for the common under-an-hour case (AGENTS.md §10.1/§17): one row
+  // A single large MM readout for the common under-an-hour case (AGENTS.md §10.1): one row
   // fills the whole 32×32 canvas instead of the stacked layout's two 16px-tall rows, since no hours
   // row is needed while it would always read "00" anyway.
   private static void DrawLargeMinutes(Graphics graphics, Brush brush, int minutes)
@@ -467,7 +467,7 @@ public sealed partial class TrayIconService : IDisposable
   private static partial bool DestroyIcon(IntPtr hIcon);
 
   /// <summary>
-  /// Which tray-icon presentation is active (AGENTS.md §10.1/§17): large minutes during the first
+  /// Which tray-icon presentation is active (AGENTS.md §10.1): large minutes during the first
   /// hour, then a large whole-hours or whole-days label.
   /// </summary>
   internal enum TrayIconLayout

@@ -46,9 +46,9 @@ public sealed class StopwatchControl : UserControl
       Tick?.Invoke();
     };
 
-    // Card-level inset (S11a comp spacing scale); the outer border/fill is drawn in OnPaint below.
+    // Card-level inset from AGENTS.md §11; the outer border/fill is drawn in OnPaint below.
     Padding = new Padding(Palette.SpacingLg);
-    // S14 (AGENTS.md §17) — ResizeRedraw forces a full repaint on every size change instead of only
+    // AGENTS.md §10.3 — ResizeRedraw forces a full repaint on every size change instead of only
     // the newly-exposed strip; without it, the rounded border OnPaint draws at Width-1/Height-1
     // stays visible at its old position after a resize — the ghosting behind the button row.
     SetStyle(
@@ -62,7 +62,7 @@ public sealed class StopwatchControl : UserControl
     _elapsedLabel = new Label
     {
       AutoSize = true,
-      // S14 (AGENTS.md §17) — Anchor=None (not Dock+TextAlign) is this repo's centering idiom for
+      // AGENTS.md §8.5 — Anchor=None (not Dock+TextAlign) is this repo's centering idiom for
       // an AutoSize label: it shrink-wraps to its text, so TextAlign has no box left to center
       // inside. Centering instead comes from this label's TableLayoutPanel cell, below.
       Anchor = AnchorStyles.None,
@@ -106,7 +106,7 @@ public sealed class StopwatchControl : UserControl
       AutoSizeMode = AutoSizeMode.GrowAndShrink,
       Anchor = AnchorStyles.None,
     };
-    // Added in the fixed left-to-right order from §2.6/§8.5; hidden buttons take no flow space,
+    // Added in the fixed left-to-right order from AGENTS.md §8.5; hidden buttons take no flow space,
     // so idle/paused render "Start/Continue, Stop" and running renders "Pause, Lap, Stop". The
     // FlowLayoutPanel's own AutoSize shrinks to fit whichever set is visible, and re-centers via its
     // TableLayoutPanel cell's Anchor=None below.
@@ -115,15 +115,15 @@ public sealed class StopwatchControl : UserControl
     buttonRow.Controls.Add(_lapButton);
     buttonRow.Controls.Add(_stopButton);
 
-    // S14 (AGENTS.md §17) — an interior TableLayoutPanel with Anchor=None cells is this repo's
+    // AGENTS.md §8.5/§10.3 — an interior TableLayoutPanel with Anchor=None cells is this repo's
     // centering idiom: a plain Controls collection never re-centers a child on its own, only a
-    // TableLayoutPanel cell does. Dock.Top (not Fill, see the S14a correction in §17) still spans
+    // TableLayoutPanel cell does. Dock.Top rather than Fill (see AGENTS.md §10.3) still spans
     // this card's full content width, so each AutoSize row centers across that width — but Dock.Top
     // also contributes a real preferred height, which is required for the AutoSize/GrowAndShrink
     // pairing below to size the card correctly.
     TableLayoutPanel contentLayout = new()
     {
-      // S14a (AGENTS.md §17) — Dock.Fill here collapsed the whole card to its own Padding: an
+      // AGENTS.md §10.3 — Dock.Fill here collapses the whole card to its own Padding: an
       // AutoSize parent asks its children for their preferred size, but a Dock.Fill child instead
       // takes whatever size the parent gives it, so WinForms breaks that circular dependency by
       // never letting a Fill child contribute to its AutoSize parent's preferred size. Dock.Top
@@ -146,7 +146,7 @@ public sealed class StopwatchControl : UserControl
 
     Controls.Add(contentLayout);
     AutoSize = true;
-    // S14 (AGENTS.md §17) — GrowOnly (the AutoSize default when AutoSizeMode is left unset) never
+    // AGENTS.md §10.3 — GrowOnly (the AutoSize default when AutoSizeMode is left unset) never
     // shrinks the card back down once it has grown to fit the "Resumed from a pause" note; explicit
     // GrowAndShrink is required for the card to return to its normal height after Stop clears it.
     AutoSizeMode = AutoSizeMode.GrowAndShrink;
@@ -179,7 +179,7 @@ public sealed class StopwatchControl : UserControl
 
   /// <summary>
   /// Gets or sets whether the control renders its palette-driven surfaces in dark mode. Defaults
-  /// to <see langword="false"/>; wiring this to the OS setting is S12's job (AGENTS.md §11/§17).
+  /// to <see langword="false"/>; <c>MainForm</c> wires it to the OS setting (AGENTS.md §7/§11).
   /// </summary>
   [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
   public bool DarkMode
@@ -214,7 +214,7 @@ public sealed class StopwatchControl : UserControl
   /// Starts a fresh session, or resumes a paused one, and refreshes the display. The same action
   /// the Start/Continue button performs — exposed so a caller outside this control's own buttons
   /// (the tray menu, a global hotkey) can drive the same transition without leaving the window's
-  /// display stale (AGENTS.md §17).
+  /// display stale (AGENTS.md §3.1/§8.5/§10.4).
   /// </summary>
   public void StartTimer()
   {
@@ -290,8 +290,8 @@ public sealed class StopwatchControl : UserControl
   protected override void OnPaint(PaintEventArgs e)
   {
     base.OnPaint(e);
-    // S11a card treatment: a thin rounded outline is the low-risk GDI+ stand-in for the comp's
-    // resting-elevation shadow (AGENTS.md §17) — the flat BackColor fill already covers the rest.
+    // AGENTS.md §11: a thin rounded outline is the low-risk GDI+ stand-in for a resting-elevation
+    // shadow; the flat BackColor fill already covers the rest.
     e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
     Rectangle bounds = new(0, 0, Width - 1, Height - 1);
     using GraphicsPath path = RoundedRectangle.Path(bounds, Palette.CardCornerRadius);

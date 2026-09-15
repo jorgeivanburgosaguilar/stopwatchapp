@@ -20,7 +20,7 @@ public static class ClearRecordsDialog
   /// </returns>
   public static DialogResult ShowConfirm(IWin32Window owner)
   {
-    // S14 (AGENTS.md §17) — a modal Form does not inherit MainForm.Font, so the dialog needs its own
+    // AGENTS.md §8.5/§11 — a modal Form does not inherit MainForm.Font, so the dialog needs its own
     // body font to match the rest of the app's 16px type scale; disposed with the `using` below.
     using Font bodyFont = Typography.CreateBodyFont();
     using Form dialog = new()
@@ -37,7 +37,7 @@ public static class ClearRecordsDialog
       Font = bodyFont,
     };
 
-    // S14a (AGENTS.md §17) — 420 is a 96dpi design-pixel literal (same convention as
+    // AGENTS.md §7/§8.5 — 420 is a 96dpi design-pixel literal (same convention as
     // MainForm.FixedClientSize); scaled to the dialog's real device DPI so the wrap width stays a
     // comfortable two-line measure instead of narrowing at higher OS scaling.
     int messageMaxWidth = (int)Math.Ceiling(420 * (dialog.DeviceDpi / 96f));
@@ -50,7 +50,7 @@ public static class ClearRecordsDialog
       Dock = DockStyle.Top,
     };
 
-    // S15 (AGENTS.md §17) — both buttons are now GlyphButton (text-only, glyph: null), the same
+    // AGENTS.md §8.5 — both buttons are GlyphButton instances (text-only, glyph: null), the same
     // rounded, palette-driven paint as the main window's transport and header-row buttons: "Clear
     // All" red (matching RecordsListControl's "Clear All Records") and "Cancel" dark slate
     // (Palette.CancelButton) — a non-destructive action must not read the same as the destructive
@@ -94,13 +94,13 @@ public static class ClearRecordsDialog
     // No AcceptButton: Enter should never trigger the destructive action by default.
     dialog.CancelButton = cancelButton;
 
-    // S15 (AGENTS.md §17) — GlyphButton owner-paints its own rounded corners (the same routine
-    // StopwatchControl's transport buttons use), so the S11a Region-clip-on-a-Flat-button technique
-    // this dialog used for plain stock Buttons is no longer needed.
+    // AGENTS.md §8.5/§11 — GlyphButton owner-paints its own rounded corners (the same routine
+    // StopwatchControl's transport buttons use), so the separate Region clip that this dialog used
+    // for plain stock Buttons is no longer needed.
     //
     // The dialog's own outer corners are not rounded here: Windows 11 already rounds top-level
     // window frames at the DWM level by default, so AGENTS.md §11's DialogCornerRadius token needs
-    // no extra rendering — see AGENTS.md §17.
+    // no extra rendering — see AGENTS.md §11.
     return dialog.ShowDialog(owner);
   }
 }

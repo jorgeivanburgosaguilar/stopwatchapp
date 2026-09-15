@@ -7,8 +7,7 @@ namespace StopwatchApp.Tests;
 
 /// <summary>
 /// Covers <see cref="RecordsListControl"/>'s pure row-formatting logic — the only UI-free part of
-/// this stage (AGENTS.md §13); everything else is a manual/visual check per the plan's S6 "Done
-/// when".
+/// this surface (AGENTS.md §13); everything else is a manual/visual check per AGENTS.md §14.
 /// </summary>
 public sealed class RecordsListControlTests
 {
@@ -46,7 +45,7 @@ public sealed class RecordsListControlTests
     );
   }
 
-  // S15 (AGENTS.md §17) — MeasureRowHeight is a pure function (no ListBox needed), the same
+  // AGENTS.md §8.5/§13 — MeasureRowHeight is a pure function (no ListBox needed), the same
   // pure-function-over-a-real-control convention MainForm.RequiredClientWidth already uses
   // (AGENTS.md §13), so the word-wrap threshold a row past MainForm.WorstCaseElapsedMinutes/a
   // 4-digit lap id crosses can be tested directly instead of driving a real owner-drawn ListBox.

@@ -5,7 +5,7 @@ namespace StopwatchApp.Tests;
 /// <summary>
 /// Covers <see cref="StopwatchControl.MapShortcut"/> — the one UI-free part of this stage
 /// (AGENTS.md §13); everything else (button dispatch, tooltips, ProcessCmdKey) is a manual/visual
-/// check per the S10 plan's "Done when".
+/// check per AGENTS.md §14.
 /// </summary>
 public sealed class StopwatchControlTests
 {

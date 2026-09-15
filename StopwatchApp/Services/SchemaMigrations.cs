@@ -55,7 +55,7 @@ internal static class SchemaMigrations
     );
     """;
 
-  // S11b (AGENTS.md §9/§10.6) — the single remembered manual window position. No IF NOT EXISTS:
+  // AGENTS.md §9/§10.6 — retained schema for the former manual-position experiment. No IF NOT EXISTS:
   // only migration 1 needs it (see the type-level remarks above).
   private const string V2CreateWindowPositionTable = """
     CREATE TABLE window_position (

@@ -32,8 +32,8 @@ internal static partial class Program
     {
       // Another instance already holds the mutex: find its window by title and ask it to
       // restore/activate, then exit immediately without ever showing a second window (AGENTS.md
-      // §10.5/§17 — a broadcast to HWND_BROADCAST does not reach the hidden-to-tray window, since
-      // S9's ShowInTaskbar = false gives it an owner and Windows excludes owned windows from
+      // AGENTS.md §10.5 — a broadcast to HWND_BROADCAST does not reach the hidden-to-tray window, since
+      // ShowInTaskbar = false gives it an owner and Windows excludes owned windows from
       // HWND_BROADCAST delivery regardless of visibility; a direct FindWindow lookup is not
       // subject to that exclusion).
       IntPtr targetWindow = FindWindow(null, MainForm.WindowTitle);

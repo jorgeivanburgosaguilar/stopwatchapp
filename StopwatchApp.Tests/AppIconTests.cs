@@ -1,7 +1,7 @@
 namespace StopwatchApp.Tests;
 
 /// <summary>
-/// Covers the embedded <c>Assets/app.ico</c> resource (S14, AGENTS.md §17) — a cheap guard against a
+/// Covers the embedded <c>Assets/app.ico</c> resource (AGENTS.md §6/§10.3) — a cheap guard against a
 /// truncated or accidentally single-size ICO being committed, which would still load via
 /// <see cref="MainForm"/>'s <c>LoadAppIcon</c> but render badly at taskbar/title-bar size. Parses the
 /// ICONDIR/ICONDIRENTRY header directly rather than

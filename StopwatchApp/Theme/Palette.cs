@@ -7,34 +7,34 @@ namespace StopwatchApp.Theme;
 /// </summary>
 public static class Palette
 {
-  /// <summary>Extra-small spacing unit, in pixels (S11a comp token).</summary>
+  /// <summary>Extra-small spacing unit, in pixels (AGENTS.md §11).</summary>
   public const int SpacingXs = 4;
 
-  /// <summary>Small spacing unit, in pixels (S11a comp token).</summary>
+  /// <summary>Small spacing unit, in pixels (AGENTS.md §11).</summary>
   public const int SpacingSm = 8;
 
-  /// <summary>Medium spacing unit, in pixels (S11a comp token).</summary>
+  /// <summary>Medium spacing unit, in pixels (AGENTS.md §11).</summary>
   public const int SpacingMd = 12;
 
-  /// <summary>Large spacing unit, in pixels (S11a comp token).</summary>
+  /// <summary>Large spacing unit, in pixels (AGENTS.md §11).</summary>
   public const int SpacingLg = 16;
 
-  /// <summary>Extra-large spacing unit, in pixels (S11a comp token).</summary>
+  /// <summary>Extra-large spacing unit, in pixels (AGENTS.md §11).</summary>
   public const int SpacingXl = 24;
 
-  /// <summary>2x-extra-large spacing unit, in pixels (S11a comp token).</summary>
+  /// <summary>2x-extra-large spacing unit, in pixels (AGENTS.md §11).</summary>
   public const int SpacingXxl = 32;
 
-  /// <summary>Corner radius for controls such as buttons and chips, in pixels (S11a comp token).</summary>
+  /// <summary>Corner radius for controls such as buttons and chips, in pixels (AGENTS.md §11).</summary>
   public const int ControlCornerRadius = 6;
 
-  /// <summary>Corner radius for cards/panels, in pixels (S11a comp token).</summary>
+  /// <summary>Corner radius for cards/panels, in pixels (AGENTS.md §11).</summary>
   public const int CardCornerRadius = 8;
 
   /// <summary>
-  /// Corner radius for dialogs, in pixels (S11a comp token). Informational only: on Windows 11 the
+  /// Corner radius for dialogs, in pixels (AGENTS.md §11). Informational only: on Windows 11 the
   /// DWM already rounds top-level window frames by default, so <see cref="Controls.ClearRecordsDialog"/>
-  /// does not render this radius itself — see AGENTS.md §17.
+  /// does not render this radius itself — see AGENTS.md §11.
   /// </summary>
   public const int DialogCornerRadius = 12;
 
@@ -42,7 +42,7 @@ public static class Palette
   /// Gets the resting-elevation shadow tint used as a thin owner-drawn border/outline on
   /// custom-painted cards and controls — the low-risk GDI+ translation of the comp's faint resting
   /// shadow (approximately <c>rgba(15,23,42,.07)</c> light / <c>rgba(0,0,0,.5)</c> dark). See
-  /// AGENTS.md §17 for why this app does not render an actual blurred drop shadow.
+  /// AGENTS.md §11 for the owner-drawn elevation treatment.
   /// </summary>
   /// <param name="dark">Whether dark mode is active.</param>
   public static Color ShadowResting(bool dark) =>
@@ -133,7 +133,7 @@ public static class Palette
   /// <summary>
   /// Gets the Cancel/dismiss button's base, hover, and pressed colors (dark slate; same in both
   /// themes) — used for a dialog's non-destructive action, paired against a destructive action in
-  /// <see cref="StopButton"/> red (S15, AGENTS.md §17).
+  /// <see cref="StopButton"/> red (AGENTS.md §8.5/§11).
   /// </summary>
   public static (Color Base, Color Hover, Color Pressed) CancelButton { get; } =
     (

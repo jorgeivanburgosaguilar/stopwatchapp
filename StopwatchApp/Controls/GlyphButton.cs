@@ -4,10 +4,9 @@ using StopwatchApp.Theme;
 
 namespace StopwatchApp.Controls;
 
-// The monochrome transport-button glyphs the S11a comp specifies (AGENTS.md §17): Start/Continue
-// draws Play, Pause draws Pause, Lap draws Flag, Stop draws Stop. A button with no glyph (S15,
-// AGENTS.md §17 — extracted so RecordsListControl's header-row buttons can reuse the same rounded,
-// palette-driven paint routine without a glyph) passes null instead of one of these.
+// Monochrome transport-button glyphs (AGENTS.md §8.5/§11): Start/Continue draws Play, Pause draws
+// Pause, Lap draws Flag, and Stop draws Stop. Text-only buttons pass null so every button can reuse
+// the same rounded, palette-driven paint routine without reserving a glyph lane.
 internal enum Glyph
 {
   Play,
@@ -18,10 +17,9 @@ internal enum Glyph
 
 /// <summary>
 /// An owner-drawn <see cref="Button"/> with rounded corners (<see cref="Palette.ControlCornerRadius"/>)
-/// and an optional monochrome glyph beside its text label — originally the S11a swap-in for the
-/// earlier stages' plain colored-rectangle buttons (AGENTS.md §8.5/§11), extracted from
-/// <see cref="StopwatchControl"/> in S15 so <see cref="RecordsListControl"/>'s header-row buttons and
-/// <see cref="ClearRecordsDialog"/>'s confirm/cancel buttons can reuse it. A <see langword="null"/>
+/// and an optional monochrome glyph beside its text label (AGENTS.md §8.5/§11). It is shared by
+/// <see cref="StopwatchControl"/>, <see cref="RecordsListControl"/>'s header-row buttons, and
+/// <see cref="ClearRecordsDialog"/>'s confirm/cancel buttons. A <see langword="null"/>
 /// <c>glyph</c> renders text only, with no glyph square or gutter. <see cref="Control.Enabled"/>
 /// <see langword="false"/> paints a muted, palette-driven disabled state instead of the stock gray.
 /// </summary>
@@ -138,9 +136,8 @@ internal sealed class GlyphButton : Button
     Graphics graphics = pevent.Graphics;
     graphics.SmoothingMode = SmoothingMode.AntiAlias;
 
-    // S15 (AGENTS.md §17) — a disabled button (currently only the "Manage Records" placeholder)
-    // blends its base color toward the surrounding card background instead of the stock gray, so it
-    // reads as "not yet available" without breaking the card's own color scheme.
+    // AGENTS.md §11 — a disabled button blends its base color toward the surrounding card background
+    // instead of using stock gray, preserving the card's color scheme.
     Color fill;
     Color labelColor;
     if (Enabled)
@@ -164,7 +161,7 @@ internal sealed class GlyphButton : Button
       graphics.FillPath(fillBrush, path);
     }
 
-    // Dark-mode-only mica-style top-edge highlight on hover/press (AGENTS.md §11/§17); light mode
+    // Dark-mode-only mica-style top-edge highlight on hover/press (AGENTS.md §11); light mode
     // has no equivalent comp token, so it draws nothing there.
     if (DarkMode && Enabled && (_hovered || _pressed))
     {
@@ -198,7 +195,7 @@ internal sealed class GlyphButton : Button
       DrawGlyph(graphics, _glyph.Value, glyphRect, labelColor);
     }
 
-    // S16 (AGENTS.md §17) — center every label on the full button axis. Icon-bearing buttons reserve
+    // AGENTS.md §8.5 — center every label on the full button axis. Icon-bearing buttons reserve
     // an equal-width lane opposite the glyph in GetPreferredSize, so the label and glyph cannot
     // overlap even on short labels such as "Lap".
     TextRenderer.DrawText(

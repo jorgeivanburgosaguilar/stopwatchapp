@@ -20,7 +20,7 @@ public sealed class MainForm : Form
 
   /// <summary>
   /// The window title, also used by <see cref="Program"/> to locate this window from a second
-  /// instance (AGENTS.md §10.5). S15 (AGENTS.md §17) — carries the version, replacing the deleted
+  /// instance (AGENTS.md §10.5). It carries the version, replacing the deleted
   /// version footer label: <c>Application.ProductVersion</c> needs no live <see cref="MainForm"/>
   /// instance to read (it comes from the assembly's own version metadata), so this stays a value
   /// computable before <see cref="Program"/> ever constructs one, matching how §10.5's
@@ -31,7 +31,7 @@ public sealed class MainForm : Form
   // The non-text chrome a records/laps row must fit alongside, in 96dpi
   // design pixels: RecordsListControl.DrawRow's text inset, RecordsListControl's card Padding, the
   // TableLayoutPanel cell's default Margin, and MainForm's own root layout Padding.
-  // DesignScrollBarWidth is budgeted separately, only against the laps row (S15, AGENTS.md §17) —
+  // DesignScrollBarWidth is budgeted separately, only against the laps row (AGENTS.md §8.5/§10.3) —
   // the laps list is the only one of the two that can actually scroll (laps are not capped the way
   // records are); the records list is height-capped to its own content so its row never sits behind
   // a scrollbar. Kept as design constants (not read from SystemInformation at call time) so
@@ -60,7 +60,7 @@ public sealed class MainForm : Form
   public MainForm(int autosaveIntervalMinutes)
   {
     Text = WindowTitle;
-    // S14 (AGENTS.md §10.3/§17) — the window is fixed-size and not user-resizable: FixedSingle
+    // AGENTS.md §10.3 — the content-sized window is not user-resizable: FixedSingle
     // border, no maximize box, no MinimumSize (FixedSingle already blocks dragging, and a fixed
     // MinimumSize fights WinForms' own PerMonitorV2 rescale on DpiChanged). FormBorderStyle affects
     // the non-client chrome that ClientSize/PositionWindowCentered measure against, so it's set
@@ -70,7 +70,7 @@ public sealed class MainForm : Form
     // Dpi, not Font: the body font below is itself point-sized, so scaling a second time off the
     // font would double-apply the DPI factor. AutoScaleDimensions must be set alongside
     // AutoScaleMode for PerformAutoScale to do anything at all — with Dimensions left at its
-    // default SizeF.Empty, AutoScaleMode.Dpi was a silent no-op (S14a, AGENTS.md §17): the window
+    // default SizeF.Empty, AutoScaleMode.Dpi is a silent no-op (AGENTS.md §7/§10.3): the window
     // stayed at literal 96dpi device pixels while its point-sized fonts scaled with the real DPI,
     // which is what made record rows clip at anything above 100% scaling.
     AutoScaleMode = AutoScaleMode.Dpi;
@@ -98,7 +98,7 @@ public sealed class MainForm : Form
     _trayIconService = new TrayIconService(_stopwatchControl, RestoreWindow, ExitApplication);
     _activateMessage = (int)Program.RegisterWindowMessage(Program.ActivateMessageName);
 
-    // S15 (AGENTS.md §17) — two rows now, not three: the version footer row is gone (the version
+    // AGENTS.md §8.5/§10.3 — two rows, not three: the version footer row is gone (the version
     // moved into the title bar, WindowTitle above). Bottom Padding is 0, not SpacingMd — together
     // with RecordsListControl's own bottom-0 card Padding, its 1px OnPaint border, and this cell's
     // default 3px margin, that is what leaves the ~6px gap the owner asked for between the last
@@ -110,12 +110,12 @@ public sealed class MainForm : Form
       RowCount = 2,
       Padding = new Padding(Palette.SpacingMd, Palette.SpacingMd, Palette.SpacingMd, 0),
     };
-    // S14 (AGENTS.md §17) — without an explicit ColumnStyle, a single-column TableLayoutPanel falls
+    // AGENTS.md §10.3 — without an explicit ColumnStyle, a single-column TableLayoutPanel falls
     // back to an implicit AutoSize column that only happens to span the window's width; pinning it
     // to 100% makes that span structural instead of incidental.
     _rootLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-    // S14b (AGENTS.md §17) — AutoSize, not Percent(100): RecordsListControl reports a real content
-    // height (S15: now the *actual* shown row count, not a worst-case constant), so it no longer
+    // AGENTS.md §8.5/§10.3 — AutoSize, not Percent(100): RecordsListControl reports the actual shown
+    // row count as its content height, so it no longer
     // needs to stretch and fill whatever's left of the window.
     _rootLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
     _rootLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -123,7 +123,7 @@ public sealed class MainForm : Form
     _rootLayout.Controls.Add(_recordsListControl, 0, 1);
     Controls.Add(_rootLayout);
 
-    // S15 (AGENTS.md §17) — RefreshLaps itself calls ResizeToContent after every update (below), so
+    // AGENTS.md §10.3 — RefreshLaps calls ResizeToContent after every update, so
     // subscribing it to StateChanged is also what re-fits the window when only the "Resumed from a
     // pause" note's visibility changes (e.g. after RestoreAsync) without the laps list itself
     // changing — no separate StateChanged subscription is needed for that.
@@ -136,14 +136,14 @@ public sealed class MainForm : Form
     _recordsListControl.ManageRecordsRequested += OpenManageRecords;
     Load += InitializeAsync;
 
-    // S15 (AGENTS.md §17) — sized from the actual (idle, empty-records) control tree just built
-    // above; ResizeToContent itself centers on that final size (below) — replaces S14's fixed
+    // AGENTS.md §10.3/§10.6 — size from the actual idle, empty-records control tree; ResizeToContent
+    // centers that final size, replacing the former fixed
     // design-pixel literal. DeviceDpi is a reasonable value even before the handle exists (the
     // system DPI); OnDpiChanged re-derives this once the window is actually placed on a specific
     // monitor.
     ResizeToContent(DeviceDpi);
 
-    // S12 (AGENTS.md §7/§11/§17) — apply the OS's current effective dark/light state once at
+    // AGENTS.md §7/§11 — apply the OS's current effective dark/light state once at
     // startup, then keep it live for the rest of the process by reacting to SystemEvents.
     ApplyDarkMode();
     SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
@@ -169,7 +169,7 @@ public sealed class MainForm : Form
   protected override void OnResize(EventArgs e)
   {
     base.OnResize(e);
-    // S15 (AGENTS.md §17) — a fallback, not the primary mechanism: WndProc's WM_SYSCOMMAND/
+    // AGENTS.md §10.3 — a fallback, not the primary mechanism: WndProc's WM_SYSCOMMAND/
     // SC_MINIMIZE interception above stops the window ever entering Minimized via its own title-bar
     // button, but a path that bypasses WM_SYSCOMMAND entirely (e.g. a shell-driven minimize) would
     // still land here with WindowState already Minimized — hide to tray rather than let it sit
@@ -185,7 +185,7 @@ public sealed class MainForm : Form
   {
     // ProcessCmdKey runs before a focused control (e.g. a Button) gets to handle Space/Enter
     // itself, so returning true here both dispatches the shortcut and stops it from also
-    // triggering whatever button currently has focus (AGENTS.md §10.4/§17).
+    // triggering whatever button currently has focus (AGENTS.md §10.4).
     StopwatchShortcut? shortcut = StopwatchControl.MapShortcut(keyData);
     if (shortcut is null)
     {
@@ -200,14 +200,14 @@ public sealed class MainForm : Form
   protected override void WndProc(ref Message m)
   {
     // A second instance detected our named mutex and posted this registered message instead of
-    // running its own copy (AGENTS.md §10.5/§3.5); restore and activate this window in response.
+    // running its own copy (AGENTS.md §10.5); restore and activate this window in response.
     if (m.Msg == _activateMessage)
     {
       RestoreWindow();
       return;
     }
 
-    // S15 (AGENTS.md §10.3/§17) — intercept the minimize system command itself, rather than reacting
+    // AGENTS.md §10.3 — intercept the minimize system command itself, rather than reacting
     // to OnResize after the fact: swallowing WM_SYSCOMMAND/SC_MINIMIZE here (not calling
     // base.WndProc) means the window never actually enters FormWindowState.Minimized, so Windows
     // never gives it a minimized taskbar button to leave behind in the first place. WParam's low
@@ -230,12 +230,12 @@ public sealed class MainForm : Form
     base.OnDpiChanged(e);
     // TrayIconService.UpdateDisplay only redraws the icon when the displayed hour/minute/state/
     // layout changes (AGENTS.md §10.1) — none of which a DPI change alone affects — so force a
-    // fresh render explicitly here instead (AGENTS.md §7/§17).
+    // fresh render explicitly here instead (AGENTS.md §7/§10.1).
     _trayIconService.RefreshIcon();
-    // S14/S15 (AGENTS.md §17) — re-size on every DPI change, not just at startup: moving this
+    // AGENTS.md §7/§10.3 — resize on every DPI change, not just at startup: moving this
     // fixed-width, non-resizable window to a higher-DPI monitor must not leave it wider than that
     // monitor's working area, since the user has no resize handle to shrink it back with.
-    // S14a: re-derive from the *new* DPI (e.DeviceDpiNew), not the old size — the previous version
+    // Re-derive from the *new* DPI (e.DeviceDpiNew), not the old size — using the previous size
     // reset ClientSize to raw design pixels here, undoing whatever PerformAutoScale had just
     // correctly done for the new monitor.
     ResizeToContent(e.DeviceDpiNew);
@@ -248,9 +248,9 @@ public sealed class MainForm : Form
     {
       // SystemEvents is a static, process-wide event source: a missed unsubscribe here would leave
       // it holding a reference to OnUserPreferenceChanged (and therefore to this form) past this
-      // form's own disposal (AGENTS.md §7/§17).
+      // form's own disposal (AGENTS.md §5/§7).
       SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged;
-      // S14 (AGENTS.md §17) — fonts and icons created via `new Font(...)`/`new Icon(...)` hold
+      // AGENTS.md §5/§10.3 — fonts and icons created via `new Font(...)`/`new Icon(...)` hold
       // native GDI handles and are never disposed by the base Form; each factory/loader here is
       // documented as caller-owned, so ownership is discharged here.
       _bodyFont.Dispose();
@@ -262,7 +262,7 @@ public sealed class MainForm : Form
 
   private void HideToTray()
   {
-    // S15 (AGENTS.md §10.3/§17) — WindowState is normalized *before* Hide(), not after: this window
+    // AGENTS.md §10.3 — WindowState is normalized *before* Hide(), not after: this window
     // must never sit hidden while Minimized, or the next RestoreWindow() call brings it back still
     // minimized (the bug the repo owner reported — closing while minimized reopened minimized).
     // WM_SYSCOMMAND/SC_MINIMIZE is intercepted in WndProc before the window ever becomes Minimized
@@ -275,7 +275,7 @@ public sealed class MainForm : Form
 
   private void RestoreWindow()
   {
-    // S15 (AGENTS.md §17) — ShowInTaskbar is set back to true *before* Show(), not after: flipping
+    // AGENTS.md §10.3 — ShowInTaskbar is set back to true *before* Show(), not after: flipping
     // ShowInTaskbar recreates the window handle, and doing that while the form is still hidden
     // avoids any chance of the handle recreation observing (and reinstating) a stale minimized
     // state. WindowState is already Normal from HideToTray's own normalization above, but is
@@ -283,7 +283,7 @@ public sealed class MainForm : Form
     // HideToTray first (first launch, single-instance activation).
     WindowState = FormWindowState.Normal;
     ShowInTaskbar = true;
-    // S14b/S16 (AGENTS.md §10.6/§17) — always centers; a tray Open/single left-click, single-instance
+    // AGENTS.md §10.6 — always center; a tray Open/single left-click, single-instance
     // activation, or restore-from-minimize all route through here.
     PositionWindowCentered();
     Show();
@@ -301,7 +301,7 @@ public sealed class MainForm : Form
   }
 
   /// <summary>
-  /// Loads the app icon (S14, AGENTS.md §6/§17) embedded via the .csproj's
+  /// Loads the app icon (AGENTS.md §6/§10.3) embedded via the .csproj's
   /// <c>&lt;EmbeddedResource Include="Assets\app.ico" /&gt;</c> — the title bar, the taskbar button,
   /// and (via the .csproj's separate <c>&lt;ApplicationIcon&gt;</c>) the built .exe's own icon.
   /// </summary>
@@ -321,8 +321,8 @@ public sealed class MainForm : Form
   }
 
   /// <summary>
-  /// Resizes the window to fit its actual current content at <paramref name="deviceDpi"/> (S15,
-  /// AGENTS.md §17) — replaces S14's fixed design-pixel <c>FixedClientSize</c> literal. Width comes
+  /// Resizes the window to fit its actual current content at <paramref name="deviceDpi"/>
+  /// (AGENTS.md §10.3) — replacing a fixed design-pixel client-size literal. Width comes
   /// from <see cref="RequiredClientWidth"/> using the currently visible rows; height comes from asking <see cref="_rootLayout"/> for its
   /// real preferred size at that width, so the window always ends a few pixels below whatever is
   /// actually shown (idle vs. running, 0 vs. 5 records, laps present or not) instead of a constant
@@ -337,7 +337,7 @@ public sealed class MainForm : Form
   {
     int width = ComputeFixedWidth(deviceDpi);
     // Ask the real control tree for its preferred height at this width, with no height constraint
-    // (0) — the same "measure the actual fixed-up tree" technique AGENTS.md §17's S14b/S14c entries
+    // (0) — the same "measure the actual fixed-up tree" technique described by AGENTS.md §10.3
     // used via a throwaway harness, now run live on every content change instead of hand-derived
     // once.
     int height = _rootLayout.GetPreferredSize(new Size(width, 0)).Height;
@@ -346,7 +346,7 @@ public sealed class MainForm : Form
     {
       ClientSize = clamped;
     }
-    // S15 (AGENTS.md §10.6/§17) — re-center on every content-driven resize, not just the explicit
+    // AGENTS.md §10.6 — re-center on every content-driven resize, not just the explicit
     // Open transitions: keeping Location fixed while Size changes grows/shrinks the window from its
     // top-left corner, so once real content loads asynchronously (RestoreAsync populating records/
     // laps after the constructor's own initial, empty-state centering) the window visibly drifts
@@ -358,8 +358,8 @@ public sealed class MainForm : Form
     PositionWindowCentered();
   }
 
-  /// <summary>Computes the DPI-scaled fixed window width for <paramref name="deviceDpi"/> (S15,
-  /// AGENTS.md §17) — <see cref="RequiredClientWidth"/> at that DPI, using a throwaway probe font
+  /// <summary>Computes the DPI-scaled fixed window width for <paramref name="deviceDpi"/>
+  /// (AGENTS.md §10.3) — <see cref="RequiredClientWidth"/> at that DPI, using a throwaway probe font
   /// the way <see cref="OnDpiChanged"/> and the constructor both need without duplicating the
   /// font-creation call at each site.</summary>
   private int ComputeFixedWidth(int deviceDpi)
@@ -382,10 +382,10 @@ public sealed class MainForm : Form
   /// row, or the elapsed display. Rows beyond this current-content width word-wrap rather than
   /// permanently reserving unused space. A <see cref="Font"/>'s point size is
   /// otherwise measured against a fixed 96dpi baseline regardless of the caller's actual DPI context
-  /// (S14a, AGENTS.md §17) — the very mismatch that let record rows clip at anything above 100%
+  /// (AGENTS.md §7/§10.3) — the mismatch that makes record rows clip above 100%
   /// scaling — so every font used here is rebuilt at an equivalent, pre-scaled size before measuring
   /// rather than measured as-is. The laps row (capped at a realistic 3-digit lap id) also reserves
-  /// scrollbar chrome the records row does not (S15, AGENTS.md §17): the laps list is the only one of
+  /// scrollbar chrome the records row does not (AGENTS.md §8.5/§10.3): the laps list is the only one of
   /// the two that can genuinely scroll.
   /// </summary>
   /// <param name="monoBodyFont">The unscaled monospace body font (<see cref="Typography.CreateMonospaceBodyFont"/>).</param>
@@ -509,11 +509,11 @@ public sealed class MainForm : Form
 
   /// <summary>
   /// Reduces <paramref name="size"/>, if necessary, so that a <see cref="FormBorderStyle.FixedSingle"/>
-  /// window of that client size fits within <see cref="Screen.PrimaryScreen"/>'s working area (S14,
-  /// AGENTS.md §17). This window cannot be resized by dragging, so unlike a normal window, it must
+  /// window of that client size fits within <see cref="Screen.PrimaryScreen"/>'s working area
+  /// (AGENTS.md §10.3). This window cannot be resized by dragging, so unlike a normal window, it must
   /// never be allowed to render taller or wider than the screen in the first place — there would be
   /// no way for the user to shrink it back down. <paramref name="size"/> must already be in device
-  /// pixels for the target DPI (S14a, AGENTS.md §17) — <see cref="Screen.WorkingArea"/> is reported
+  /// pixels for the target DPI (AGENTS.md §7/§10.3) — <see cref="Screen.WorkingArea"/> is reported
   /// in physical pixels, so comparing it against a 96dpi design size silently under-clamped at any
   /// DPI above 100%.
   /// </summary>
@@ -531,7 +531,7 @@ public sealed class MainForm : Form
 
   /// <summary>
   /// Sets <see cref="Form.Location"/> to center the window (both axes) on the primary screen's
-  /// working area (S14b, revised S15, AGENTS.md §10.6/§17) — called from <see cref="ResizeToContent"/>
+  /// working area (AGENTS.md §10.3/§10.6) — called from <see cref="ResizeToContent"/>
   /// on every content-driven resize (so the window stays centered as it grows/shrinks with content,
   /// not just on the "Open" transitions below) and separately from every tray Open/single click,
   /// single-instance activation, or restore-from-minimize via <see cref="RestoreWindow"/> (redundant
@@ -549,7 +549,7 @@ public sealed class MainForm : Form
   }
 
   /// <summary>
-  /// Applies the current effective OS dark/light state (AGENTS.md §7/§11/§17) to every theme-aware
+  /// Applies the current effective OS dark/light state (AGENTS.md §7/§11) to every theme-aware
   /// surface: <see cref="StopwatchControl.DarkMode"/> and <see cref="RecordsListControl.Dark"/>
   /// (whose setters already trigger their own repaint) and <see cref="TrayIconService.DarkMode"/>.
   /// Called once at startup and again on every live OS theme change via
@@ -568,7 +568,7 @@ public sealed class MainForm : Form
   }
 
   /// <summary>
-  /// Reacts to a live OS user-preference change (AGENTS.md §7/§17). The light/dark-mode toggle is
+  /// Reacts to a live OS user-preference change (AGENTS.md §7/§11). The light/dark-mode toggle is
   /// delivered under <see cref="UserPreferenceCategory.General"/> — it has no dedicated category of
   /// its own — so every other category is ignored here. This fires on <c>SystemEvents</c>'s own
   /// notification window's thread, not necessarily this form's UI thread, hence the
@@ -685,7 +685,7 @@ public sealed class MainForm : Form
       {
         _manageRecordsForm.UpdateRecords(_stopwatchControl.Timer.Records);
       }
-      // S15 (AGENTS.md §17) — the records card's preferred height just changed (a row was added,
+      // AGENTS.md §8.5/§10.3 — the records card's preferred height just changed (a row was added,
       // removed by Clear All, or the empty state toggled), so the window must re-fit it.
       ResizeToContent(DeviceDpi);
     });
@@ -694,7 +694,7 @@ public sealed class MainForm : Form
     InvokeOnUiThread(() =>
     {
       _recordsListControl.UpdateLaps(_stopwatchControl.Timer.Laps);
-      // S15 (AGENTS.md §17) — the laps panel appearing/disappearing, or growing/shrinking up to its
+      // AGENTS.md §8.5/§10.3 — the laps panel appearing/disappearing, or growing/shrinking up to its
       // 3-row cap, changes the records card's preferred height.
       ResizeToContent(DeviceDpi);
     });

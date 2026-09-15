@@ -3,7 +3,7 @@ using System.Drawing.Text;
 namespace StopwatchApp.Theme;
 
 /// <summary>
-/// The app's type scale (S14, AGENTS.md §17): three roles — display, body, and caption — each a
+/// The app's type scale (AGENTS.md §8.5/§11): three roles — display, body, and caption — each a
 /// fixed point size, plus the monospace family resolution shared by the elapsed-time display and
 /// the records/laps rows. Point sizes are chosen so the rendered pixel size (at the standard 96 dpi
 /// design baseline, where <c>1pt = 4/3px</c>) matches the sizes specified for this app: 96px display,
@@ -18,7 +18,7 @@ public static class Typography
   /// <summary>The body text point size (buttons, headers, dialogs, list rows) — 12pt, 16px at 96 dpi.</summary>
   public const float BodyPointSize = 12f;
 
-  /// <summary>The caption point size (the version footer) — 9pt, 12px at 96 dpi.</summary>
+  /// <summary>The reserved caption point size — 9pt, 12px at 96 dpi.</summary>
   public const float CaptionPointSize = 9f;
 
   /// <summary>

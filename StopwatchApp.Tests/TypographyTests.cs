@@ -3,7 +3,7 @@ using StopwatchApp.Theme;
 namespace StopwatchApp.Tests;
 
 /// <summary>
-/// Covers <see cref="Typography"/>'s monospace family resolution — the one piece of the S14 type
+/// Covers <see cref="Typography"/>'s monospace family resolution — the one piece of the documented type
 /// scale that depends on the running machine's installed fonts rather than a fixed literal.
 /// </summary>
 public sealed class TypographyTests
@@ -29,7 +29,7 @@ public sealed class TypographyTests
   [Fact]
   public void MonospaceFamilyName_IsCascadiaMonoOrConsolas()
   {
-    // AGENTS.md §17 (S14): Cascadia Mono when installed (ships with Windows 11), else Consolas
+    // AGENTS.md §8.5/§11: Cascadia Mono when installed (ships with Windows 11), else Consolas.
     // (ships with every Windows since Vista) — never a silent fallback to a proportional font.
     Assert.Contains(Typography.MonospaceFamilyName, ExpectedMonospaceFamilies);
   }

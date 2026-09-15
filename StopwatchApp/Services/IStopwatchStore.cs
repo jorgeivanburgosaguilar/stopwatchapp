@@ -54,15 +54,16 @@ public interface IStopwatchStore
   Task ClearPausedSessionAsync();
 
   /// <summary>
-  /// Saves (upserting into the single slot) the window's last manually-dragged position (AGENTS.md
-  /// §10.6).
+  /// Retains the migration-compatible single-slot window-position write. Current application UI
+  /// deliberately does not call this method (AGENTS.md §9/§10.6).
   /// </summary>
   /// <param name="x">The window's <c>Location.X</c>.</param>
   /// <param name="y">The window's <c>Location.Y</c>.</param>
   Task SaveWindowPositionAsync(int x, int y);
 
   /// <summary>
-  /// Loads the saved window position, if any.
+  /// Retains the migration-compatible saved-window-position read. Current application UI
+  /// deliberately does not call this method (AGENTS.md §9/§10.6).
   /// </summary>
   /// <returns>The saved position, or <see langword="null"/> if none exists or it fails to deserialize.</returns>
   Task<(int X, int Y)?> LoadWindowPositionAsync();

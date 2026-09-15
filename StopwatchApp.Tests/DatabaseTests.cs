@@ -269,11 +269,11 @@ public sealed class DatabaseTests : IAsyncLifetime
   [Fact]
   public async Task InitializeAsync_OnV1Database_AppliesMigration2AndKeepsData()
   {
-    // Build a database at exactly the pre-S11b shape: records/paused_session present (migration 1's
+    // Build a database at exactly the migration-1 shape: records/paused_session present
     // DDL) and user_version stamped at 1, no window_position table — simulating a database created
     // by the build immediately before this stage. Mirrors
     // InitializeAsync_OnLegacyDatabaseWithNoVersionStamp_AdoptsItAsV1AndKeepsData above, one version
-    // later (AGENTS.md §9 "Schema versioning", §17 dated 2026-09-11).
+    // later (AGENTS.md §9 "Schema versioning").
     await _database.DisposeAsync();
     if (File.Exists(_databasePath))
     {

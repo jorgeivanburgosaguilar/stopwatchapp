@@ -371,7 +371,7 @@ public sealed class Database : IStopwatchStore, IAsyncDisposable
   /// because SQLite's <c>INTEGER</c> affinity always round-trips through Microsoft.Data.Sqlite as
   /// <see cref="long"/> — Dapper's constructor-based record materialization requires an exact
   /// parameter-type match against the column's runtime type, not just a name match (see AGENTS.md
-  /// §17, dated 2026-09-11), the same reason every column in <see cref="PausedSessionRow"/> is
+  /// §9), the same reason every column in <see cref="PausedSessionRow"/> is
   /// <see cref="long"/>.
   /// </summary>
   private sealed record WindowPositionRow(long X, long Y);

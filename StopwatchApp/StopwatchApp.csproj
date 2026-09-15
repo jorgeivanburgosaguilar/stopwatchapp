@@ -13,14 +13,13 @@
     <PublishSelfContained>false</PublishSelfContained>
     <Version>1.8.0</Version>
 
-    <!-- S14a (AGENTS.md §17) — without this, the SDK appends the git SourceRevisionId to
-         AssemblyInformationalVersionAttribute, which the window title (S15; was the version footer,
-         S12) reads verbatim via Application.ProductVersion (e.g. "1.5.0+dd67742c..."). Not
-         user-facing information. -->
+    <!-- AGENTS.md §6 — without this, the SDK appends SourceRevisionId to
+         AssemblyInformationalVersionAttribute, which the window title reads verbatim through
+         Application.ProductVersion. A git hash is not user-facing version information. -->
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
 
     <!-- Required by LibraryImportAttribute-based source-generated interop (SYSLIB1062); see
-         TrayIconService's DestroyIcon P/Invoke and AGENTS.md §17. -->
+         TrayIconService's DestroyIcon P/Invoke and AGENTS.md §6/§10.1. -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
 
     <!-- WinForms application configuration (source-generates ApplicationConfiguration.Initialize) -->
@@ -29,8 +28,8 @@
     <ApplicationUseCompatibleTextRendering>false</ApplicationUseCompatibleTextRendering>
 
     <!-- Explorer, the pinned taskbar entry, and the published .exe read this; MainForm separately
-         loads the EmbeddedResource below to set the live title-bar/taskbar-button icon (S14,
-         AGENTS.md §17) — see Assets/NOTICE.md for provenance. -->
+         loads the EmbeddedResource below for the live window (AGENTS.md §6/§10.3). See
+         Assets/NOTICE.md for provenance. -->
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>
 
     <!-- Analyzers as real build gates -->
