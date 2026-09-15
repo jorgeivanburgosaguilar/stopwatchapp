@@ -56,13 +56,6 @@ public static class Palette
   public static Color ShadowHover(bool dark) =>
     dark ? Color.FromArgb(140, 0x00, 0x00, 0x00) : Color.FromArgb(36, 0x0F, 0x17, 0x2A);
 
-  /// <summary>
-  /// Gets the dark-mode "mica-style" 1px lighter top-edge highlight drawn on a hovered/pressed
-  /// owner-drawn surface. Light mode has no equivalent comp token, so callers only use this while
-  /// dark mode is active.
-  /// </summary>
-  public static Color TopEdgeHighlight { get; } = Color.FromArgb(20, 0xFF, 0xFF, 0xFF);
-
   /// <summary>Gets the primary text color for the given theme.</summary>
   /// <param name="dark">Whether dark mode is active.</param>
   public static Color Text(bool dark) =>

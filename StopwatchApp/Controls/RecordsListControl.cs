@@ -25,8 +25,8 @@ public sealed class RecordsListControl : UserControl
   private readonly ListBox _lapsListBox;
   private readonly ListBox _recordsListBox;
   private readonly Label _emptyStateLabel;
-  private readonly GlyphButton _clearAllButton;
-  private readonly GlyphButton _manageRecordsButton;
+  private readonly Button _clearAllButton;
+  private readonly Button _manageRecordsButton;
   private readonly Panel _recordsHost;
   private readonly Font _rowFont;
   private bool _dark;
@@ -110,21 +110,17 @@ public sealed class RecordsListControl : UserControl
       Visible = false,
     };
 
-    // AGENTS.md §8.5 — both header-row buttons use the shared GlyphButton (text-only,
-    // glyph: null) instead of stock Buttons, so they carry the same rounded, palette-driven paint as
-    // the stopwatch card's transport buttons. Order left-to-right is Manage Records then
-    // Clear All Records, both right-aligned beside the "Records" label per the owner's markup.
-    _manageRecordsButton = new GlyphButton("Manage Records", glyph: null, Palette.LapButton)
-    {
-      Margin = new Padding(0, 0, Palette.SpacingSm, 0),
-    };
+    // AGENTS.md §8.5 — both header-row buttons use the shared ButtonFactory, so they carry the
+    // same stock, palette-colored appearance as the stopwatch card's transport buttons. Order
+    // left-to-right is Manage Records then Clear All Records, both right-aligned beside the
+    // "Records" label per the owner's markup.
+    _manageRecordsButton = ButtonFactory.Create("Manage Records", Palette.LapButton);
+    _manageRecordsButton.Margin = new Padding(0, 0, Palette.SpacingSm, 0);
     _manageRecordsButton.Click += (_, _) => ManageRecordsRequested?.Invoke();
 
-    _clearAllButton = new GlyphButton("Clear All Records", glyph: null, Palette.StopButton)
-    {
-      Margin = new Padding(0),
-      Visible = false,
-    };
+    _clearAllButton = ButtonFactory.Create("Clear All Records", Palette.StopButton);
+    _clearAllButton.Margin = new Padding(0);
+    _clearAllButton.Visible = false;
     _clearAllButton.Click += (_, _) => ClearAllRequested?.Invoke();
 
     FlowLayoutPanel headerButtonsRow = new()
@@ -356,13 +352,6 @@ public sealed class RecordsListControl : UserControl
     _lapsListBox.BackColor = cardBackground;
     _recordsListBox.BackColor = cardBackground;
     _emptyStateLabel.ForeColor = Palette.EmptyStateText(_dark);
-    // AGENTS.md §8.5/§11 — the header-row buttons are GlyphButtons, which resolve their
-    // dark-mode-only hover/press top-edge highlight and their disabled-state blend from this flag,
-    // same as StopwatchControl's transport buttons.
-    _manageRecordsButton.DarkMode = _dark;
-    _clearAllButton.DarkMode = _dark;
-    _manageRecordsButton.Invalidate();
-    _clearAllButton.Invalidate();
     // Row colors are read from _dark at paint time (DrawRow below), so a theme flip just needs a
     // repaint, not a rebuild of the (unchanged) row text.
     _lapsListBox.Invalidate();

@@ -19,9 +19,9 @@ internal sealed class ManageRecordsForm : Form
   private readonly Label _emptyStateLabel;
   private readonly TableLayoutPanel _rowsLayout;
   private readonly TableLayoutPanel _rootLayout;
-  private readonly GlyphButton _clearAllButton;
-  private readonly GlyphButton _previousButton;
-  private readonly GlyphButton _nextButton;
+  private readonly Button _clearAllButton;
+  private readonly Button _previousButton;
+  private readonly Button _nextButton;
   private readonly List<Label> _recordDetails = [];
   private IReadOnlyList<StopwatchRecord> _records;
   private int _pageIndex;
@@ -61,11 +61,9 @@ internal sealed class ManageRecordsForm : Form
       Anchor = AnchorStyles.Left,
       Margin = new Padding(0),
     };
-    _clearAllButton = new GlyphButton("Clear All Records", glyph: null, Palette.StopButton)
-    {
-      Anchor = AnchorStyles.Right,
-      Margin = new Padding(0),
-    };
+    _clearAllButton = ButtonFactory.Create("Clear All Records", Palette.StopButton);
+    _clearAllButton.Anchor = AnchorStyles.Right;
+    _clearAllButton.Margin = new Padding(0);
     _clearAllButton.Click += async (_, _) => await ClearAllRecordsAsync();
 
     TableLayoutPanel header = new()
@@ -105,10 +103,8 @@ internal sealed class ManageRecordsForm : Form
     };
     rowsHost.Controls.Add(_emptyStateLabel);
 
-    _previousButton = new GlyphButton("Previous", glyph: null, Palette.CancelButton)
-    {
-      Margin = new Padding(0, 0, Palette.SpacingSm, 0),
-    };
+    _previousButton = ButtonFactory.Create("Previous", Palette.CancelButton);
+    _previousButton.Margin = new Padding(0, 0, Palette.SpacingSm, 0);
     _previousButton.Click += (_, _) => ChangePage(-1);
     _pageLabel = new Label
     {
@@ -116,10 +112,8 @@ internal sealed class ManageRecordsForm : Form
       Anchor = AnchorStyles.None,
       Margin = new Padding(Palette.SpacingSm, 0, Palette.SpacingSm, 0),
     };
-    _nextButton = new GlyphButton("Next", glyph: null, Palette.LapButton)
-    {
-      Margin = new Padding(0),
-    };
+    _nextButton = ButtonFactory.Create("Next", Palette.LapButton);
+    _nextButton.Margin = new Padding(0);
     _nextButton.Click += (_, _) => ChangePage(1);
     FlowLayoutPanel pagination = new()
     {
@@ -291,9 +285,6 @@ internal sealed class ManageRecordsForm : Form
     _clearAllButton.Enabled = hasRecords && !_operationInProgress;
     _previousButton.Enabled = _pageIndex > 0 && !_operationInProgress;
     _nextButton.Enabled = _pageIndex < pageCount - 1 && !_operationInProgress;
-    _clearAllButton.DarkMode = _dark;
-    _previousButton.DarkMode = _dark;
-    _nextButton.DarkMode = _dark;
     ApplyTheme();
     ResizeToCurrentPage(DeviceDpi);
   }
@@ -412,13 +403,10 @@ internal sealed class ManageRecordsForm : Form
       Margin = new Padding(0),
     };
     _recordDetails.Add(details);
-    GlyphButton deleteButton = new("Delete", glyph: null, Palette.StopButton)
-    {
-      Anchor = AnchorStyles.Right,
-      Margin = new Padding(Palette.SpacingSm, 0, 0, 0),
-      DarkMode = _dark,
-      Enabled = !_operationInProgress,
-    };
+    Button deleteButton = ButtonFactory.Create("Delete", Palette.StopButton);
+    deleteButton.Anchor = AnchorStyles.Right;
+    deleteButton.Margin = new Padding(Palette.SpacingSm, 0, 0, 0);
+    deleteButton.Enabled = !_operationInProgress;
     deleteButton.Click += async (_, _) => await DeleteRecordAsync(record.Id);
 
     TableLayoutPanel content = new()
@@ -462,11 +450,5 @@ internal sealed class ManageRecordsForm : Form
     ForeColor = Palette.Text(_dark);
     _emptyStateLabel.ForeColor = Palette.EmptyStateText(_dark);
     _pageLabel.ForeColor = Palette.MutedText(_dark);
-    _clearAllButton.DarkMode = _dark;
-    _previousButton.DarkMode = _dark;
-    _nextButton.DarkMode = _dark;
-    _clearAllButton.Invalidate();
-    _previousButton.Invalidate();
-    _nextButton.Invalidate();
   }
 }

@@ -480,9 +480,8 @@ public sealed class MainForm : Form
           TextFormatFlags.NoPadding | TextFormatFlags.SingleLine
         )
         .Width;
-    // A text-only GlyphButton's own preferred width is Padding.Left + textWidth + Padding.Right,
-    // with no glyph square or gutter (GlyphButton.GetPreferredSize); its Padding.Left/Right are
-    // both Palette.SpacingMd (GlyphButton's constructor).
+    // A ButtonFactory-created button's own preferred width is Padding.Left + textWidth +
+    // Padding.Right; its Padding.Left/Right are both Palette.SpacingMd (ButtonFactory.Create).
     int buttonPadding = (int)Math.Ceiling(Palette.SpacingMd * 2 * scale);
     int manageButtonWidth = buttonPadding + TextWidth("Manage Records");
     int clearButtonWidth = buttonPadding + TextWidth("Clear All Records");

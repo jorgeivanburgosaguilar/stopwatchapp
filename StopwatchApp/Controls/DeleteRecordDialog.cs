@@ -30,19 +30,12 @@ internal static class DeleteRecordDialog
       Margin = new Padding(0, 0, 0, Palette.SpacingLg),
       Dock = DockStyle.Top,
     };
-    bool dark = Application.IsDarkModeEnabled;
-    GlyphButton deleteButton = new("Delete", glyph: null, Palette.StopButton)
-    {
-      DialogResult = DialogResult.Yes,
-      Margin = new Padding(0),
-      DarkMode = dark,
-    };
-    GlyphButton cancelButton = new("Cancel", glyph: null, Palette.CancelButton)
-    {
-      DialogResult = DialogResult.Cancel,
-      Margin = new Padding(0, 0, Palette.SpacingSm, 0),
-      DarkMode = dark,
-    };
+    Button deleteButton = ButtonFactory.Create("Delete", Palette.StopButton);
+    deleteButton.DialogResult = DialogResult.Yes;
+    deleteButton.Margin = new Padding(0);
+    Button cancelButton = ButtonFactory.Create("Cancel", Palette.CancelButton);
+    cancelButton.DialogResult = DialogResult.Cancel;
+    cancelButton.Margin = new Padding(0, 0, Palette.SpacingSm, 0);
     FlowLayoutPanel buttons = new()
     {
       FlowDirection = FlowDirection.RightToLeft,

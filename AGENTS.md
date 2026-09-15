@@ -87,7 +87,7 @@ The application uses a small layered architecture with hand-written constructor 
   process. Every storage operation is asynchronous, and disposal clears the SQLite pool so tests and
   shutdown release the file handle.
 - **Central `Palette` and `Typography` modules** keep owner-drawn controls consistent across light
-  and dark modes and DPI settings. Shared `GlyphButton` and rounded-rectangle code avoid subtly
+  and dark modes and DPI settings. Shared `ButtonFactory` and rounded-rectangle code avoid subtly
   different copies of the same visual behavior.
 - **x64 is the only supported architecture.** Both projects and the solution explicitly map to
   `x64`, and publishing targets `win-x64`. Supporting `AnyCPU`, x86, ARM64, Windows 10, macOS,
@@ -126,7 +126,7 @@ StopwatchApp/
   Controls/                rendering + event wiring only, no untestable business logic
     StopwatchControl.cs    timer state (§8) + control row (§8.5) + keyboard shortcuts (§10.4)
     StopwatchShortcut.cs   the three window-scoped shortcuts (§10.4)
-    GlyphButton.cs         shared owner-drawn rounded button used across the application
+    ButtonFactory.cs       shared stock, palette-colored Button used across the application
     RecordsListControl.cs  records and laps list rendering
     ClearRecordsDialog.cs  confirm dialog
     DeleteRecordDialog.cs  per-record delete confirmation
@@ -510,24 +510,23 @@ Rules:
   shown — never a flat per-row constant — so the window (§10.3) can size itself to match.
 - A `Clear All Records` button is visible only when `Records.Count > 0` (the *actual* total, not the
   capped display count) and, when clicked and confirmed, clears every persisted record — not just
-  the 5 shown. Styled red (`Palette.StopButton`) via the extracted `GlyphButton` (below),
+  the 5 shown. Styled red (`Palette.StopButton`) via the shared `ButtonFactory` (below),
   matching the destructive-action color used elsewhere.
 - A **`Manage Records`** button sits beside `Clear All Records`, is always enabled, and
   opens one modeless manager window. Styled blue (`Palette.LapButton`).
 - The manager lists every saved record newest first, 10 per page, with Previous/Next navigation and
   confirmed per-row `Delete` actions. Its header also has a confirmed `Clear All Records` action;
   the main card's own Clear All shortcut remains.
-- **`GlyphButton`:** the owner-drawn rounded button, originally private to
-  `StopwatchControl`, is extracted to its own `Controls/GlyphButton.cs` so `RecordsListControl`'s
-  header-row buttons and `ClearRecordsDialog`'s confirm/cancel buttons can reuse the same rounded,
-  palette-driven paint routine — with a `Glyph?` (nullable) glyph for a text-only button, and a
-  muted, palette-driven `Enabled = false` visual state (blended toward `Palette.CardBackground`/
-  `Palette.MutedText`) instead of the stock gray. Every label is centered on the full button axis;
-  icon-bearing buttons reserve the glyph lane on both sides so their label remains centered without
-  overlapping the glyph.
+- **`ButtonFactory`:** every button in the app (`Controls/ButtonFactory.cs`) is a stock
+  `Button` with `FlatStyle.Flat` and a `Palette` base/hover/pressed triplet applied to
+  `BackColor`/`FlatAppearance.MouseOverBackColor`/`MouseDownBackColor`. This replaced an
+  owner-drawn rounded button (`GlyphButton`, removed) so buttons get the native keyboard-focus
+  indicator and dark-mode/high-contrast behavior for free — at the cost of square corners, the
+  one visual it gave up (§17). Disabled buttons use the stock disabled rendering, not a
+  palette-driven blend.
 - A confirm dialog, titled `Clear All Records`, body text
   `Are you sure you want to clear all records? This action cannot be undone.`, buttons `Cancel` and
-  `Clear All`, both the extracted `GlyphButton` — `Clear All` red (`Palette.StopButton`),
+  `Clear All`, both from the shared `ButtonFactory` — `Clear All` red (`Palette.StopButton`),
   `Cancel` dark slate (`Palette.CancelButton`, a new non-destructive-action token) — with equal
   top/bottom margins so the two sit on the same baseline (the former mismatched default/explicit margins
   had misaligned them). Confirming clears the records table and reloads the (now empty) list.
@@ -883,8 +882,8 @@ xUnit, in a `StopwatchApp.Tests` project.
   out of scope, and the main card's Clear All shortcut remains.
 - Clear-all dialog styling (§8.5): `Clear All` renders red and `Cancel` renders dark slate, and
   the two sit aligned on the same baseline.
-- Button labels (§8.5): every `GlyphButton` label is centered on the full button axis;
-  icon-bearing buttons keep their glyph without overlapping the centered label.
+- Button focus (§8.5/§17): tabbing through any window shows the stock keyboard-focus indicator on
+  whichever button has focus, matching ordinary WinForms `Button` behavior.
 - Tray open gesture (§10.2): a single left-click opens and activates the main window;
   right-click remains exclusively available for the context menu.
 
@@ -999,10 +998,21 @@ here; do not accumulate dated implementation history.
   clipping. The live control tree supplies preferred height after state/content changes; width
   budgets for a 24-hour row, and longer records or lap identifiers wrap instead of growing the
   window indefinitely.
-- **Owner-drawn visuals share primitives and tokens.** `GlyphButton`,
-  `RoundedRectangle`, `Palette`, and `Typography` centralize geometry, interaction colors,
-  disabled states, font fallback, and spacing. This was chosen after duplicated or stock rendering
-  produced inconsistent alignment, dark-mode colors, and rounded borders.
+- **Owner-drawn visuals share primitives and tokens.** `RoundedRectangle`, `Palette`, and
+  `Typography` centralize geometry, interaction colors, disabled states, font fallback, and
+  spacing for the remaining owner-drawn surfaces — the stopwatch/records cards' rounded outline
+  and the records/laps rows. This was chosen after duplicated or stock rendering produced
+  inconsistent alignment, dark-mode colors, and rounded borders.
+- **Buttons moved back to a stock `Button` (`ButtonFactory`), reversing the owner-drawn
+  `GlyphButton` this app used previously.** `GlyphButton` set `ControlStyles.UserPaint` and never
+  called `base.OnPaint`, so it never drew a keyboard-focus indicator — a real accessibility gap.
+  `FlatStyle.Flat` is fully stock (no custom `OnPaint`) and still honors `BackColor` and
+  `FlatAppearance.MouseOverBackColor`/`MouseDownBackColor`, so every `Palette` button color/hover/
+  press triplet carried over unchanged. The one accepted cost is square corners: WinForms has no
+  stock style that gives both an arbitrary fill color and rounded corners — `FlatStyle.System`
+  renders natively rounded on Windows 11 but ignores `BackColor` entirely, and a `Control.Region`
+  clip (tried previously) is a hit-test mask with no anti-aliasing, so its corners come out
+  jagged rather than smooth.
 - **Cascadia Mono falls back to Consolas at runtime.** Both preserve stable tabular digits; resolving
   the installed family avoids silent substitution to a proportional font.
 - **The main window is a five-record summary; full history has its own modeless window.** Limiting

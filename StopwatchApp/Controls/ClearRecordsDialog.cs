@@ -50,26 +50,19 @@ public static class ClearRecordsDialog
       Dock = DockStyle.Top,
     };
 
-    // AGENTS.md §8.5 — both buttons are GlyphButton instances (text-only, glyph: null), the same
-    // rounded, palette-driven paint as the main window's transport and header-row buttons: "Clear
-    // All" red (matching RecordsListControl's "Clear All Records") and "Cancel" dark slate
-    // (Palette.CancelButton) — a non-destructive action must not read the same as the destructive
-    // one it sits beside. Explicit equal-looking margins (0 vs. right-SpacingSm) keep both on the
-    // same baseline in the FlowLayoutPanel below, instead of the mismatched default/explicit margins
-    // that misaligned them before this change.
-    bool dark = Application.IsDarkModeEnabled;
-    GlyphButton clearAllButton = new("Clear All", glyph: null, Palette.StopButton)
-    {
-      DialogResult = DialogResult.Yes,
-      Margin = new Padding(0),
-      DarkMode = dark,
-    };
-    GlyphButton cancelButton = new("Cancel", glyph: null, Palette.CancelButton)
-    {
-      DialogResult = DialogResult.Cancel,
-      Margin = new Padding(0, 0, Palette.SpacingSm, 0),
-      DarkMode = dark,
-    };
+    // AGENTS.md §8.5 — both buttons are the shared ButtonFactory, the same stock, palette-colored
+    // appearance as the main window's transport and header-row buttons: "Clear All" red (matching
+    // RecordsListControl's "Clear All Records") and "Cancel" dark slate (Palette.CancelButton) — a
+    // non-destructive action must not read the same as the destructive one it sits beside. Explicit
+    // equal-looking margins (0 vs. right-SpacingSm) keep both on the same baseline in the
+    // FlowLayoutPanel below, instead of the mismatched default/explicit margins that misaligned them
+    // before this change.
+    Button clearAllButton = ButtonFactory.Create("Clear All", Palette.StopButton);
+    clearAllButton.DialogResult = DialogResult.Yes;
+    clearAllButton.Margin = new Padding(0);
+    Button cancelButton = ButtonFactory.Create("Cancel", Palette.CancelButton);
+    cancelButton.DialogResult = DialogResult.Cancel;
+    cancelButton.Margin = new Padding(0, 0, Palette.SpacingSm, 0);
 
     FlowLayoutPanel buttonPanel = new()
     {
@@ -94,10 +87,6 @@ public static class ClearRecordsDialog
     // No AcceptButton: Enter should never trigger the destructive action by default.
     dialog.CancelButton = cancelButton;
 
-    // AGENTS.md §8.5/§11 — GlyphButton owner-paints its own rounded corners (the same routine
-    // StopwatchControl's transport buttons use), so the separate Region clip that this dialog used
-    // for plain stock Buttons is no longer needed.
-    //
     // The dialog's own outer corners are not rounded here: Windows 11 already rounds top-level
     // window frames at the DWM level by default, so AGENTS.md §11's DialogCornerRadius token needs
     // no extra rendering — see AGENTS.md §11.

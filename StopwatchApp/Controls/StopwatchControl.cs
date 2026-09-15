@@ -16,10 +16,10 @@ public sealed class StopwatchControl : UserControl
 {
   private readonly System.Windows.Forms.Timer _uiTimer;
   private readonly ToolTip _shortcutToolTip;
-  private readonly GlyphButton _primaryButton; // Start / Continue — never shown alongside Pause/Lap
-  private readonly GlyphButton _pauseButton;
-  private readonly GlyphButton _lapButton;
-  private readonly GlyphButton _stopButton;
+  private readonly Button _primaryButton; // Start / Continue — never shown alongside Pause/Lap
+  private readonly Button _pauseButton;
+  private readonly Button _lapButton;
+  private readonly Button _stopButton;
   private readonly Label _elapsedLabel;
   private readonly Label _resumedNoteLabel;
   private readonly Font _elapsedFont;
@@ -78,20 +78,20 @@ public sealed class StopwatchControl : UserControl
       Margin = new Padding(0, 0, 0, Palette.SpacingSm),
     };
 
-    _primaryButton = CreateButton("Start", Glyph.Play, Palette.StartButton);
+    _primaryButton = ButtonFactory.Create("Start", Palette.StartButton);
     _primaryButton.Click += (_, _) => StartTimer();
 
-    _pauseButton = CreateButton("Pause", Glyph.Pause, Palette.PauseButton);
+    _pauseButton = ButtonFactory.Create("Pause", Palette.PauseButton);
     // The outer await here (no ConfigureAwait(false)) captures the UI SynchronizationContext, so
     // PauseTimerAsync's own UpdateDisplay() call is guaranteed to run back on the UI thread
     // regardless of what thread PauseAsync's internals (which do use ConfigureAwait(false))
     // complete on.
     _pauseButton.Click += async (_, _) => await PauseTimerAsync();
 
-    _lapButton = CreateButton("Lap", Glyph.Flag, Palette.LapButton);
+    _lapButton = ButtonFactory.Create("Lap", Palette.LapButton);
     _lapButton.Click += (_, _) => AddLap();
 
-    _stopButton = CreateButton("Stop", Glyph.Stop, Palette.StopButton);
+    _stopButton = ButtonFactory.Create("Stop", Palette.StopButton);
     _stopButton.Click += async (_, _) => await StopTimerAsync();
 
     _shortcutToolTip = new ToolTip();
@@ -189,13 +189,11 @@ public sealed class StopwatchControl : UserControl
     {
       _darkMode = value;
       ApplyPaletteColors();
-      _primaryButton.DarkMode = value;
-      _pauseButton.DarkMode = value;
-      _lapButton.DarkMode = value;
-      _stopButton.DarkMode = value;
-      // Buttons resolve their corner-fill background from this control's BackColor on every paint
-      // (GlyphButton.OnPaintBackground), so a theme flip needs an explicit repaint to pick it up.
-      Invalidate(invalidateChildren: true);
+      // The transport buttons are stock FlatStyle.Flat Buttons with a fixed BackColor/
+      // FlatAppearance set from Palette at construction (ButtonFactory.Create) — they carry no
+      // dark-mode state of their own, so only this control's own OnPaint (the card border) needs
+      // an explicit repaint here.
+      Invalidate();
     }
   }
 
@@ -298,12 +296,6 @@ public sealed class StopwatchControl : UserControl
     using Pen borderPen = new(Palette.ShadowResting(_darkMode), 1f);
     e.Graphics.DrawPath(borderPen, path);
   }
-
-  private static GlyphButton CreateButton(
-    string text,
-    Glyph? glyph,
-    (Color Base, Color Hover, Color Pressed) colors
-  ) => new(text, glyph, colors) { Margin = new Padding(Palette.SpacingXs) };
 
   private void ApplyPaletteColors()
   {
