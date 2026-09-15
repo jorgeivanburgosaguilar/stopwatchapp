@@ -1,3 +1,4 @@
+using System.Drawing.Drawing2D;
 using StopwatchApp.Services;
 
 namespace StopwatchApp.Tests;
@@ -63,5 +64,64 @@ public class TrayIconServiceTests
   public void ShouldOpen_OnlyAcceptsLeftClick(MouseButtons button, bool expected)
   {
     Assert.Equal(expected, TrayIconService.ShouldOpen(button));
+  }
+
+  // Regression guard for the bug where hour/day labels rendered far smaller than the minutes
+  // readout: "1H"/"1D" measured their ink against a padded line-box measurement instead of actual
+  // glyph bounds, so they were rejected down to a fraction of the minutes font size even though
+  // their ink fits the canvas just as comfortably as "45"'s. A short unit label must land within a
+  // few pixels of a same-length minutes label, not merely "somewhere smaller".
+  [Theory]
+  [InlineData("1H")]
+  [InlineData("9H")]
+  [InlineData("1D")]
+  [InlineData("9D")]
+  public void MeasureLabelFontSize_MatchesMinutesSizeForShortLabels(string text)
+  {
+    int minutesSize = TrayIconService.MeasureLabelFontSize("45");
+    int unitSize = TrayIconService.MeasureLabelFontSize(text);
+
+    Assert.InRange(unitSize, minutesSize - 4, minutesSize);
+  }
+
+  // The fit loop must never return a size whose glyph ink overflows the icon canvas, for every
+  // label shape the tray actually renders — two-digit minutes, one- and two-digit hours/days, and
+  // a pathologically long label to confirm the floor is honored rather than throwing.
+  [Theory]
+  [InlineData("00")]
+  [InlineData("45")]
+  [InlineData("59")]
+  [InlineData("1H")]
+  [InlineData("9H")]
+  [InlineData("10H")]
+  [InlineData("23H")]
+  [InlineData("1D")]
+  [InlineData("9D")]
+  [InlineData("365D")]
+  public void MeasureLabelFontSize_ChosenSizeFitsTheIconCanvas(string text)
+  {
+    int size = TrayIconService.MeasureLabelFontSize(text);
+
+    using FontFamily family = new("Segoe UI");
+    using GraphicsPath path = new();
+    path.AddString(
+      text,
+      family,
+      (int)FontStyle.Bold,
+      size,
+      PointF.Empty,
+      StringFormat.GenericTypographic
+    );
+    RectangleF bounds = path.GetBounds();
+
+    Assert.True(size >= 8, $"Expected the fit floor to be honored, got {size}.");
+    Assert.True(
+      bounds.Width <= 30f,
+      $"Width {bounds.Width} exceeded the fit budget at size {size}."
+    );
+    Assert.True(
+      bounds.Height <= 30f,
+      $"Height {bounds.Height} exceeded the fit budget at size {size}."
+    );
   }
 }

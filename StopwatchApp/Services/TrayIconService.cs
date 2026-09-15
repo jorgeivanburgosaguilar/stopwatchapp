@@ -1,5 +1,4 @@
 using System.Drawing.Drawing2D;
-using System.Drawing.Text;
 using System.Globalization;
 using System.Runtime.InteropServices;
 using StopwatchApp.Controls;
@@ -22,6 +21,14 @@ public sealed partial class TrayIconService : IDisposable
   private const int StateSectionIndex = 2;
   private const long MinutesPerHour = 60;
   private const long MinutesPerDay = 24 * MinutesPerHour;
+
+  // Tray icon label geometry (§10.1): every layout (minutes, hours, days) is auto-fit against the
+  // same 32×32 canvas by the same rule, so a short label like "1H" reads as large as "45" instead
+  // of being penalized for sharing a code path with wider siblings like "23H".
+  private const int IconSize = 32;
+  private const int MaxLabelFontSize = 34; // above any size that can fit; the loop's start point
+  private const int MinLabelFontSize = 8; // floor — guarantees the loop always terminates
+  private const float LabelFitBudget = 30f; // 1px breathing room per side inside IconSize
 
   private readonly StopwatchControl _control;
   private readonly Action _onOpen;
@@ -359,24 +366,19 @@ public sealed partial class TrayIconService : IDisposable
       _ => Palette.MutedText(_darkMode),
     };
 
-    using Bitmap bitmap = new(32, 32);
+    using Bitmap bitmap = new(IconSize, IconSize);
     using (Graphics graphics = Graphics.FromImage(bitmap))
     {
       graphics.Clear(Color.Transparent);
-      graphics.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+      graphics.SmoothingMode = SmoothingMode.AntiAlias;
       using SolidBrush brush = new(tint);
-      if (layout == TrayIconLayout.LargeMinutes)
+      string label = layout switch
       {
-        DrawLargeMinutes(graphics, brush, minutes);
-      }
-      else if (layout == TrayIconLayout.LargeHours)
-      {
-        DrawLargeUnit(graphics, brush, FormatHourLabel(value));
-      }
-      else
-      {
-        DrawLargeUnit(graphics, brush, FormatDayLabel(value));
-      }
+        TrayIconLayout.LargeMinutes => (minutes % 100).ToString("D2", CultureInfo.InvariantCulture),
+        TrayIconLayout.LargeHours => FormatHourLabel(value),
+        _ => FormatDayLabel(value),
+      };
+      DrawLargeLabel(graphics, brush, label);
     }
 
     IntPtr newHandle = bitmap.GetHicon();
@@ -399,67 +401,73 @@ public sealed partial class TrayIconService : IDisposable
     }
   }
 
-  // Draws `text` centered within `bounds` by measuring it and computing an explicit origin point,
-  // instead of handing StringFormat.Alignment/LineAlignment a RectangleF (AGENTS.md §10.1):
-  // whenever the measured text width can be close to or exceed the bounds' width — the large "MM"
-  // readout, or an hour count that isn't reliably two digits — that combination was observed
-  // (empirically, rendering to a Bitmap and inspecting pixel alpha) to silently drop a trailing
-  // character instead of overflowing/clipping evenly on both sides. Measuring first and drawing at a
-  // computed point sidesteps that rectangle-fit behavior entirely. `bounds` is used only for the
-  // centering math, not as a clip/wrap region.
-  private static void DrawCenteredByMeasuredPoint(
-    Graphics graphics,
-    Brush brush,
-    Font font,
-    string text,
-    RectangleF bounds
-  )
+  // Every tray label — minutes, hours, days — is drawn at the largest font size whose actual glyph
+  // ink fits the 32×32 canvas (AGENTS.md §10.1). A fixed size sized for the widest label (e.g. a
+  // size that fits `23H`) made the common `1H`/`45` unnecessarily small; measuring `MeasureString`
+  // output against a fit budget (the previous approach) was worse still, because
+  // `StringFormat.GenericDefault` pads the width with side bearing and reports the full line-box
+  // height rather than glyph height, so it rejected sizes that would actually have fit — that
+  // measurement gap, not the unit label being wider, is why `1H` used to render far smaller than
+  // `45`. Building a `GraphicsPath` and reading `GetBounds()` measures the real ink instead.
+  //
+  // Filling an explicitly translated path also sidesteps a second, previously separate issue:
+  // handing `DrawString` a `RectangleF` with `StringFormat` alignment was observed (empirically,
+  // rendering to a Bitmap and inspecting pixel alpha) to silently drop a trailing character
+  // whenever the measured width approached the bounds' width. A path translated by hand has no
+  // such fit box to overflow.
+  private static void DrawLargeLabel(Graphics graphics, Brush brush, string text)
   {
-    SizeF measured = graphics.MeasureString(
+    int size = MeasureLabelFontSize(text);
+    using FontFamily family = new("Segoe UI");
+    using GraphicsPath path = new();
+    path.AddString(
       text,
-      font,
-      new SizeF(100, 100),
-      StringFormat.GenericDefault
+      family,
+      (int)FontStyle.Bold,
+      size,
+      PointF.Empty,
+      StringFormat.GenericTypographic
     );
-    PointF origin = new(
-      bounds.X + (bounds.Width - measured.Width) / 2f,
-      bounds.Y + (bounds.Height - measured.Height) / 2f
+
+    RectangleF bounds = path.GetBounds();
+    using Matrix translation = new();
+    translation.Translate(
+      -bounds.X + (IconSize - bounds.Width) / 2f,
+      -bounds.Y + (IconSize - bounds.Height) / 2f
     );
-    graphics.DrawString(text, font, brush, origin);
+    path.Transform(translation);
+    graphics.FillPath(brush, path);
   }
 
-  // A single large MM readout for the common under-an-hour case (AGENTS.md §10.1): one row
-  // fills the whole 32×32 canvas instead of the stacked layout's two 16px-tall rows, since no hours
-  // row is needed while it would always read "00" anyway.
-  private static void DrawLargeMinutes(Graphics graphics, Brush brush, int minutes)
+  /// <summary>
+  /// Finds the largest Segoe UI Bold em size, from <see cref="MaxLabelFontSize"/> down to
+  /// <see cref="MinLabelFontSize"/>, whose glyph ink for <paramref name="text"/> fits within
+  /// <see cref="LabelFitBudget"/> on both axes. Internal so the fit rule — and specifically that it
+  /// no longer undersizes hour/day labels versus the minutes readout — can be unit tested without
+  /// a <see cref="Graphics"/> surface.
+  /// </summary>
+  internal static int MeasureLabelFontSize(string text)
   {
-    string minuteText = (minutes % 100).ToString("D2", CultureInfo.InvariantCulture);
-    using Font font = new("Segoe UI", 24f, FontStyle.Bold, GraphicsUnit.Pixel);
-    DrawCenteredByMeasuredPoint(graphics, brush, font, minuteText, new RectangleF(0, 0, 32, 32));
-  }
-
-  // Whole-hour and whole-day labels use the largest font that fits their actual text. A fixed size
-  // sized for `23H` made the common `1H` unnecessarily small versus the large minute readout.
-  private static void DrawLargeUnit(Graphics graphics, Brush brush, string text)
-  {
-    for (int size = 24; size >= 12; size--)
+    using FontFamily family = new("Segoe UI");
+    for (int size = MaxLabelFontSize; size > MinLabelFontSize; size--)
     {
-      using Font font = new("Segoe UI", size, FontStyle.Bold, GraphicsUnit.Pixel);
-      SizeF measured = graphics.MeasureString(
+      using GraphicsPath path = new();
+      path.AddString(
         text,
-        font,
-        new SizeF(100, 100),
-        StringFormat.GenericDefault
+        family,
+        (int)FontStyle.Bold,
+        size,
+        PointF.Empty,
+        StringFormat.GenericTypographic
       );
-      if (measured.Width <= 28 && measured.Height <= 28)
+      RectangleF bounds = path.GetBounds();
+      if (bounds.Width <= LabelFitBudget && bounds.Height <= LabelFitBudget)
       {
-        DrawCenteredByMeasuredPoint(graphics, brush, font, text, new RectangleF(0, 0, 32, 32));
-        return;
+        return size;
       }
     }
 
-    using Font fallback = new("Segoe UI", 12f, FontStyle.Bold, GraphicsUnit.Pixel);
-    DrawCenteredByMeasuredPoint(graphics, brush, fallback, text, new RectangleF(0, 0, 32, 32));
+    return MinLabelFontSize;
   }
 
   [LibraryImport("user32.dll")]

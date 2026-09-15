@@ -629,9 +629,16 @@ progression while the tooltip remains authoritative:
 - **Elapsed time from one day onward**: a single large unpadded whole-day label, `1D`, `2D`, and so
   on; it changes only at the next whole day.
 
-Hour and day labels are rendered at the largest font size that fits their actual text, so the common
-`1H`/`1D` labels are not constrained by the width of `23H`. A paused stopwatch freezes whichever
-layout it reached; running, paused, and idle may differ in tint but not layout.
+All three layouts share one auto-fit rule: the largest Segoe UI Bold size, from a fixed max down to
+a fixed floor, whose **glyph ink** — a `GraphicsPath` built with `AddString`, measured via
+`GetBounds()` — fits the 32×32 canvas. Measure ink, not `MeasureString` output: `MeasureString`
+(especially with `StringFormat.GenericDefault`) reports a padded advance width and the full
+line-box height rather than the glyph's actual extent, so it rejects sizes that would truly fit —
+that gap, not `23H` genuinely needing more room, is what previously made `1H` render at a fraction
+of the minutes readout's size. Sharing one rule means the common `1H`/`1D` labels reach essentially
+the same size as `45`; only the three-character `10H`-`23H` case is genuinely smaller, because
+three glyphs don't fit the canvas at that size. A paused stopwatch freezes whichever layout it
+reached; running, paused, and idle may differ in tint but not layout.
 
 Update the icon at most once per second, and only when the displayed value or active layout changes
 — track both explicitly in the dirty-check state.
@@ -986,8 +993,11 @@ here; do not accumulate dated implementation history.
   message restores the one existing instance without creating a second UI.
 - **The tray icon remains a square notification icon.** Windows gives third-party notification-area
   icons a square slot; a taskbar-clock-style rectangular widget is not available through the public
-  tray API. The current compact display therefore uses measured large minutes, hours, or days while
-  the tooltip carries exact unbounded time.
+  tray API. The current compact display therefore uses one shared ink-bounds auto-fit rule for
+  large minutes, hours, or days alike, while the tooltip carries exact unbounded time. Two- and
+  three-character hour labels (`10H`-`23H`) are the one case that stays visibly smaller than the
+  rest — three glyphs genuinely do not fit the canvas at the size a two-glyph label reaches, and
+  that's accepted rather than solved with a suffix-dropping or stacked-label special case.
 - **Native icon ownership is explicit.** Replacing a runtime HICON destroys the previous handle, and
   application exit disposes `NotifyIcon` before ending the message loop. These rules prevent GDI
   leaks and ghost tray icons.
