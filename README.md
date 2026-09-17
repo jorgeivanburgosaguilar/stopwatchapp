@@ -8,8 +8,8 @@ Tiny stopwatch built with C#, .NET 10 and WinForms with record keeping and sessi
 
 - Start, pause, continue, add lap splits, and stop a timing session.
 - Elapsed time shown in the main window and in a runtime-rendered system tray icon (minutes below
-  one hour, hours below one day, days thereafter), with a tooltip that always shows the full
-  unbounded `HH:mm:ss` duration.
+  one hour, an `h:mm` label from one to nine hours, whole hours from ten hours to one day, days
+  thereafter), with a tooltip that always shows the full unbounded `HH:mm:ss` duration.
 - Close-to-tray behavior: the main window is hidden from the taskbar when closed or minimized, and
   a single left click on the tray icon restores it. The tray's own context menu mirrors the valid
   timer actions and is the explicit exit path.

@@ -9,10 +9,11 @@ namespace StopwatchApp.Services;
 
 /// <summary>
 /// Owns the <see cref="NotifyIcon"/>: a GDI+-rendered 32×32 icon (large minute-only digits during
-/// the first hour, then large whole-hour or whole-day labels), its tooltip, and its context menu
-/// (<c>Open</c>, the state-appropriate transition(s), <c>Exit</c>). See AGENTS.md
-/// §10.1/§10.2. Takes callbacks rather than a <c>MainForm</c> reference — parent/child communication
-/// happens through delegates, never a shared mutable reference (AGENTS.md §3).
+/// the first hour, then a large <c>h:mm</c> label through the ninth hour, then large whole-hour or
+/// whole-day labels), its tooltip, and its context menu (<c>Open</c>, the state-appropriate
+/// transition(s), <c>Exit</c>). See AGENTS.md §10.1/§10.2. Takes callbacks rather than a
+/// <c>MainForm</c> reference — parent/child communication happens through delegates, never a shared
+/// mutable reference (AGENTS.md §3).
 /// </summary>
 public sealed partial class TrayIconService : IDisposable
 {
@@ -21,6 +22,7 @@ public sealed partial class TrayIconService : IDisposable
   private const int StateSectionIndex = 2;
   private const long MinutesPerHour = 60;
   private const long MinutesPerDay = 24 * MinutesPerHour;
+  private const long HourMinuteMaxHours = 10;
 
   // Tray icon label geometry (§10.1): every layout (minutes, hours, days) is auto-fit against the
   // same 32×32 canvas by the same rule, so a short label like "1H" reads as large as "45" instead
@@ -163,9 +165,9 @@ public sealed partial class TrayIconService : IDisposable
 
   /// <summary>
   /// Derives the simplified icon value and layout from an unbounded elapsed duration. The icon moves
-  /// from minutes to whole hours to whole days while the tooltip remains the full duration. Internal
-  /// so the unit-boundary rule can be unit tested without constructing a real
-  /// <see cref="NotifyIcon"/>/HICON.
+  /// from minutes to an <c>h:mm</c> label to whole hours to whole days while the tooltip remains the
+  /// full duration. Internal so the unit-boundary rule can be unit tested without constructing a
+  /// real <see cref="NotifyIcon"/>/HICON.
   /// </summary>
   internal static (long Value, int Minutes, TrayIconLayout Layout) GetDisplayValues(long elapsedMs)
   {
@@ -176,6 +178,11 @@ public sealed partial class TrayIconService : IDisposable
     }
 
     long totalHours = totalMinutes / MinutesPerHour;
+    if (totalHours < HourMinuteMaxHours)
+    {
+      return (totalHours, (int)(totalMinutes % MinutesPerHour), TrayIconLayout.HourMinute);
+    }
+
     if (totalHours < 24)
     {
       return (totalHours, 0, TrayIconLayout.LargeHours);
@@ -190,6 +197,15 @@ public sealed partial class TrayIconService : IDisposable
   /// </summary>
   internal static string FormatHourLabel(long hours) =>
     hours.ToString(CultureInfo.InvariantCulture) + "H";
+
+  /// <summary>
+  /// Formats a simplified <c>h:mm</c> label (unpadded hour, zero-padded minutes) in invariant
+  /// culture. Internal so the tray's compact presentation can be unit tested without GDI+.
+  /// </summary>
+  internal static string FormatHourMinuteLabel(long hours, int minutes) =>
+    hours.ToString(CultureInfo.InvariantCulture)
+    + ":"
+    + minutes.ToString("D2", CultureInfo.InvariantCulture);
 
   /// <summary>
   /// Formats a simplified whole-days label in invariant culture. Internal so the tray's compact
@@ -375,6 +391,7 @@ public sealed partial class TrayIconService : IDisposable
       string label = layout switch
       {
         TrayIconLayout.LargeMinutes => (minutes % 100).ToString("D2", CultureInfo.InvariantCulture),
+        TrayIconLayout.HourMinute => FormatHourMinuteLabel(value, minutes),
         TrayIconLayout.LargeHours => FormatHourLabel(value),
         _ => FormatDayLabel(value),
       };
@@ -476,11 +493,13 @@ public sealed partial class TrayIconService : IDisposable
 
   /// <summary>
   /// Which tray-icon presentation is active (AGENTS.md §10.1): large minutes during the first
-  /// hour, then a large whole-hours or whole-days label.
+  /// hour, then a large <c>h:mm</c> label through the ninth hour, then a large whole-hours or
+  /// whole-days label.
   /// </summary>
   internal enum TrayIconLayout
   {
     LargeMinutes,
+    HourMinute,
     LargeHours,
     LargeDays,
   }

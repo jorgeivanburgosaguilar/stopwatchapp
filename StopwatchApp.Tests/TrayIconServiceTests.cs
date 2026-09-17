@@ -12,19 +12,25 @@ namespace StopwatchApp.Tests;
 /// </summary>
 public class TrayIconServiceTests
 {
+  // expectedLayout is passed by name, not by TrayIconLayout value: that enum is internal, and a
+  // public [Theory] method cannot take an internal type as a parameter (CS0051). Parsing by name
+  // also avoids depending on the enum's ordinal order, unlike a plain int cast.
   [Theory]
-  [InlineData(0, 0, 0, 0)]
-  [InlineData(59, 0, 59, 0)]
-  [InlineData(60, 1, 0, 1)]
-  [InlineData(119, 1, 0, 1)]
-  [InlineData(120, 1, 0, 2)]
-  [InlineData(1439, 1, 0, 23)]
-  [InlineData(1440, 2, 0, 1)]
-  [InlineData(2879, 2, 0, 1)]
-  [InlineData(2880, 2, 0, 2)]
-  public void GetDisplayValues_UsesMinutesThenHoursThenDays(
+  [InlineData(0, nameof(TrayIconService.TrayIconLayout.LargeMinutes), 0, 0)]
+  [InlineData(59, nameof(TrayIconService.TrayIconLayout.LargeMinutes), 59, 0)]
+  [InlineData(60, nameof(TrayIconService.TrayIconLayout.HourMinute), 0, 1)]
+  [InlineData(61, nameof(TrayIconService.TrayIconLayout.HourMinute), 1, 1)]
+  [InlineData(119, nameof(TrayIconService.TrayIconLayout.HourMinute), 59, 1)]
+  [InlineData(120, nameof(TrayIconService.TrayIconLayout.HourMinute), 0, 2)]
+  [InlineData(599, nameof(TrayIconService.TrayIconLayout.HourMinute), 59, 9)]
+  [InlineData(600, nameof(TrayIconService.TrayIconLayout.LargeHours), 0, 10)]
+  [InlineData(1439, nameof(TrayIconService.TrayIconLayout.LargeHours), 0, 23)]
+  [InlineData(1440, nameof(TrayIconService.TrayIconLayout.LargeDays), 0, 1)]
+  [InlineData(2879, nameof(TrayIconService.TrayIconLayout.LargeDays), 0, 1)]
+  [InlineData(2880, nameof(TrayIconService.TrayIconLayout.LargeDays), 0, 2)]
+  public void GetDisplayValues_UsesMinutesThenHourMinuteThenHoursThenDays(
     long totalMinutes,
-    int expectedLayout,
+    string expectedLayoutName,
     int expectedMinutes,
     long expectedValue
   )
@@ -34,17 +40,24 @@ public class TrayIconServiceTests
 
     Assert.Equal(expectedValue, value);
     Assert.Equal(expectedMinutes, minutes);
-    Assert.Equal((TrayIconService.TrayIconLayout)expectedLayout, layout);
+    Assert.Equal(Enum.Parse<TrayIconService.TrayIconLayout>(expectedLayoutName), layout);
   }
 
   [Theory]
-  [InlineData(1, "1H")]
-  [InlineData(9, "9H")]
   [InlineData(10, "10H")]
   [InlineData(23, "23H")]
   public void FormatHourLabel_UsesAnUnpaddedUppercaseUnit(long hours, string expected)
   {
     Assert.Equal(expected, TrayIconService.FormatHourLabel(hours));
+  }
+
+  [Theory]
+  [InlineData(1, 0, "1:00")]
+  [InlineData(1, 1, "1:01")]
+  [InlineData(9, 59, "9:59")]
+  public void FormatHourMinuteLabel_PadsMinutesToTwoDigits(long hours, int minutes, string expected)
+  {
+    Assert.Equal(expected, TrayIconService.FormatHourMinuteLabel(hours, minutes));
   }
 
   [Theory]
@@ -72,8 +85,6 @@ public class TrayIconServiceTests
   // their ink fits the canvas just as comfortably as "45"'s. A short unit label must land within a
   // few pixels of a same-length minutes label, not merely "somewhere smaller".
   [Theory]
-  [InlineData("1H")]
-  [InlineData("9H")]
   [InlineData("1D")]
   [InlineData("9D")]
   public void MeasureLabelFontSize_MatchesMinutesSizeForShortLabels(string text)
@@ -91,8 +102,9 @@ public class TrayIconServiceTests
   [InlineData("00")]
   [InlineData("45")]
   [InlineData("59")]
-  [InlineData("1H")]
-  [InlineData("9H")]
+  [InlineData("1:00")]
+  [InlineData("1:01")]
+  [InlineData("9:59")]
   [InlineData("10H")]
   [InlineData("23H")]
   [InlineData("1D")]
