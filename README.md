@@ -20,6 +20,9 @@ Tiny stopwatch built with C#, .NET 10 and WinForms with record keeping and sessi
   configurable in `settings.json`, five minutes by default), plus an immediate save on pause.
   Restoring a snapshot always resumes in the paused state, so time spent while the app was closed
   is never counted.
+- Stop asks for confirmation once a session has run for a configurable time
+  (`StopConfirmationAfterMinutes` in `settings.json`, five minutes by default, `0` to disable): the
+  clock pauses while asking and resumes if you cancel.
 - Single-instance enforcement: launching a second copy activates the existing window, even if it is
   hidden in the tray.
 - Window-scoped keyboard shortcuts: `Space` (Start/Pause/Continue), `Shift+Space` (Lap), `Enter`

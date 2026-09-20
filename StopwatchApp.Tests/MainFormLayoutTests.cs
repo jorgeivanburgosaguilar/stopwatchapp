@@ -1,4 +1,4 @@
-using StopwatchApp.Controls;
+﻿using StopwatchApp.Controls;
 using StopwatchApp.Models;
 using StopwatchApp.Theme;
 
@@ -61,14 +61,31 @@ public sealed class MainFormLayoutTests
   }
 
   [Fact]
-  public void ManageRecordsWidth_GrowsForLongerCurrentPage()
+  public void ManageRecordsWidth_IsAFixedBudgetForTheWorstCaseRow()
   {
-    StopwatchRecord shortRecord = new(1, 0, 0, 1);
-    StopwatchRecord longRecord = new(1, 0, 0, 1000 * 60);
+    Assert.Equal(
+      ManageRecordsForm.RequiredClientWidth(96, totalRecordCount: 1),
+      ManageRecordsForm.RequiredClientWidth(96, totalRecordCount: 1)
+    );
+    Assert.Equal(23 * 60 + 59, ManageRecordsForm.WorstCaseElapsedMinutes);
+  }
 
-    int shortWidth = ManageRecordsForm.RequiredClientWidth(96, [shortRecord], totalRecordCount: 1);
-    int longWidth = ManageRecordsForm.RequiredClientWidth(96, [longRecord], totalRecordCount: 1);
+  [Fact]
+  public void ManageRecordsWidth_FitsA2359RowAndWrapsLongerOnes()
+  {
+    using Font font = Typography.CreateMonospaceBodyFont();
+    int budget = ManageRecordsForm.RequiredClientWidth(96, totalRecordCount: 1);
+    StopwatchRecord worst = new(1, 0, 0, ManageRecordsForm.WorstCaseElapsedMinutes);
+    StopwatchRecord longer = new(1, 0, 0, 1000 * 60);
 
-    Assert.True(longWidth > shortWidth);
+    int worstRow = IconTextLayout
+      .MeasureSingleLine(RecordsListControl.FormatRecordRow(worst), font)
+      .Width;
+    int longerRow = IconTextLayout
+      .MeasureSingleLine(RecordsListControl.FormatRecordRow(longer), font)
+      .Width;
+
+    Assert.True(worstRow < budget);
+    Assert.True(longerRow > worstRow);
   }
 }

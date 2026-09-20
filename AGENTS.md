@@ -36,6 +36,9 @@ project-management, invoicing, monitoring, or cloud-sync product.
   autosaved at the interval configured in `settings.json` (five minutes by default); an explicit
   pause also saves immediately. Restoring either snapshot intentionally returns the session in the
   paused state.
+- Ask for confirmation before Stop once a session has reached the threshold configured in
+  `settings.json` (`StopConfirmationAfterMinutes`, five minutes by default, `0` disables): the clock
+  pauses, a dialog asks, Stop proceeds on confirm and a running clock resumes on cancel.
 - Enforce one process instance. Starting a second copy activates the existing window, including
   when it is hidden in the tray.
 - Support window-scoped shortcuts: `Space` toggles Start/Pause/Continue, `Shift+Space` adds a lap,
@@ -123,13 +126,18 @@ StopwatchApp/
   MainForm.cs              thin orchestrator — wires controls and services, no business logic
   Assets/
     app.ico                window/taskbar/.exe icon (§10.3), embedded resource
-    NOTICE.md              Fluent System Icons attribution and license for app.ico
+    emoji/                 calendar/stopwatch/hourglass color PNGs for the row icons (§8.5), embedded
+    NOTICE.md              Fluent System Icons (app.ico) and Noto Color Emoji (emoji/) attribution
   Controls/                rendering + event wiring only, no untestable business logic
     StopwatchControl.cs    timer state (§8) + control row (§8.5) + keyboard shortcuts (§10.4)
     StopwatchShortcut.cs   the three window-scoped shortcuts (§10.4)
     ButtonFactory.cs       shared stock, palette-colored Button used across the application
     RecordsListControl.cs  records and laps list rendering
+    IconTextLayout.cs      the one measure/wrap/draw engine for record and lap rows (§8.5)
+    IconTextLabel.cs       display-only label that draws a row through IconTextLayout
+    RowIcon.cs             the three row icons; RowIconSet.cs owns their decoded bitmaps
     ClearRecordsDialog.cs  confirm dialog
+    StopConfirmationDialog.cs  Stop confirmation dialog (§8.3/§8.5)
     DeleteRecordDialog.cs  per-record delete confirmation
     ManageRecordsForm.cs   modeless, paginated full-history window
   Models/                  one record type per file (§5)
@@ -137,13 +145,13 @@ StopwatchApp/
     Lap.cs                 an in-memory/restored split (§8.1)
     PausedSession.cs       the single saved-session snapshot (§9)
   Services/                UI-free, unit-testable
-    AutosaveSettings.cs    validated settings.json loader with safe defaults
+    AppSettings.cs         validated settings.json loader (autosave cadence, stop-confirmation threshold)
     StopwatchTimer.cs      tick loop, autosave checkpoints, transitions, and records ownership (§8)
     TrayIconService.cs     NotifyIcon, rendered icon, context menu (§10)
     IStopwatchStore.cs     the data-access interface (§3.1/§9)
     Database.cs            SQLite access via Dapper (§9)
     SchemaMigrations.cs    versioned schema steps, PRAGMA user_version (§9)
-  settings.json            deployable autosave cadence configuration
+  settings.json            deployable configuration: autosave cadence and stop-confirmation threshold
   Formatting/
     TimeFormat.cs          the four formatters (§8.4)
   Theme/
@@ -193,6 +201,7 @@ refactor. Their authoritative declarations are in
 `StopwatchApp/Services/IStopwatchStore.cs`, `StopwatchApp/Services/StopwatchTimer.cs`,
 `StopwatchApp/Controls/StopwatchControl.cs`, `StopwatchApp/Services/TrayIconService.cs`,
 `StopwatchApp/Controls/RecordsListControl.cs`, `StopwatchApp/Controls/ClearRecordsDialog.cs`,
+`StopwatchApp/Controls/StopConfirmationDialog.cs`,
 `StopwatchApp/Formatting/TimeFormat.cs`, and `StopwatchApp/Theme/Palette.cs`. Consult those files
 for exact signatures rather than duplicating them here.
 
@@ -324,7 +333,7 @@ width or indentation means editing `.editorconfig`, not adding a CSharpier-speci
 The authoritative values are in `StopwatchApp/StopwatchApp.csproj`; do not duplicate its XML here.
 Keep its target framework, WinForms settings, nullable and implicit-usings settings, x64 platform
 and runtime selection, framework-dependent publishing, version metadata, unsafe-block allowance,
-high-DPI settings, application icon, analyzer gates, package references, embedded icon, and
+high-DPI settings, application icon, analyzer gates, package references, embedded icon and row-emoji images (§8.5), and
 deployable `settings.json` configuration intact unless the corresponding requirement changes.
 
 - `<Platforms>` only declares which platforms exist for the project; it does not select the active
@@ -446,6 +455,16 @@ The authoritative transition implementation is in
   laps exist, it adds any remaining positive partial split. A positive session is saved once,
   guarded against duplicating the newest record after recovery, and the records collection is
   reloaded.
+- **Stop confirmation.** `StopwatchControl.StopTimerAsync` is the single gate every Stop entry point
+  (button, `Enter`, all tray-menu variants) passes through. When
+  `StopwatchControl.RequiresStopConfirmation` is true — threshold above zero, a session is running
+  or paused, and elapsed time has reached `StopConfirmationAfterMinutes` — a running clock is first
+  paused through the normal `PauseTimerAsync` (snapshot saved, display frozen), then the
+  `ConfirmStop` callback (supplied by `MainForm`, which restores a hidden window first) is asked.
+  Confirming performs the normal stop. Cancelling resumes through `StartTimer` if the clock was
+  running (paused time excluded, as with any pause/continue) and leaves an already-paused clock
+  paused. A threshold of `0` (or a negative configured value) disables the confirmation; below the
+  threshold, and while idle, Stop behaves exactly as before.
 
 **There is no Reset button.** Reset is implicit in the next `Start()`.
 
@@ -516,7 +535,9 @@ Rules:
 - A **`Manage Records`** button sits beside `Clear All Records`, is always enabled, and
   opens one modeless manager window. Styled blue (`Palette.LapButton`).
 - The manager lists every saved record newest first, 10 per page, with Previous/Next navigation and
-  confirmed per-row `Delete` actions. Its header also has a confirmed `Clear All Records` action;
+  confirmed per-row `Delete` actions. Its width is a fixed budget for a worst-case row with a `23:59` duration
+  (`ManageRecordsForm.WorstCaseElapsedMinutes`), not a function of the page shown; a longer row wraps
+  to a second line instead of widening the window. Its header also has a confirmed `Clear All Records` action;
   the main card's own Clear All shortcut remains.
 - **`ButtonFactory`:** every button in the app (`Controls/ButtonFactory.cs`) is a stock
   `Button` with `FlatStyle.Flat` and a `Palette` base/hover/pressed triplet applied to
@@ -531,6 +552,11 @@ Rules:
   `Cancel` dark slate (`Palette.CancelButton`, a new non-destructive-action token) — with equal
   top/bottom margins so the two sit on the same baseline (the former mismatched default/explicit margins
   had misaligned them). Confirming clears the records table and reloads the (now empty) list.
+- The Stop confirmation dialog (`Controls/StopConfirmationDialog.cs`), titled `Stop Stopwatch`,
+  body text `The stopwatch is at {FormatTime(elapsed)}. Stop it and save this session as a record?`,
+  buttons `Cancel` (dark slate, `Palette.CancelButton`) and `Stop` (red, `Palette.StopButton`), laid
+  out like the Clear All dialog. It has no `AcceptButton` — `Enter` is the Stop shortcut, so the
+  keypress that opened it must not also confirm it; Cancel, Escape, and the close box all cancel.
 - A note reading `Resumed from a pause on {date} at {time}` (via `FormatDate`/`FormatTimeOnly` on
   `RestoredPausedAtMs`) appears under the timer only after restoring a saved session. It persists
   through Continue and is cleared by Stop or a fresh Start.
@@ -544,6 +570,18 @@ Record: 📅 {date} ⏱ {start}-{end} ⏳ Duration: {formatElapsed}
 
 Where `{date}` = `FormatDate(startTimestamp)`, `{start}`/`{end}` = `FormatTimeOnly(...)`, and
 `{formatElapsed}` = `FormatElapsed(elapsedMinutes)`.
+
+The strings above are the row *text* contract (`RecordsListControl.FormatRecordRow`/`FormatLapRow`
+still produce them verbatim), but the three emoji are **rendered as embedded full-color images**,
+not as text. `TextRenderer` (GDI) cannot paint color font tables, so drawing the literal glyphs
+yields the color font's monochrome fallback outline tinted with the row's text color. Every row —
+in the main window's `ListBox`s and in `ManageRecordsForm` — is therefore measured and drawn through
+`Controls/IconTextLayout.cs`, which tokenizes the row into words, spaces, and icons; word-wraps
+greedily; treats each icon as an atomic square of the font's line height (so DPI scaling is
+inherited from the already-scaled font); and draws icons from `Controls/RowIconSet.cs`. Anything
+that budgets a row's width (`MainForm.RequiredClientWidth`, `ManageRecordsForm.RequiredClientWidth`)
+must measure through `IconTextLayout`, never plain `TextRenderer`, or the icons' extra width is
+missed. `ManageRecordsForm` uses `Controls/IconTextLabel.cs`, not a stock `Label`.
 
 ### 8.6 Callbacks
 
@@ -718,14 +756,16 @@ these keys, e.g. `Ctrl+Space`, is deliberately unmapped). `MainForm` overrides `
 menu uses. `ProcessCmdKey` runs before a focused control's own key handling, so returning `true`
 both dispatches the shortcut and stops it from also clicking whatever button has focus. No
 wrong-state guards are needed: `Lap()`'s and `Stop()`'s own no-op guards (§8.3) already absorb a
-shortcut pressed in a state where it doesn't apply.
+shortcut pressed in a state where it doesn't apply. `Enter` reaches the same
+`StopTimerAsync` confirmation gate as the Stop button (§8.3), so past the threshold it opens the
+Stop confirmation dialog instead of stopping immediately.
 
 ### 10.5 Single instance
 
 Named `System.Threading.Mutex` created at startup. If a second instance detects the mutex already
 exists, it locates the first instance's window with `FindWindow` (matched by `MainForm.WindowTitle`
 — **fixed for the life of one build**, not literally constant text: the title includes
-`$"Stopwatch v{Application.ProductVersion}"`, §8.5 —
+`$"Stopwatch {Application.ProductVersion}"`, §8.5 —
 but both the running instance and the one calling `FindWindow` are the same build, so the strings
 always match) and sends it a registered window message (via `RegisterWindowMessage` + `PostMessage`)
 asking it to restore and activate itself, then exits immediately — never runs a second copy.
@@ -865,6 +905,13 @@ xUnit, in a `StopwatchApp.Tests` project.
   `9:59:59` it shows an `h:mm` label (unpadded hour, zero-padded minutes); from ten hours through
   `23:59:59` it shows unpadded whole hours with `H`; from one day onward it shows unpadded whole days
   with `D`. The tooltip's full `HH:MM:SS` text is unaffected by the compact layout.
+- Stop confirmation (§8.3/§8.5): with the default threshold, Stop before five minutes stops
+  immediately with no dialog; from five minutes on, Stop pauses the clock and shows the
+  confirmation. Confirm saves exactly one record and shows Start; Cancel resumes a clock that was
+  running (no time lost or gained) and leaves one that was already paused paused. The same holds
+  from the Stop button, `Enter`, and every tray-menu Stop (the tray path restores the hidden window
+  first). Setting `StopConfirmationAfterMinutes` to `0` disables it; a missing or malformed value
+  falls back to five without affecting `AutosaveIntervalMinutes`, and vice versa.
 - Keyboard shortcuts: with the main window focused, `Space` starts/pauses/continues, `Shift+Space`
   laps, and `Enter` stops, matching the mouse-click behavior of the same buttons; none of the three
   fires while the window is hidden to the tray or while `ClearRecordsDialog` is open.
@@ -881,7 +928,7 @@ xUnit, in a `StopwatchApp.Tests` project.
   shown, growing/shrinking live as records are added or cleared, as laps appear (up to 3 rows tall)
   or clear, and as the "Resumed from a pause" note appears/disappears — never a band of dead space
   to the right of or below the visible rows.
-- Title bar shows the version: it reads `Stopwatch v{Application.ProductVersion}`.
+- Title bar shows the version: it reads `Stopwatch {Application.ProductVersion}` (no `v` prefix).
 - Records header row (§8.5): `Records` sits left-aligned on the same line as, not stacked above,
   `Manage Records` (blue) and `Clear All Records` (red), both right-aligned in that order.
 - Row word-wrap (§8.5): a record/lap row longer than the sized-for worst case (over
@@ -894,6 +941,10 @@ xUnit, in a `StopwatchApp.Tests` project.
   owner-managed window that lists all records newest first, paginated at 10 rows per page. Each row
   has a confirmed Delete action; the header has a confirmed Clear All action. Add/edit behavior is
   out of scope, and the main card's Clear All shortcut remains.
+- Row icons (§8.5): record and lap rows show the calendar, stopwatch, and hourglass as full-color
+  images — in the main window and in Manage Records, in light and dark mode — never as flat
+  text-colored glyphs. A row past the sized-for worst case wraps without splitting an icon across
+  lines or clipping it.
 - Clear-all dialog styling (§8.5): `Clear All` renders red and `Cancel` renders dark slate, and
   the two sit aligned on the same baseline.
 - Button focus (§8.5/§17): tabbing through any window shows the stock keyboard-focus indicator on
@@ -985,6 +1036,14 @@ here; do not accumulate dated implementation history.
   shortcuts all observe one timer-owned newest-first collection. After save/delete/clear, the timer
   reloads it and raises `RecordsChanged`; UI components never mutate a shared list or query the
   store themselves.
+- **The Stop confirmation gate lives in `StopwatchControl`, not the timer or the callers.** Every
+  Stop entry point already funnels through `StopTimerAsync`, so one gate covers button, `Enter`,
+  and tray; `StopwatchTimer` must stay UI-free and never shows a dialog. The control asks through a
+  `ConfirmStop` callback (no-op default that confirms) so `MainForm` owns the actual dialog and
+  window restoration. `StopConfirmationAfterMinutes = 0` means "off" while a non-positive autosave
+  interval means "use the default", because a disabled autosave has no sensible meaning but a
+  disabled confirmation does. Settings validate per property so one bad value never discards the
+  other, which is why the loader is `AppSettings` rather than an autosave-only type.
 - **UI actions route through `StopwatchControl`.** Buttons, tray menu items, and keyboard shortcuts
   call the same action methods so state transitions, display updates, timer enablement, and
   `StateChanged` notifications cannot drift into separate implementations.
@@ -1039,6 +1098,17 @@ here; do not accumulate dated implementation history.
 - **The application icon is a licensed Fluent System Icons asset.** It is embedded for the live form
   and configured as `ApplicationIcon` for Explorer/publish output; attribution remains in
   `Assets/NOTICE.md`. A static identity icon is not forbidden taskbar integration.
+- **Row emoji are embedded color PNGs drawn inline, not text.** GDI text rendering (`TextRenderer`,
+  and equally GDI+ `DrawString`) cannot paint color font tables, so the literal emoji only ever
+  produced a flat outline in the row's text color. Real color text needs DirectWrite/Direct2D with
+  color-font drawing enabled, which no WinForms text API exposes; adding that COM interop and device
+  lifetime management for three fixed glyphs was rejected. The images are unmodified Noto Color
+  Emoji (Apache-2.0 per its README) committed under `Assets/emoji/` like `app.ico` — obtained once
+  at development time, never fetched at build or run time, so the offline constraint (§1.2) holds.
+  One layout engine (`IconTextLayout`) both measures and draws so a wrapped row is never sized one
+  way and painted another. `RowIconSet` is a per-owner disposable instance rather than a static
+  cache, because static mutable state is forbidden (§5) and the bitmaps hold native memory; the
+  Manage Records window shares one set across all its rows instead of decoding per row.
 - **Formatting belongs to CSharpier, while analyzers own code quality.** `IDE0055` is disabled so
   the SDK formatter cannot fight CSharpier, but compiler warnings, recommended analyzers, and all
   other enforced code-style diagnostics remain build-breaking.

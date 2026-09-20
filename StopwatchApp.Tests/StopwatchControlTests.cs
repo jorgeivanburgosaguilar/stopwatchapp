@@ -56,4 +56,41 @@ public sealed class StopwatchControlTests
 
     Assert.Null(shortcut);
   }
+
+  [Theory]
+  [InlineData(299_999, true, false, 5, false)] // just under the threshold
+  [InlineData(300_000, true, false, 5, true)] // exactly at the threshold
+  [InlineData(900_000, true, false, 5, true)] // well above
+  [InlineData(900_000, false, true, 5, true)] // already paused
+  [InlineData(900_000, false, false, 5, false)] // idle
+  [InlineData(900_000, true, false, 0, false)] // disabled
+  [InlineData(900_000, false, true, 0, false)] // disabled while paused
+  public void RequiresStopConfirmation_ReflectsThresholdAndState(
+    long elapsedMs,
+    bool isRunning,
+    bool isPaused,
+    int thresholdMinutes,
+    bool expected
+  )
+  {
+    bool actual = StopwatchControl.RequiresStopConfirmation(
+      elapsedMs,
+      isRunning,
+      isPaused,
+      thresholdMinutes
+    );
+
+    Assert.Equal(expected, actual);
+  }
+
+  [Fact]
+  public void StopConfirmationDialog_FormatMessage_ShowsElapsedTime()
+  {
+    string message = StopConfirmationDialog.FormatMessage(325_000);
+
+    Assert.Equal(
+      "The stopwatch is at 00:05:25. Stop it and save this session as a record?",
+      message
+    );
+  }
 }

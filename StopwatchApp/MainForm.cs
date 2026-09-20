@@ -26,7 +26,7 @@ public sealed class MainForm : Form
   /// computable before <see cref="Program"/> ever constructs one, matching how §10.5's
   /// second-instance path already used it.
   /// </summary>
-  internal static readonly string WindowTitle = $"Stopwatch v{Application.ProductVersion}";
+  internal static readonly string WindowTitle = $"Stopwatch {Application.ProductVersion}";
 
   // The non-text chrome a records/laps row must fit alongside, in 96dpi
   // design pixels: RecordsListControl.DrawRow's text inset, RecordsListControl's card Padding, the
@@ -56,8 +56,8 @@ public sealed class MainForm : Form
   /// <summary>
   /// Initializes a new instance of the <see cref="MainForm"/> class.
   /// </summary>
-  /// <param name="autosaveIntervalMinutes">The validated running-time checkpoint interval, in minutes.</param>
-  public MainForm(int autosaveIntervalMinutes)
+  /// <param name="settings">The validated application settings loaded from <c>settings.json</c>.</param>
+  public MainForm(AppSettings settings)
   {
     Text = WindowTitle;
     // AGENTS.md §10.3 — the content-sized window is not user-resizable: FixedSingle
@@ -89,11 +89,13 @@ public sealed class MainForm : Form
     _stopwatchControl = new StopwatchControl(
       _database,
       TimeProvider.System,
-      autosaveIntervalMinutes
+      settings.AutosaveIntervalMinutes,
+      settings.StopConfirmationAfterMinutes
     )
     {
       Dock = DockStyle.Fill,
     };
+    _stopwatchControl.ConfirmStop = ConfirmStop;
     _recordsListControl = new RecordsListControl();
     _trayIconService = new TrayIconService(_stopwatchControl, RestoreWindow, ExitApplication);
     _activateMessage = (int)Program.RegisterWindowMessage(Program.ActivateMessageName);
@@ -412,11 +414,13 @@ public sealed class MainForm : Form
     );
     int recordRowWidth = records
       .Take(5)
-      .Select(record => MeasureRowWidth(RecordsListControl.FormatRecordRow(record), scaledMonoFont))
+      .Select(record =>
+        MeasureIconRowWidth(RecordsListControl.FormatRecordRow(record), scaledMonoFont)
+      )
       .DefaultIfEmpty(0)
       .Max();
     int lapRowWidth = laps.Take(3)
-      .Select(lap => MeasureRowWidth(RecordsListControl.FormatLapRow(lap), scaledMonoFont))
+      .Select(lap => MeasureIconRowWidth(RecordsListControl.FormatLapRow(lap), scaledMonoFont))
       .DefaultIfEmpty(0)
       .Max();
     if (laps.Count > 3)
@@ -448,6 +452,12 @@ public sealed class MainForm : Form
     int chrome = DesignCardPadding + DesignCellMargin + DesignRootPadding;
     return textWidth + (int)Math.Ceiling(chrome * scale);
   }
+
+  // Record/lap rows draw their emoji as color images (IconTextLayout, AGENTS.md §8.5), which are
+  // wider than the monochrome glyph advance TextRenderer would report, so their width budget must
+  // come from the same layout engine that paints them.
+  private static int MeasureIconRowWidth(string row, Font scaledFont) =>
+    IconTextLayout.MeasureSingleLine(row, scaledFont).Width;
 
   private static int MeasureRowWidth(string row, Font scaledFont) =>
     TextRenderer
@@ -636,6 +646,19 @@ public sealed class MainForm : Form
         await _stopwatchControl.StopTimerAsync();
         break;
     }
+  }
+
+  private bool ConfirmStop()
+  {
+    // A tray-menu Stop can arrive while the window is hidden; a modal must never be owned by a
+    // hidden window, so bring it back first.
+    if (!Visible)
+    {
+      RestoreWindow();
+    }
+
+    return StopConfirmationDialog.ShowConfirm(this, _stopwatchControl.Timer.ElapsedMs)
+      == DialogResult.Yes;
   }
 
   private async void ClearRecordsAsync()

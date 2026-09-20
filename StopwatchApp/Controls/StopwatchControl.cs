@@ -23,6 +23,7 @@ public sealed class StopwatchControl : UserControl
   private readonly Label _elapsedLabel;
   private readonly Label _resumedNoteLabel;
   private readonly Font _elapsedFont;
+  private readonly int _stopConfirmationAfterMinutes;
   private bool _darkMode;
 
   /// <summary>
@@ -31,8 +32,17 @@ public sealed class StopwatchControl : UserControl
   /// <param name="store">The persistence surface passed through to the internal <see cref="StopwatchTimer"/>.</param>
   /// <param name="time">The clock source passed through to the internal <see cref="StopwatchTimer"/>.</param>
   /// <param name="autosaveIntervalMinutes">The positive running-time checkpoint interval, in minutes.</param>
-  public StopwatchControl(IStopwatchStore store, TimeProvider time, int autosaveIntervalMinutes)
+  /// <param name="stopConfirmationAfterMinutes">
+  /// The elapsed minutes after which Stop asks for confirmation; <c>0</c> disables it.
+  /// </param>
+  public StopwatchControl(
+    IStopwatchStore store,
+    TimeProvider time,
+    int autosaveIntervalMinutes,
+    int stopConfirmationAfterMinutes
+  )
   {
+    _stopConfirmationAfterMinutes = stopConfirmationAfterMinutes;
     Timer = new StopwatchTimer(store, time, autosaveIntervalMinutes);
 
     _uiTimer = new System.Windows.Forms.Timer { Interval = 1000 };
@@ -178,6 +188,14 @@ public sealed class StopwatchControl : UserControl
   public event Action? Tick;
 
   /// <summary>
+  /// Gets or sets the callback asked to confirm a Stop that passed the configured threshold; it
+  /// returns <see langword="true"/> to proceed. Defaults to always confirming so the control works
+  /// standalone; <c>MainForm</c> supplies the real dialog.
+  /// </summary>
+  [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+  public Func<bool> ConfirmStop { get; set; } = () => true;
+
+  /// <summary>
   /// Gets or sets whether the control renders its palette-driven surfaces in dark mode. Defaults
   /// to <see langword="false"/>; <c>MainForm</c> wires it to the OS setting (AGENTS.md §7/§11).
   /// </summary>
@@ -245,10 +263,38 @@ public sealed class StopwatchControl : UserControl
 
   /// <summary>
   /// Stops the current session and refreshes the display. The same action the Stop button
-  /// performs — see <see cref="StartTimer"/> for why this is exposed.
+  /// performs — see <see cref="StartTimer"/> for why this is exposed. Past the configured
+  /// threshold (AGENTS.md §8.3) a running clock is first paused, then <see cref="ConfirmStop"/> is
+  /// asked; cancelling resumes a clock that was running and leaves an already-paused one paused.
   /// </summary>
   public async Task StopTimerAsync()
   {
+    if (
+      RequiresStopConfirmation(
+        Timer.ElapsedMs,
+        Timer.IsRunning,
+        Timer.IsPaused,
+        _stopConfirmationAfterMinutes
+      )
+    )
+    {
+      bool wasRunning = Timer.IsRunning;
+      if (wasRunning)
+      {
+        await PauseTimerAsync();
+      }
+
+      if (!ConfirmStop())
+      {
+        if (wasRunning)
+        {
+          StartTimer();
+        }
+
+        return;
+      }
+    }
+
     await Timer.StopAsync();
     UpdateDisplay();
     StateChanged?.Invoke();
@@ -269,6 +315,22 @@ public sealed class StopwatchControl : UserControl
       Keys.Enter => StopwatchShortcut.Stop,
       _ => null,
     };
+
+  /// <summary>
+  /// Reports whether pressing Stop must first ask for confirmation (AGENTS.md §8.3): the
+  /// confirmation is enabled (<paramref name="thresholdMinutes"/> above zero), a session exists
+  /// (running or paused), and its elapsed time has reached the threshold.
+  /// </summary>
+  /// <param name="elapsedMs">The current elapsed time, in milliseconds.</param>
+  /// <param name="isRunning">Whether the timer is running.</param>
+  /// <param name="isPaused">Whether the timer is paused.</param>
+  /// <param name="thresholdMinutes">The configured threshold; <c>0</c> disables confirmation.</param>
+  public static bool RequiresStopConfirmation(
+    long elapsedMs,
+    bool isRunning,
+    bool isPaused,
+    int thresholdMinutes
+  ) => thresholdMinutes > 0 && (isRunning || isPaused) && elapsedMs >= thresholdMinutes * 60_000L;
 
   /// <inheritdoc />
   protected override void Dispose(bool disposing)

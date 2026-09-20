@@ -33,7 +33,7 @@ public sealed class StopwatchTimer : IDisposable
   public StopwatchTimer(
     IStopwatchStore store,
     TimeProvider time,
-    int autosaveIntervalMinutes = AutosaveSettings.DefaultAutosaveIntervalMinutes
+    int autosaveIntervalMinutes = AppSettings.DefaultAutosaveIntervalMinutes
   )
   {
     ArgumentOutOfRangeException.ThrowIfNegativeOrZero(autosaveIntervalMinutes);

@@ -48,8 +48,8 @@ internal static partial class Program
 
     ApplicationConfiguration.Initialize();
     Application.SetColorMode(SystemColorMode.System);
-    AutosaveSettings autosaveSettings = AutosaveSettings.LoadDefault();
-    Application.Run(new MainForm(autosaveSettings.AutosaveIntervalMinutes));
+    AppSettings settings = AppSettings.LoadDefault();
+    Application.Run(new MainForm(settings));
   }
 
   [LibraryImport(

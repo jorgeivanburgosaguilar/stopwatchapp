@@ -1,3 +1,4 @@
 {
-  "AutosaveIntervalMinutes": 5
+  "AutosaveIntervalMinutes": 5,
+  "StopConfirmationAfterMinutes": 5
 }

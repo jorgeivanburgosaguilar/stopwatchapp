@@ -1,4 +1,4 @@
-using StopwatchApp.Models;
+﻿using StopwatchApp.Models;
 using StopwatchApp.Theme;
 
 namespace StopwatchApp.Controls;
@@ -8,12 +8,12 @@ internal sealed class ManageRecordsForm : Form
 {
   internal const int PageSize = 10;
   private const int DesignClientHeight = 660;
-  private const int CompactClientWidth = 640;
 
   private readonly Func<long, Task> _deleteRecordAsync;
   private readonly Func<Task> _clearRecordsAsync;
   private readonly Font _bodyFont;
   private readonly Font _rowFont;
+  private readonly RowIconSet _rowIcons = new();
   private readonly Icon _appIcon;
   private readonly Label _pageLabel;
   private readonly Label _emptyStateLabel;
@@ -22,7 +22,7 @@ internal sealed class ManageRecordsForm : Form
   private readonly Button _clearAllButton;
   private readonly Button _previousButton;
   private readonly Button _nextButton;
-  private readonly List<Label> _recordDetails = [];
+  private readonly List<IconTextLabel> _recordDetails = [];
   private IReadOnlyList<StopwatchRecord> _records;
   private int _pageIndex;
   private bool _dark;
@@ -192,6 +192,7 @@ internal sealed class ManageRecordsForm : Form
     {
       _bodyFont.Dispose();
       _rowFont.Dispose();
+      _rowIcons.Dispose();
       _appIcon.Dispose();
     }
 
@@ -291,13 +292,10 @@ internal sealed class ManageRecordsForm : Form
 
   private void ResizeToCurrentPage(int deviceDpi)
   {
-    int contentWidth = RequiredClientWidth(
-      deviceDpi,
-      GetPage(_records, _pageIndex),
-      _records.Count
-    );
-    int compactWidth = (int)Math.Ceiling(CompactClientWidth * (deviceDpi / 96f));
-    int width = Math.Min(contentWidth, compactWidth);
+    int contentWidth = RequiredClientWidth(deviceDpi, _records.Count);
+    // Sized for a 23:59 row (WorstCaseElapsedMinutes) so ordinary rows never wrap; the screen clamp
+    // below also bounds the window, and IconTextLabel wraps any row longer than the budget.
+    int width = contentWidth;
     int height = (int)Math.Ceiling(DesignClientHeight * (deviceDpi / 96f));
     Screen screen = Screen.FromControl(this);
     int chromeWidth = SystemInformation.FixedFrameBorderSize.Width * 2;
@@ -327,6 +325,10 @@ internal sealed class ManageRecordsForm : Form
 
   private void ConstrainRecordDetails()
   {
+    // Mirrors RequiredClientWidth's budget term for term (including the DPI scaling of the fixed
+    // pixel constants), so a row that was sized to fit is never told to wrap; only a row longer
+    // than the screen-clamped window wraps.
+    float scale = DeviceDpi / 96f;
     int deleteButtonWidth =
       TextRenderer
         .MeasureText(
@@ -335,33 +337,38 @@ internal sealed class ManageRecordsForm : Form
           Size.Empty,
           TextFormatFlags.NoPadding | TextFormatFlags.SingleLine
         )
-        .Width + (Palette.SpacingMd * 2);
+        .Width + (int)Math.Ceiling(Palette.SpacingMd * 2 * scale);
+    int rootChrome = (int)
+      Math.Ceiling((Palette.SpacingLg * 2 + SystemInformation.VerticalScrollBarWidth) * scale);
     int rowTextWidth = Math.Max(
       1,
       ClientSize.Width
-        - (Palette.SpacingLg * 2)
-        - SystemInformation.VerticalScrollBarWidth
+        - rootChrome
         - deleteButtonWidth
-        - (Palette.SpacingSm * 3)
-        - 2
+        - (int)Math.Ceiling((Palette.SpacingSm * 3 + 2) * scale)
     );
-    foreach (Label details in _recordDetails)
+    foreach (IconTextLabel details in _recordDetails)
     {
       details.MaximumSize = new Size(rowTextWidth, 0);
     }
   }
 
-  internal static int RequiredClientWidth(
-    int deviceDpi,
-    IReadOnlyList<StopwatchRecord> page,
-    int totalRecordCount
-  )
+  /// <summary>
+  /// The longest duration the window is sized for, <c>23:59</c> (AGENTS.md §8.5/§10.3). The width is a
+  /// fixed budget for that worst-case row, not a function of the records shown, so the window does
+  /// not resize between pages; a longer row wraps to a second line instead of widening it.
+  /// </summary>
+  internal const int WorstCaseElapsedMinutes = (23 * 60) + 59;
+
+  internal static int RequiredClientWidth(int deviceDpi, int totalRecordCount)
   {
     float scale = deviceDpi / 96f;
-    using Font bodyFont = Typography.CreateBodyFont();
-    using Font scaledBodyFont = new(bodyFont.FontFamily, bodyFont.Size * scale, bodyFont.Style);
-    using Font rowFont = Typography.CreateMonospaceBodyFont();
-    using Font scaledRowFont = new(rowFont.FontFamily, rowFont.Size * scale, rowFont.Style);
+    // The fonts are deliberately NOT pre-scaled by `scale`: in the real PerMonitorV2 process WinForms
+    // already renders (and TextRenderer already measures) a point-sized font at the device DPI, so
+    // scaling the size again double-counted it and made the window far wider than its rows. Only the
+    // fixed pixel constants below scale by hand.
+    using Font scaledBodyFont = Typography.CreateBodyFont();
+    using Font scaledRowFont = Typography.CreateMonospaceBodyFont();
 
     int TextWidth(string text, Font font) =>
       TextRenderer
@@ -370,13 +377,23 @@ internal sealed class ManageRecordsForm : Form
     int ButtonWidth(string text) =>
       TextWidth(text, scaledBodyFont) + (int)Math.Ceiling(Palette.SpacingMd * 2 * scale);
 
-    int rowTextWidth = page.Select(record =>
-        TextWidth(RecordsListControl.FormatRecordRow(record), scaledRowFont)
-      )
-      .DefaultIfEmpty(0)
-      .Max();
+    // Date and times are fixed-width, so only the duration decides how long a row can get.
+    StopwatchRecord worstCase = new(
+      Id: 0,
+      StartTimestamp: 0,
+      EndTimestamp: 0,
+      ElapsedMinutes: WorstCaseElapsedMinutes
+    );
+    int rowTextWidth = IconTextLayout
+      .MeasureSingleLine(RecordsListControl.FormatRecordRow(worstCase), scaledRowFont)
+      .Width;
     int rowWidth =
-      rowTextWidth + ButtonWidth("Delete") + (int)Math.Ceiling((Palette.SpacingSm * 3 + 2) * scale);
+      rowTextWidth
+      + ButtonWidth("Delete")
+      // Three SpacingSm gaps and the 2px border, plus one more SpacingSm of slack: the row's real
+      // cell padding and rounding come out a few pixels wider than the analytic sum, and a budget
+      // that is short by even one pixel wraps the duration of every ordinary row.
+      + (int)Math.Ceiling((Palette.SpacingSm * 4 + 2) * scale);
     int headerWidth =
       TextWidth("Manage Records", scaledBodyFont) + ButtonWidth("Clear All Records");
     int paginationWidth =
@@ -394,7 +411,7 @@ internal sealed class ManageRecordsForm : Form
 
   private Panel CreateRecordRow(StopwatchRecord record)
   {
-    Label details = new()
+    IconTextLabel details = new(_rowIcons)
     {
       Text = RecordsListControl.FormatRecordRow(record),
       Dock = DockStyle.Fill,

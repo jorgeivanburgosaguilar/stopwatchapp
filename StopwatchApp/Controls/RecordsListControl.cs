@@ -29,6 +29,7 @@ public sealed class RecordsListControl : UserControl
   private readonly Button _manageRecordsButton;
   private readonly Panel _recordsHost;
   private readonly Font _rowFont;
+  private readonly RowIconSet _rowIcons = new();
   private bool _dark;
 
   /// <summary>
@@ -341,6 +342,7 @@ public sealed class RecordsListControl : UserControl
     if (disposing)
     {
       _rowFont.Dispose();
+      _rowIcons.Dispose();
     }
     base.Dispose(disposing);
   }
@@ -408,12 +410,7 @@ public sealed class RecordsListControl : UserControl
   /// already excluded).</param>
   internal static int MeasureRowHeight(string text, Font font, int availableWidth)
   {
-    Size measured = TextRenderer.MeasureText(
-      text,
-      font,
-      new Size(Math.Max(1, availableWidth), 0),
-      TextFormatFlags.WordBreak | TextFormatFlags.NoPadding
-    );
+    Size measured = IconTextLayout.Measure(text, font, availableWidth);
     return measured.Height + (Palette.SpacingSm * 2) + Palette.SpacingXs;
   }
 
@@ -445,19 +442,17 @@ public sealed class RecordsListControl : UserControl
     }
 
     Rectangle textBounds = Rectangle.Inflate(rowBounds, -Palette.SpacingSm, 0);
-    TextRenderer.DrawText(
+    // AGENTS.md §8.5 — IconTextLayout word-wraps, not ellipsizes: a row past the window's sized-for
+    // worst case (a session over 24h, a 4-digit lap id) wraps to a second line. It is the same
+    // engine MeasureRowHeight above uses, so a wrapped row is never sized one way and painted
+    // another, and it draws the emoji as color images rather than GDI's monochrome glyphs.
+    IconTextLayout.Draw(
       e.Graphics,
       listBox.Items[e.Index].ToString() ?? string.Empty,
       listBox.Font,
       textBounds,
       Palette.Text(_dark),
-      // AGENTS.md §8.5 — WordBreak, not EndEllipsis: a row past the window's sized-for worst
-      // case (a session over 24h, a 4-digit lap id) now wraps to a second line — matching
-      // MeasureRowHeight above — instead of clipping to an ellipsis.
-      TextFormatFlags.VerticalCenter
-        | TextFormatFlags.Left
-        | TextFormatFlags.NoPadding
-        | TextFormatFlags.WordBreak
+      _rowIcons
     );
   }
 }
