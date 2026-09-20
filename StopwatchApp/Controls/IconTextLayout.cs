@@ -1,5 +1,4 @@
-using System.Drawing.Drawing2D;
-using System.Text;
+﻿using System.Text;
 
 namespace StopwatchApp.Controls;
 
@@ -160,41 +159,48 @@ internal static class IconTextLayout
     RowIconSet icons
   )
   {
-    (List<(Rectangle Bounds, string? Text, RowIcon? Icon)> items, Size size) = Layout(
-      text,
-      font,
-      bounds.Width
-    );
+    DrawLayout(graphics, Layout(text, font, bounds.Width), font, bounds, color, icons);
+  }
+
+  /// <summary>
+  /// Draws an already computed <paramref name="layout"/> (from <see cref="Layout"/>), so a caller that
+  /// repaints often can cache the measurement instead of redoing it on every paint.
+  /// </summary>
+  /// <param name="graphics">The target graphics.</param>
+  /// <param name="layout">The layout to draw, computed for <paramref name="bounds"/>'s width.</param>
+  /// <param name="font">The row font the layout was computed with.</param>
+  /// <param name="bounds">The area to draw into.</param>
+  /// <param name="color">The text color. Icons keep their own colors.</param>
+  /// <param name="icons">The decoded icons.</param>
+  internal static void DrawLayout(
+    Graphics graphics,
+    (List<(Rectangle Bounds, string? Text, RowIcon? Icon)> Items, Size Size) layout,
+    Font font,
+    Rectangle bounds,
+    Color color,
+    RowIconSet icons
+  )
+  {
+    (List<(Rectangle Bounds, string? Text, RowIcon? Icon)> items, Size size) = layout;
     int top = bounds.Top + Math.Max(0, (bounds.Height - size.Height) / 2);
 
-    InterpolationMode previousInterpolation = graphics.InterpolationMode;
-    PixelOffsetMode previousPixelOffset = graphics.PixelOffsetMode;
-    graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
-    graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
-    try
+    foreach ((Rectangle itemBounds, string? itemText, RowIcon? icon) in items)
     {
-      foreach ((Rectangle itemBounds, string? itemText, RowIcon? icon) in items)
+      Rectangle placed = new(
+        bounds.Left + itemBounds.X,
+        top + itemBounds.Y,
+        itemBounds.Width,
+        itemBounds.Height
+      );
+      if (icon is RowIcon rowIcon)
       {
-        Rectangle placed = new(
-          bounds.Left + itemBounds.X,
-          top + itemBounds.Y,
-          itemBounds.Width,
-          itemBounds.Height
-        );
-        if (icon is RowIcon rowIcon)
-        {
-          graphics.DrawImage(icons.Get(rowIcon), placed);
-        }
-        else if (itemText is not null)
-        {
-          TextRenderer.DrawText(graphics, itemText, font, placed.Location, color, MeasureFlags);
-        }
+        // Pre-scaled to exactly this size, so this is a 1:1 blit with no per-paint resampling.
+        graphics.DrawImage(icons.GetScaled(rowIcon, placed.Width), placed);
       }
-    }
-    finally
-    {
-      graphics.InterpolationMode = previousInterpolation;
-      graphics.PixelOffsetMode = previousPixelOffset;
+      else if (itemText is not null)
+      {
+        TextRenderer.DrawText(graphics, itemText, font, placed.Location, color, MeasureFlags);
+      }
     }
   }
 

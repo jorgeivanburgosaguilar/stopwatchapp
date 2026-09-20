@@ -1,4 +1,4 @@
-using StopwatchApp.Controls;
+﻿using StopwatchApp.Controls;
 
 namespace StopwatchApp.Tests;
 
@@ -56,5 +56,20 @@ public sealed class RowIconSetTests
 
       Assert.True(opaqueColors.Count > 8, $"{icon} has too few colors to be a color emoji.");
     }
+  }
+
+  [Fact]
+  public void GetScaled_ReturnsTheSameCachedBitmapPerSizeAndTheRequestedSize()
+  {
+    using RowIconSet icons = new();
+
+    Bitmap first = icons.GetScaled(RowIcon.Calendar, 20);
+    Bitmap again = icons.GetScaled(RowIcon.Calendar, 20);
+    Bitmap other = icons.GetScaled(RowIcon.Calendar, 30);
+
+    Assert.Same(first, again);
+    Assert.NotSame(first, other);
+    Assert.Equal(new Size(20, 20), first.Size);
+    Assert.Equal(new Size(30, 30), other.Size);
   }
 }

@@ -22,7 +22,7 @@ internal sealed class ManageRecordsForm : Form
   private readonly Button _clearAllButton;
   private readonly Button _previousButton;
   private readonly Button _nextButton;
-  private readonly List<IconTextLabel> _recordDetails = [];
+  private readonly List<RecordRowParts> _rows = [];
   private IReadOnlyList<StopwatchRecord> _records;
   private int _pageIndex;
   private bool _dark;
@@ -258,23 +258,54 @@ internal sealed class ManageRecordsForm : Form
   private void SetOperationInProgress(bool operationInProgress)
   {
     _operationInProgress = operationInProgress;
-    RebuildRows();
+    // Only enablement changes; rebuilding every row for that (and again when the records reload)
+    // made each delete recreate the whole page several times.
+    UpdateButtonStates();
+  }
+
+  private void UpdateButtonStates()
+  {
+    int pageCount = GetPageCount(_records.Count);
+    _clearAllButton.Enabled = _records.Count > 0 && !_operationInProgress;
+    _previousButton.Enabled = _pageIndex > 0 && !_operationInProgress;
+    _nextButton.Enabled = _pageIndex < pageCount - 1 && !_operationInProgress;
+    foreach (RecordRowParts parts in _rows)
+    {
+      parts.Delete.Enabled = !_operationInProgress;
+    }
   }
 
   private void RebuildRows()
   {
     _rowsLayout.SuspendLayout();
-    _rowsLayout.Controls.Clear();
-    _rowsLayout.RowStyles.Clear();
-    _recordDetails.Clear();
-
     IReadOnlyList<StopwatchRecord> page = GetPage(_records, _pageIndex);
+
+    // Reuse the existing row controls and only change what each shows: creating a row is a nest of
+    // panels, a table layout and a button, so recreating a whole page for every delete or page turn
+    // was what made the window lag. Rows are created or disposed only when the page count changes.
+    // (Controls.Remove alone would leak them, so surplus rows are disposed explicitly.)
+    while (_rows.Count > page.Count)
+    {
+      RecordRowParts surplus = _rows[^1];
+      _rows.RemoveAt(_rows.Count - 1);
+      _rowsLayout.Controls.Remove(surplus.Row);
+      surplus.Row.Dispose();
+    }
+    while (_rowsLayout.RowStyles.Count > _rows.Count)
+    {
+      _rowsLayout.RowStyles.RemoveAt(_rowsLayout.RowStyles.Count - 1);
+    }
+
     for (int i = 0; i < page.Count; i++)
     {
-      StopwatchRecord record = page[i];
-      Panel row = CreateRecordRow(record);
-      _rowsLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-      _rowsLayout.Controls.Add(row, 0, i);
+      if (i >= _rows.Count)
+      {
+        RecordRowParts created = CreateRecordRow();
+        _rows.Add(created);
+        _rowsLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _rowsLayout.Controls.Add(created.Row, 0, i);
+      }
+      ShowRecordInRow(_rows[i], page[i]);
     }
 
     _rowsLayout.ResumeLayout();
@@ -283,9 +314,7 @@ internal sealed class ManageRecordsForm : Form
     _emptyStateLabel.Visible = !hasRecords;
     int pageCount = GetPageCount(_records.Count);
     _pageLabel.Text = $"Page {_pageIndex + 1} of {pageCount}";
-    _clearAllButton.Enabled = hasRecords && !_operationInProgress;
-    _previousButton.Enabled = _pageIndex > 0 && !_operationInProgress;
-    _nextButton.Enabled = _pageIndex < pageCount - 1 && !_operationInProgress;
+    UpdateButtonStates();
     ApplyTheme();
     ResizeToCurrentPage(DeviceDpi);
   }
@@ -323,7 +352,7 @@ internal sealed class ManageRecordsForm : Form
     );
   }
 
-  private void ConstrainRecordDetails()
+  private int RowTextWidth()
   {
     // Mirrors RequiredClientWidth's budget term for term (including the DPI scaling of the fixed
     // pixel constants), so a row that was sized to fit is never told to wrap; only a row longer
@@ -340,16 +369,21 @@ internal sealed class ManageRecordsForm : Form
         .Width + (int)Math.Ceiling(Palette.SpacingMd * 2 * scale);
     int rootChrome = (int)
       Math.Ceiling((Palette.SpacingLg * 2 + SystemInformation.VerticalScrollBarWidth) * scale);
-    int rowTextWidth = Math.Max(
+    return Math.Max(
       1,
       ClientSize.Width
         - rootChrome
         - deleteButtonWidth
         - (int)Math.Ceiling((Palette.SpacingSm * 3 + 2) * scale)
     );
-    foreach (IconTextLabel details in _recordDetails)
+  }
+
+  private void ConstrainRecordDetails()
+  {
+    Size maximum = new(RowTextWidth(), 0);
+    foreach (RecordRowParts parts in _rows)
     {
-      details.MaximumSize = new Size(rowTextWidth, 0);
+      parts.Details.MaximumSize = maximum;
     }
   }
 
@@ -409,22 +443,32 @@ internal sealed class ManageRecordsForm : Form
     return Math.Max(Math.Max(rowWidth, headerWidth), paginationWidth) + rootChrome;
   }
 
-  private Panel CreateRecordRow(StopwatchRecord record)
+  private RecordRowParts CreateRecordRow()
   {
     IconTextLabel details = new(_rowIcons)
     {
-      Text = RecordsListControl.FormatRecordRow(record),
       Dock = DockStyle.Fill,
       Font = _rowFont,
       AutoSize = true,
       Margin = new Padding(0),
     };
-    _recordDetails.Add(details);
+    // Give the row its wrap width up front (once the window has been sized) so it lays out at its
+    // final size instead of wide first and then again when ConstrainRecordDetails catches up.
+    if (ClientSize.Width > 1)
+    {
+      details.MaximumSize = new Size(RowTextWidth(), 0);
+    }
     Button deleteButton = ButtonFactory.Create("Delete", Palette.StopButton);
     deleteButton.Anchor = AnchorStyles.Right;
     deleteButton.Margin = new Padding(Palette.SpacingSm, 0, 0, 0);
-    deleteButton.Enabled = !_operationInProgress;
-    deleteButton.Click += async (_, _) => await DeleteRecordAsync(record.Id);
+    // The row is reused for different records, so the id lives in Tag instead of a captured local.
+    deleteButton.Click += async (sender, _) =>
+    {
+      if (sender is Button { Tag: long id })
+      {
+        await DeleteRecordAsync(id);
+      }
+    };
 
     TableLayoutPanel content = new()
     {
@@ -453,12 +497,19 @@ internal sealed class ManageRecordsForm : Form
       AutoSizeMode = AutoSizeMode.GrowAndShrink,
       Margin = new Padding(0, 0, 0, Palette.SpacingXs),
       Padding = new Padding(1),
-      BackColor = Palette.Border(_dark),
     };
-    content.BackColor = Palette.RowBackground(_dark);
-    details.ForeColor = Palette.Text(_dark);
     row.Controls.Add(content);
-    return row;
+    return new RecordRowParts(row, content, details, deleteButton);
+  }
+
+  private void ShowRecordInRow(RecordRowParts parts, StopwatchRecord record)
+  {
+    parts.Details.Text = RecordsListControl.FormatRecordRow(record);
+    parts.Delete.Tag = record.Id;
+    // Colors are reapplied on every show so a light/dark switch (which rebuilds) recolors reused rows.
+    parts.Row.BackColor = Palette.Border(_dark);
+    parts.Content.BackColor = Palette.RowBackground(_dark);
+    parts.Details.ForeColor = Palette.Text(_dark);
   }
 
   private void ApplyTheme()
@@ -468,4 +519,12 @@ internal sealed class ManageRecordsForm : Form
     _emptyStateLabel.ForeColor = Palette.EmptyStateText(_dark);
     _pageLabel.ForeColor = Palette.MutedText(_dark);
   }
+
+  /// <summary>The controls of one record row, kept together so the row can be reused for another record.</summary>
+  private sealed record RecordRowParts(
+    Panel Row,
+    TableLayoutPanel Content,
+    IconTextLabel Details,
+    Button Delete
+  );
 }

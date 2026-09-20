@@ -1092,6 +1092,12 @@ here; do not accumulate dated implementation history.
   jagged rather than smooth.
 - **Cascadia Mono falls back to Consolas at runtime.** Both preserve stable tabular digits; resolving
   the installed family avoids silent substitution to a proportional font.
+- **Manage Records reuses its row controls.** A row is a nest of panels, a table layout, and a
+  button, so recreating a page on every delete or page turn (and leaving the detached rows
+  undisposed) made the window lag. `ManageRecordsForm.RebuildRows` instead updates the existing
+  rows' text and record id and creates or disposes rows only when the page count changes; a delete
+  toggles button enablement rather than rebuilding, and `IconTextLabel` caches its layout and
+  `RowIconSet.GetScaled` caches per-size icon bitmaps so painting never re-measures or resamples.
 - **The main window is a five-record summary; full history has its own modeless window.** Limiting
   the dashboard keeps its size stable. The manager uses pages of ten and routes delete/clear through
   the same timer-owned records path, so both views stay synchronized.
