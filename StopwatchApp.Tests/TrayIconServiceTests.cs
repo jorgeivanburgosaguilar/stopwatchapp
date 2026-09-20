@@ -1,4 +1,4 @@
-using System.Drawing.Drawing2D;
+﻿using System.Drawing.Drawing2D;
 using StopwatchApp.Services;
 
 namespace StopwatchApp.Tests;
@@ -52,12 +52,53 @@ public class TrayIconServiceTests
   }
 
   [Theory]
-  [InlineData(1, 0, "1:00")]
-  [InlineData(1, 1, "1:01")]
-  [InlineData(9, 59, "9:59")]
-  public void FormatHourMinuteLabel_PadsMinutesToTwoDigits(long hours, int minutes, string expected)
+  [InlineData(1, 0)]
+  [InlineData(1, 1)]
+  [InlineData(5, 30)]
+  [InlineData(9, 59)]
+  public void MeasureDiagonalParts_KeepsBothHalvesInsideTheCanvas(long hours, int minutes)
   {
-    Assert.Equal(expected, TrayIconService.FormatHourMinuteLabel(hours, minutes));
+    (RectangleF hour, RectangleF minute) = TrayIconService.MeasureDiagonalParts(hours, minutes);
+    RectangleF canvas = new(0, 0, 32, 32);
+
+    Assert.True(canvas.Contains(hour), $"Hour ink {hour} left the canvas.");
+    Assert.True(canvas.Contains(minute), $"Minute ink {minute} left the canvas.");
+  }
+
+  [Theory]
+  [InlineData(1, 0)]
+  [InlineData(1, 1)]
+  [InlineData(5, 30)]
+  [InlineData(9, 59)]
+  public void MeasureDiagonalParts_NeverOverlapsTheTwoHalves(long hours, int minutes)
+  {
+    (RectangleF hour, RectangleF minute) = TrayIconService.MeasureDiagonalParts(hours, minutes);
+
+    Assert.False(hour.IntersectsWith(minute), $"Hour ink {hour} overlaps minute ink {minute}.");
+  }
+
+  // Regression guard for the point of the diagonal layout: each half must render larger than the
+  // four-glyph single-line "9:59" label it replaced, which was width-bound.
+  [Fact]
+  public void MeasureDiagonalParts_RendersLargerThanTheOldSingleLineLabel()
+  {
+    int oldSize = TrayIconService.MeasureLabelFontSize("9:59");
+    using FontFamily family = new("Segoe UI");
+    using GraphicsPath oldPath = new();
+    oldPath.AddString(
+      "9:59",
+      family,
+      (int)FontStyle.Bold,
+      oldSize,
+      PointF.Empty,
+      StringFormat.GenericTypographic
+    );
+    float oldHeight = oldPath.GetBounds().Height;
+
+    (RectangleF hour, RectangleF minute) = TrayIconService.MeasureDiagonalParts(9, 59);
+
+    Assert.True(hour.Height > oldHeight, $"Hour height {hour.Height} <= old {oldHeight}.");
+    Assert.True(minute.Height > oldHeight, $"Minute height {minute.Height} <= old {oldHeight}.");
   }
 
   [Theory]
@@ -102,9 +143,6 @@ public class TrayIconServiceTests
   [InlineData("00")]
   [InlineData("45")]
   [InlineData("59")]
-  [InlineData("1:00")]
-  [InlineData("1:01")]
-  [InlineData("9:59")]
   [InlineData("10H")]
   [InlineData("23H")]
   [InlineData("1D")]

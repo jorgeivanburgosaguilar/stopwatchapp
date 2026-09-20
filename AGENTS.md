@@ -23,7 +23,7 @@ project-management, invoicing, monitoring, or cloud-sync product.
 
 - Start, pause, continue, add lap splits, and stop a session.
 - Show elapsed time in the main window and in a runtime-rendered tray icon. The icon shows minutes
-  below one hour, an `h:mm` label from one hour through nine hours, whole hours from ten hours
+  below one hour, a diagonal hour/minutes split from one hour through nine hours, whole hours from ten hours
   through one day, and whole days thereafter; its tooltip always shows the full unbounded `HH:mm:ss`
   duration.
 - Keep the main window out of the taskbar when closed or minimized, and restore it with one left
@@ -663,9 +663,13 @@ progression while the tooltip remains authoritative:
 
 - **Elapsed time under one hour**: a single large two-digit **MM** readout, centered and sized to
   fill as much of the 32×32 canvas as legibility at the 16 px scaled-down display size allows.
-- **Elapsed time from one hour through 9:59:59**: a single large `h:mm` label — an unpadded hour, a
-  colon, and zero-padded minutes (`1:00` through `9:59`); it changes every minute, restoring the
-  minute resolution the whole-hour label below would otherwise lose for up to an hour at a time.
+- **Elapsed time from one hour through 9:59:59**: a diagonal split — the unpadded hour anchored in
+  the top-left, the zero-padded minutes (`00` through `59`) anchored in the bottom-right, and a thin
+  slash stroke in the free corridor between them (`TrayIconService.HourBox`/`MinuteBox`/
+  `SlashStart`/`SlashEnd`). It changes every minute, restoring the minute resolution the whole-hour label below
+  would otherwise lose for up to an hour at a time. Each half is fit into its own box, so both are
+  height-bound rather than sharing one width-bound line; the two boxes' glyph ink never overlaps
+  (`MeasureDiagonalParts` exposes the placement the renderer draws).
 - **Elapsed time from ten hours through 23:59:59**: a single large unpadded whole-hour label, `10H`
   through `23H`; it changes only at the next whole hour.
 - **Elapsed time from one day onward**: a single large unpadded whole-day label, `1D`, `2D`, and so
@@ -673,16 +677,14 @@ progression while the tooltip remains authoritative:
 
 All four layouts share one auto-fit rule: the largest Segoe UI Bold size, from a fixed max down to
 a fixed floor, whose **glyph ink** — a `GraphicsPath` built with `AddString`, measured via
-`GetBounds()` — fits the 32×32 canvas. Measure ink, not `MeasureString` output: `MeasureString`
+`GetBounds()` — fits its budget: the 32×32 canvas for the three single-label layouts, each half's own
+box for the diagonal one. Measure ink, not `MeasureString` output: `MeasureString`
 (especially with `StringFormat.GenericDefault`) reports a padded advance width and the full
 line-box height rather than the glyph's actual extent, so it rejects sizes that would truly fit —
 that gap, not `23H` genuinely needing more room, is what previously made `1H` render at a fraction
 of the minutes readout's size. Sharing one rule means the common `1D`/`10H` labels reach essentially
-the same size as `45`; the four-glyph `h:mm` label (`1:01`, etc.) is genuinely smaller than every
-other layout, because four glyphs don't fit the canvas at the size two- or three-glyph labels reach
-— this is an accepted, intentional trade-off for restoring minute resolution, not a fit bug to
-chase. A paused stopwatch freezes whichever layout it reached; running, paused, and idle may differ
-in tint but not layout.
+the same size as `45`. A paused stopwatch freezes whichever layout it reached; running, paused, and
+idle may differ in tint but not layout.
 
 Update the icon at most once per second, and only when the displayed value or active layout changes
 — track both explicitly in the dirty-check state.
@@ -902,7 +904,8 @@ xUnit, in a `StopwatchApp.Tests` project.
   single left-click, single-instance activation) always restores the window in its normal (not minimized)
   state, regardless of whether it was minimized when last hidden.
 - Tray icon layout: below one hour the icon shows large two-digit minutes; from one hour through
-  `9:59:59` it shows an `h:mm` label (unpadded hour, zero-padded minutes); from ten hours through
+  `9:59:59` it shows a diagonal split (unpadded hour top-left, zero-padded minutes bottom-right, thin
+  slash between, no overlap between the digits); from ten hours through
   `23:59:59` it shows unpadded whole hours with `H`; from one day onward it shows unpadded whole days
   with `D`. The tooltip's full `HH:MM:SS` text is unaffected by the compact layout.
 - Stop confirmation (§8.3/§8.5): with the default threshold, Stop before five minutes stops
@@ -1060,11 +1063,14 @@ here; do not accumulate dated implementation history.
 - **The tray icon remains a square notification icon.** Windows gives third-party notification-area
   icons a square slot; a taskbar-clock-style rectangular widget is not available through the public
   tray API. The current compact display therefore uses one shared ink-bounds auto-fit rule for
-  large minutes, `h:mm`, hours, or days alike, while the tooltip carries exact unbounded time. The
-  four-glyph `h:mm` label (`1:01`, etc.) is the one case that stays visibly smaller than the rest —
-  it was chosen over a height-first condensed/stretched rendering or a two-line stacked layout
-  (dropping the colon) specifically to keep the single shared fit rule and the literal `h:mm` form,
-  and that's accepted rather than solved with a special-cased second fit path.
+  large minutes, hours, days, and each half of the hour/minute split, while the tooltip carries
+  exact unbounded time. The 1:00–9:59 band is a corner-anchored diagonal (hour top-left, minutes
+  bottom-right, thin slash between) rather than a single four-glyph `h:mm` line: one horizontal line
+  is width-bound and left the top and bottom of the square slot empty, while anchoring to opposite
+  corners makes each half height-bound and much larger. The two boxes are disjoint across the
+  anti-diagonal so no collision handling is needed at draw time, and the slash occupies only the
+  corridor the anchoring already leaves free. The 10H–23H and day labels stay single-label, since
+  two or three glyphs already fill the canvas.
 - **Native icon ownership is explicit.** Replacing a runtime HICON destroys the previous handle, and
   application exit disposes `NotifyIcon` before ending the message loop. These rules prevent GDI
   leaks and ghost tray icons.

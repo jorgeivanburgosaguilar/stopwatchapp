@@ -11,7 +11,7 @@
          .NET 10 Desktop Runtime instead of bundling it into a self-contained deployment. -->
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <PublishSelfContained>false</PublishSelfContained>
-    <Version>1.9.1</Version>
+    <Version>1.10.0</Version>
 
     <!-- AGENTS.md §6 — without this, the SDK appends SourceRevisionId to
          AssemblyInformationalVersionAttribute, which the window title reads verbatim through

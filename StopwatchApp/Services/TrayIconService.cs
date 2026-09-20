@@ -1,4 +1,4 @@
-using System.Drawing.Drawing2D;
+﻿using System.Drawing.Drawing2D;
 using System.Globalization;
 using System.Runtime.InteropServices;
 using StopwatchApp.Controls;
@@ -9,9 +9,10 @@ namespace StopwatchApp.Services;
 
 /// <summary>
 /// Owns the <see cref="NotifyIcon"/>: a GDI+-rendered 32×32 icon (large minute-only digits during
-/// the first hour, then a large <c>h:mm</c> label through the ninth hour, then large whole-hour or
-/// whole-day labels), its tooltip, and its context menu (<c>Open</c>, the state-appropriate
-/// transition(s), <c>Exit</c>). See AGENTS.md §10.1/§10.2. Takes callbacks rather than a
+/// the first hour, then a diagonal hour-top-left / minutes-bottom-right split through the ninth
+/// hour, then large whole-hour or whole-day labels), its tooltip, and its context menu
+/// (<c>Open</c>, the state-appropriate transition(s), <c>Exit</c>). See AGENTS.md §10.1/§10.2.
+/// Takes callbacks rather than a
 /// <c>MainForm</c> reference — parent/child communication happens through delegates, never a shared
 /// mutable reference (AGENTS.md §3).
 /// </summary>
@@ -31,6 +32,13 @@ public sealed partial class TrayIconService : IDisposable
   private const int MaxLabelFontSize = 34; // above any size that can fit; the loop's start point
   private const int MinLabelFontSize = 8; // floor — guarantees the loop always terminates
   private const float LabelFitBudget = 30f; // 1px breathing room per side inside IconSize
+
+  // Diagonal h / mm layout (§10.1): hour box top-left, minute box bottom-right, slash between.
+  private const float SlashWidth = 2.2f;
+  private static readonly RectangleF HourBox = new(1, 1, 11, 14);
+  private static readonly RectangleF MinuteBox = new(14, 18, 17, 13);
+  private static readonly PointF SlashStart = new(3, 27);
+  private static readonly PointF SlashEnd = new(21, 5);
 
   private readonly StopwatchControl _control;
   private readonly Action _onOpen;
@@ -165,8 +173,8 @@ public sealed partial class TrayIconService : IDisposable
 
   /// <summary>
   /// Derives the simplified icon value and layout from an unbounded elapsed duration. The icon moves
-  /// from minutes to an <c>h:mm</c> label to whole hours to whole days while the tooltip remains the
-  /// full duration. Internal so the unit-boundary rule can be unit tested without constructing a
+  /// from minutes to a diagonal hour/minutes split to whole hours to whole days while the tooltip
+  /// remains the full duration. Internal so the unit-boundary rule can be unit tested without constructing a
   /// real <see cref="NotifyIcon"/>/HICON.
   /// </summary>
   internal static (long Value, int Minutes, TrayIconLayout Layout) GetDisplayValues(long elapsedMs)
@@ -197,15 +205,6 @@ public sealed partial class TrayIconService : IDisposable
   /// </summary>
   internal static string FormatHourLabel(long hours) =>
     hours.ToString(CultureInfo.InvariantCulture) + "H";
-
-  /// <summary>
-  /// Formats a simplified <c>h:mm</c> label (unpadded hour, zero-padded minutes) in invariant
-  /// culture. Internal so the tray's compact presentation can be unit tested without GDI+.
-  /// </summary>
-  internal static string FormatHourMinuteLabel(long hours, int minutes) =>
-    hours.ToString(CultureInfo.InvariantCulture)
-    + ":"
-    + minutes.ToString("D2", CultureInfo.InvariantCulture);
 
   /// <summary>
   /// Formats a simplified whole-days label in invariant culture. Internal so the tray's compact
@@ -388,14 +387,23 @@ public sealed partial class TrayIconService : IDisposable
       graphics.Clear(Color.Transparent);
       graphics.SmoothingMode = SmoothingMode.AntiAlias;
       using SolidBrush brush = new(tint);
-      string label = layout switch
+      if (layout == TrayIconLayout.HourMinute)
       {
-        TrayIconLayout.LargeMinutes => (minutes % 100).ToString("D2", CultureInfo.InvariantCulture),
-        TrayIconLayout.HourMinute => FormatHourMinuteLabel(value, minutes),
-        TrayIconLayout.LargeHours => FormatHourLabel(value),
-        _ => FormatDayLabel(value),
-      };
-      DrawLargeLabel(graphics, brush, label);
+        DrawDiagonalHourMinute(graphics, brush, tint, value, minutes);
+      }
+      else
+      {
+        string label = layout switch
+        {
+          TrayIconLayout.LargeMinutes => (minutes % 100).ToString(
+            "D2",
+            CultureInfo.InvariantCulture
+          ),
+          TrayIconLayout.LargeHours => FormatHourLabel(value),
+          _ => FormatDayLabel(value),
+        };
+        DrawLargeLabel(graphics, brush, label);
+      }
     }
 
     IntPtr newHandle = bitmap.GetHicon();
@@ -434,9 +442,68 @@ public sealed partial class TrayIconService : IDisposable
   // such fit box to overflow.
   private static void DrawLargeLabel(Graphics graphics, Brush brush, string text)
   {
-    int size = MeasureLabelFontSize(text);
+    using GraphicsPath path = BuildLabelPath(
+      text,
+      new RectangleF(0, 0, IconSize, IconSize),
+      LabelFitBudget,
+      LabelFitBudget
+    );
+    graphics.FillPath(brush, path);
+  }
+
+  // The 1:00–9:59 layout (§10.1): the hour anchored top-left, the minutes bottom-right, and a thin
+  // slash in the free corridor between them. Each half is fit into its own box, so both are
+  // height-bound rather than sharing one width-bound line.
+  private static void DrawDiagonalHourMinute(
+    Graphics graphics,
+    Brush brush,
+    Color tint,
+    long hours,
+    int minutes
+  )
+  {
+    (GraphicsPath hourPath, GraphicsPath minutePath) = BuildDiagonalPaths(hours, minutes);
+    using (hourPath)
+    using (minutePath)
+    using (Pen slash = new(tint, SlashWidth) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+    {
+      graphics.DrawLine(slash, SlashStart, SlashEnd);
+      graphics.FillPath(brush, hourPath);
+      graphics.FillPath(brush, minutePath);
+    }
+  }
+
+  private static (GraphicsPath Hour, GraphicsPath Minute) BuildDiagonalPaths(
+    long hours,
+    int minutes
+  ) =>
+    (
+      BuildLabelPath(
+        hours.ToString(CultureInfo.InvariantCulture),
+        HourBox,
+        HourBox.Width,
+        HourBox.Height
+      ),
+      BuildLabelPath(
+        minutes.ToString("D2", CultureInfo.InvariantCulture),
+        MinuteBox,
+        MinuteBox.Width,
+        MinuteBox.Height
+      )
+    );
+
+  // Builds the label's glyph path at the largest size whose ink fits the budget, translated so the
+  // ink (not the padded line box) is centered in the given box.
+  private static GraphicsPath BuildLabelPath(
+    string text,
+    RectangleF box,
+    float widthBudget,
+    float heightBudget
+  )
+  {
+    int size = MeasureLabelFontSize(text, widthBudget, heightBudget);
     using FontFamily family = new("Segoe UI");
-    using GraphicsPath path = new();
+    GraphicsPath path = new();
     path.AddString(
       text,
       family,
@@ -449,11 +516,30 @@ public sealed partial class TrayIconService : IDisposable
     RectangleF bounds = path.GetBounds();
     using Matrix translation = new();
     translation.Translate(
-      -bounds.X + (IconSize - bounds.Width) / 2f,
-      -bounds.Y + (IconSize - bounds.Height) / 2f
+      box.X - bounds.X + (box.Width - bounds.Width) / 2f,
+      box.Y - bounds.Y + (box.Height - bounds.Height) / 2f
     );
     path.Transform(translation);
-    graphics.FillPath(brush, path);
+    return path;
+  }
+
+  /// <summary>
+  /// Returns the glyph ink rectangles the diagonal <c>h / mm</c> layout draws for the hour (top-left)
+  /// and the minutes (bottom-right). The renderer consumes the same paths, so measured and drawn
+  /// geometry cannot diverge. Internal so placement can be unit tested without a
+  /// <see cref="Graphics"/> surface.
+  /// </summary>
+  internal static (RectangleF HourInk, RectangleF MinuteInk) MeasureDiagonalParts(
+    long hours,
+    int minutes
+  )
+  {
+    (GraphicsPath hourPath, GraphicsPath minutePath) = BuildDiagonalPaths(hours, minutes);
+    using (hourPath)
+    using (minutePath)
+    {
+      return (hourPath.GetBounds(), minutePath.GetBounds());
+    }
   }
 
   /// <summary>
@@ -463,7 +549,14 @@ public sealed partial class TrayIconService : IDisposable
   /// no longer undersizes hour/day labels versus the minutes readout — can be unit tested without
   /// a <see cref="Graphics"/> surface.
   /// </summary>
-  internal static int MeasureLabelFontSize(string text)
+  internal static int MeasureLabelFontSize(string text) =>
+    MeasureLabelFontSize(text, LabelFitBudget, LabelFitBudget);
+
+  /// <summary>
+  /// Same fit rule as <see cref="MeasureLabelFontSize(string)"/> against an explicit width and
+  /// height budget, used to fit each half of the diagonal layout into its own box.
+  /// </summary>
+  internal static int MeasureLabelFontSize(string text, float widthBudget, float heightBudget)
   {
     using FontFamily family = new("Segoe UI");
     for (int size = MaxLabelFontSize; size > MinLabelFontSize; size--)
@@ -478,7 +571,7 @@ public sealed partial class TrayIconService : IDisposable
         StringFormat.GenericTypographic
       );
       RectangleF bounds = path.GetBounds();
-      if (bounds.Width <= LabelFitBudget && bounds.Height <= LabelFitBudget)
+      if (bounds.Width <= widthBudget && bounds.Height <= heightBudget)
       {
         return size;
       }
@@ -493,7 +586,7 @@ public sealed partial class TrayIconService : IDisposable
 
   /// <summary>
   /// Which tray-icon presentation is active (AGENTS.md §10.1): large minutes during the first
-  /// hour, then a large <c>h:mm</c> label through the ninth hour, then a large whole-hours or
+  /// hour, then a diagonal hour/minutes split through the ninth hour, then a large whole-hours or
   /// whole-days label.
   /// </summary>
   internal enum TrayIconLayout
