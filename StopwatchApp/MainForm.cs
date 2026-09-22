@@ -53,6 +53,14 @@ public sealed class MainForm : Form
   private readonly int _activateMessage;
   private ManageRecordsForm? _manageRecordsForm;
 
+  // AGENTS.md §17 performance note — ResizeForElapsedTime runs on every running-second tick.
+  // TimeFormat.FormatTime's digit count only changes at an hours-digit boundary (e.g. 9:59:59 ->
+  // 10:00:00), so caching the elapsed text's length lets an ordinary tick skip ComputeFixedWidth
+  // entirely instead of rebuilding six probe fonts and re-measuring every visible record/lap row.
+  // RefreshRecords/RefreshLaps/OnDpiChanged call ResizeToContent directly (not through this cache)
+  // whenever content, font, or DPI actually changes, so skipping here never misses a real resize.
+  private int _lastElapsedTextLength = -1;
+
   /// <summary>
   /// Initializes a new instance of the <see cref="MainForm"/> class.
   /// </summary>
@@ -513,6 +521,13 @@ public sealed class MainForm : Form
 
   private void ResizeForElapsedTime()
   {
+    int elapsedTextLength = TimeFormat.FormatTime(_stopwatchControl.Timer.ElapsedMs).Length;
+    if (elapsedTextLength == _lastElapsedTextLength)
+    {
+      return;
+    }
+
+    _lastElapsedTextLength = elapsedTextLength;
     if (ComputeFixedWidth(DeviceDpi) != ClientSize.Width)
     {
       ResizeToContent(DeviceDpi);
