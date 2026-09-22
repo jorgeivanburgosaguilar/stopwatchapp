@@ -9,8 +9,14 @@ internal sealed class ManageRecordsForm : Form
   internal const int PageSize = 10;
   private const int DesignClientHeight = 660;
 
+  // The two expand-toggle glyph states, both the same width (a filled triangle), so the toggle
+  // column never reflows when a row flips between collapsed and expanded.
+  private const string CollapsedGlyph = "▸";
+  private const string ExpandedGlyph = "▾";
+
   private readonly Func<long, Task> _deleteRecordAsync;
   private readonly Func<Task> _clearRecordsAsync;
+  private readonly Func<long, Task<IReadOnlyList<Lap>>> _getLapsAsync;
   private readonly Font _bodyFont;
   private readonly Font _rowFont;
   private readonly RowIconSet _rowIcons = new();
@@ -23,6 +29,13 @@ internal sealed class ManageRecordsForm : Form
   private readonly Button _previousButton;
   private readonly Button _nextButton;
   private readonly List<RecordRowParts> _rows = [];
+
+  // Expansion survives a page turn, a theme flip, and a records reload; the lap cache is
+  // per-record and repopulated lazily on first expand, and reset whenever the record set changes
+  // (AGENTS.md §8.5 — master-detail laps).
+  private readonly HashSet<long> _expandedRecordIds = [];
+  private readonly HashSet<long> _loadingLapRecordIds = [];
+  private readonly Dictionary<long, IReadOnlyList<Lap>> _lapCache = [];
   private IReadOnlyList<StopwatchRecord> _records;
   private int _pageIndex;
   private bool _dark;
@@ -32,12 +45,14 @@ internal sealed class ManageRecordsForm : Form
     IReadOnlyList<StopwatchRecord> records,
     Func<long, Task> deleteRecordAsync,
     Func<Task> clearRecordsAsync,
+    Func<long, Task<IReadOnlyList<Lap>>> getLapsAsync,
     Icon appIcon
   )
   {
     _records = records;
     _deleteRecordAsync = deleteRecordAsync;
     _clearRecordsAsync = clearRecordsAsync;
+    _getLapsAsync = getLapsAsync;
     _appIcon = (Icon)appIcon.Clone();
 
     Text = "Manage Records";
@@ -168,7 +183,13 @@ internal sealed class ManageRecordsForm : Form
   {
     _records = records;
     _pageIndex = ClampPageIndex(_pageIndex, records.Count);
+    // The record set changed (a save/delete/clear), so any cached laps could now be stale; drop
+    // them and re-fetch lazily for whatever stays expanded. Expansion itself is kept, pruned to
+    // the records that still exist, so a refresh doesn't silently collapse the user's view.
+    _lapCache.Clear();
+    _expandedRecordIds.IntersectWith(records.Select(record => record.Id).ToHashSet());
     RebuildRows();
+    RefreshExpandedLapsForCurrentPage();
   }
 
   internal static int GetPageCount(int recordCount) =>
@@ -255,6 +276,138 @@ internal sealed class ManageRecordsForm : Form
     }
   }
 
+  private async Task ToggleLapsAsync(long id)
+  {
+    if (_loadingLapRecordIds.Contains(id))
+    {
+      return;
+    }
+
+    if (_expandedRecordIds.Remove(id))
+    {
+      ApplyExpansionToVisibleRow(id);
+      return;
+    }
+
+    _expandedRecordIds.Add(id);
+    await EnsureLapsLoadedAsync(id);
+    ApplyExpansionToVisibleRow(id);
+  }
+
+  private async Task EnsureLapsLoadedAsync(long id)
+  {
+    if (_lapCache.ContainsKey(id))
+    {
+      return;
+    }
+
+    _loadingLapRecordIds.Add(id);
+    ApplyExpansionToVisibleRow(id);
+    try
+    {
+      IReadOnlyList<Lap> laps = await _getLapsAsync(id);
+      _lapCache[id] = laps;
+    }
+    finally
+    {
+      _loadingLapRecordIds.Remove(id);
+    }
+  }
+
+  /// <summary>
+  /// Re-fetches laps for every record on the current page that is expanded but missing from the
+  /// (just-cleared) cache — called after <see cref="UpdateRecords"/> so an expanded row's laps
+  /// come back instead of silently showing empty until the user collapses and re-expands it.
+  /// </summary>
+  private void RefreshExpandedLapsForCurrentPage()
+  {
+    foreach (RecordRowParts parts in _rows)
+    {
+      if (
+        parts.Delete.Tag is long id
+        && _expandedRecordIds.Contains(id)
+        && !_lapCache.ContainsKey(id)
+      )
+      {
+        _ = ReloadLapsForRowAsync(id);
+      }
+    }
+  }
+
+  private async Task ReloadLapsForRowAsync(long id)
+  {
+    await EnsureLapsLoadedAsync(id);
+    ApplyExpansionToVisibleRow(id);
+  }
+
+  private RecordRowParts? FindVisibleRow(long id) =>
+    _rows.Find(parts => parts.Delete.Tag is long tagId && tagId == id);
+
+  private void ApplyExpansionToVisibleRow(long id)
+  {
+    RecordRowParts? parts = FindVisibleRow(id);
+    if (parts is not null)
+    {
+      ApplyExpansionToRow(parts, id);
+    }
+  }
+
+  private void ApplyExpansionToRow(RecordRowParts parts, long id)
+  {
+    bool expanded = _expandedRecordIds.Contains(id);
+    bool loading = _loadingLapRecordIds.Contains(id);
+    parts.Toggle.Text = expanded ? ExpandedGlyph : CollapsedGlyph;
+    parts.Toggle.AccessibleName = expanded ? "Hide laps" : "Show laps";
+    parts.Toggle.Enabled = !loading && !_operationInProgress;
+
+    IReadOnlyList<Lap> laps =
+      expanded && _lapCache.TryGetValue(id, out IReadOnlyList<Lap>? cached) ? cached : [];
+    PopulateLaps(parts, laps);
+    parts.LapsPanel.Visible = expanded && laps.Count > 0;
+  }
+
+  private void PopulateLaps(RecordRowParts parts, IReadOnlyList<Lap> laps)
+  {
+    // Pooled exactly like the record rows themselves (AGENTS.md §17): a label is created or
+    // disposed only when this row's lap count changes, otherwise its text is reassigned.
+    while (parts.LapLabels.Count > laps.Count)
+    {
+      IconTextLabel surplus = parts.LapLabels[^1];
+      parts.LapLabels.RemoveAt(parts.LapLabels.Count - 1);
+      parts.LapsPanel.Controls.Remove(surplus);
+      surplus.Dispose();
+    }
+    while (parts.LapsPanel.RowStyles.Count > parts.LapLabels.Count)
+    {
+      parts.LapsPanel.RowStyles.RemoveAt(parts.LapsPanel.RowStyles.Count - 1);
+    }
+
+    for (int i = 0; i < laps.Count; i++)
+    {
+      if (i >= parts.LapLabels.Count)
+      {
+        IconTextLabel lapLabel = new(_rowIcons)
+        {
+          Dock = DockStyle.Fill,
+          Font = _rowFont,
+          AutoSize = true,
+          Margin = new Padding(0, 0, 0, Palette.SpacingXs),
+        };
+        if (ClientSize.Width > 1)
+        {
+          lapLabel.MaximumSize = new Size(Math.Max(1, RowTextWidth() - LapIndentWidth()), 0);
+        }
+        parts.LapLabels.Add(lapLabel);
+        parts.LapsPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        parts.LapsPanel.Controls.Add(lapLabel, 0, i);
+      }
+      parts.LapLabels[i].Text = RecordsListControl.FormatLapRow(laps[i]);
+      parts.LapLabels[i].ForeColor = Palette.Text(_dark);
+    }
+  }
+
+  private int LapIndentWidth() => (int)Math.Ceiling(Palette.SpacingLg * (DeviceDpi / 96f));
+
   private void SetOperationInProgress(bool operationInProgress)
   {
     _operationInProgress = operationInProgress;
@@ -272,6 +425,8 @@ internal sealed class ManageRecordsForm : Form
     foreach (RecordRowParts parts in _rows)
     {
       parts.Delete.Enabled = !_operationInProgress;
+      bool loading = parts.Toggle.Tag is long id && _loadingLapRecordIds.Contains(id);
+      parts.Toggle.Enabled = !_operationInProgress && !loading;
     }
   }
 
@@ -367,6 +522,17 @@ internal sealed class ManageRecordsForm : Form
           TextFormatFlags.NoPadding | TextFormatFlags.SingleLine
         )
         .Width + (int)Math.Ceiling(Palette.SpacingMd * 2 * scale);
+    int toggleButtonWidth =
+      TextRenderer
+        .MeasureText(
+          ExpandedGlyph,
+          Font,
+          Size.Empty,
+          TextFormatFlags.NoPadding | TextFormatFlags.SingleLine
+        )
+        .Width
+      + (int)Math.Ceiling(Palette.SpacingMd * 2 * scale)
+      + (int)Math.Ceiling(Palette.SpacingSm * scale);
     int rootChrome = (int)
       Math.Ceiling((Palette.SpacingLg * 2 + SystemInformation.VerticalScrollBarWidth) * scale);
     return Math.Max(
@@ -374,6 +540,7 @@ internal sealed class ManageRecordsForm : Form
       ClientSize.Width
         - rootChrome
         - deleteButtonWidth
+        - toggleButtonWidth
         - (int)Math.Ceiling((Palette.SpacingSm * 3 + 2) * scale)
     );
   }
@@ -381,9 +548,14 @@ internal sealed class ManageRecordsForm : Form
   private void ConstrainRecordDetails()
   {
     Size maximum = new(RowTextWidth(), 0);
+    Size lapMaximum = new(Math.Max(1, RowTextWidth() - LapIndentWidth()), 0);
     foreach (RecordRowParts parts in _rows)
     {
       parts.Details.MaximumSize = maximum;
+      foreach (IconTextLabel lapLabel in parts.LapLabels)
+      {
+        lapLabel.MaximumSize = lapMaximum;
+      }
     }
   }
 
@@ -416,7 +588,8 @@ internal sealed class ManageRecordsForm : Form
       Id: 0,
       StartTimestamp: 0,
       EndTimestamp: 0,
-      ElapsedMinutes: WorstCaseElapsedMinutes
+      ElapsedMinutes: WorstCaseElapsedMinutes,
+      LapCount: 1
     );
     int rowTextWidth = IconTextLayout
       .MeasureSingleLine(RecordsListControl.FormatRecordRow(worstCase), scaledRowFont)
@@ -424,10 +597,24 @@ internal sealed class ManageRecordsForm : Form
     int rowWidth =
       rowTextWidth
       + ButtonWidth("Delete")
-      // Three SpacingSm gaps and the 2px border, plus one more SpacingSm of slack: the row's real
-      // cell padding and rounding come out a few pixels wider than the analytic sum, and a budget
-      // that is short by even one pixel wraps the duration of every ordinary row.
-      + (int)Math.Ceiling((Palette.SpacingSm * 4 + 2) * scale);
+      + ButtonWidth(ExpandedGlyph)
+      // Four SpacingSm gaps (one more than before, for the toggle column) and the 2px border, plus
+      // one more SpacingSm of slack: the row's real cell padding and rounding come out a few pixels
+      // wider than the analytic sum, and a budget that is short by even one pixel wraps the
+      // duration of every ordinary row.
+      + (int)Math.Ceiling((Palette.SpacingSm * 5 + 2) * scale);
+    // A worst-case lap detail row, indented under an expanded record, must also fit without
+    // wrapping.
+    Lap worstCaseLap = new(
+      Id: 999,
+      StartTimestamp: 0,
+      EndTimestamp: 0,
+      ElapsedMinutes: WorstCaseElapsedMinutes
+    );
+    int lapRowWidth =
+      IconTextLayout
+        .MeasureSingleLine(RecordsListControl.FormatLapRow(worstCaseLap), scaledRowFont)
+        .Width + (int)Math.Ceiling(Palette.SpacingLg * scale);
     int headerWidth =
       TextWidth("Manage Records", scaledBodyFont) + ButtonWidth("Clear All Records");
     int paginationWidth =
@@ -440,11 +627,25 @@ internal sealed class ManageRecordsForm : Form
       + (int)Math.Ceiling(Palette.SpacingSm * 3 * scale);
     int rootChrome = (int)
       Math.Ceiling((Palette.SpacingLg * 2 + SystemInformation.VerticalScrollBarWidth) * scale);
-    return Math.Max(Math.Max(rowWidth, headerWidth), paginationWidth) + rootChrome;
+    return Math.Max(Math.Max(Math.Max(rowWidth, headerWidth), paginationWidth), lapRowWidth)
+      + rootChrome;
   }
 
   private RecordRowParts CreateRecordRow()
   {
+    Button toggleButton = ButtonFactory.Create(CollapsedGlyph, Palette.CancelButton);
+    toggleButton.Anchor = AnchorStyles.Left;
+    toggleButton.Margin = new Padding(0, 0, Palette.SpacingSm, 0);
+    toggleButton.AccessibleName = "Show laps";
+    // The row is reused for different records, so the id lives in Tag instead of a captured local.
+    toggleButton.Click += async (sender, _) =>
+    {
+      if (sender is Button { Tag: long id })
+      {
+        await ToggleLapsAsync(id);
+      }
+    };
+
     IconTextLabel details = new(_rowIcons)
     {
       Dock = DockStyle.Fill,
@@ -461,7 +662,6 @@ internal sealed class ManageRecordsForm : Form
     Button deleteButton = ButtonFactory.Create("Delete", Palette.StopButton);
     deleteButton.Anchor = AnchorStyles.Right;
     deleteButton.Margin = new Padding(Palette.SpacingSm, 0, 0, 0);
-    // The row is reused for different records, so the id lives in Tag instead of a captured local.
     deleteButton.Click += async (sender, _) =>
     {
       if (sender is Button { Tag: long id })
@@ -469,6 +669,20 @@ internal sealed class ManageRecordsForm : Form
         await DeleteRecordAsync(id);
       }
     };
+
+    // Holds this record's lap rows, indented, below the details/delete line. Hidden until
+    // expanded; rows within it are pooled the same way the record rows themselves are.
+    TableLayoutPanel lapsPanel = new()
+    {
+      Dock = DockStyle.Top,
+      AutoSize = true,
+      AutoSizeMode = AutoSizeMode.GrowAndShrink,
+      ColumnCount = 1,
+      Padding = new Padding(Palette.SpacingLg, Palette.SpacingXs, 0, 0),
+      Margin = new Padding(0),
+      Visible = false,
+    };
+    lapsPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
 
     TableLayoutPanel content = new()
     {
@@ -479,16 +693,21 @@ internal sealed class ManageRecordsForm : Form
       Dock = DockStyle.Top,
       AutoSize = true,
       AutoSizeMode = AutoSizeMode.GrowAndShrink,
-      ColumnCount = 2,
-      RowCount = 1,
+      ColumnCount = 3,
+      RowCount = 2,
       Padding = new Padding(Palette.SpacingSm),
       Margin = new Padding(0),
     };
+    content.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
     content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
     content.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
     content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-    content.Controls.Add(details, 0, 0);
-    content.Controls.Add(deleteButton, 1, 0);
+    content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+    content.Controls.Add(toggleButton, 0, 0);
+    content.Controls.Add(details, 1, 0);
+    content.Controls.Add(deleteButton, 2, 0);
+    content.Controls.Add(lapsPanel, 0, 1);
+    content.SetColumnSpan(lapsPanel, 3);
 
     Panel row = new()
     {
@@ -499,17 +718,20 @@ internal sealed class ManageRecordsForm : Form
       Padding = new Padding(1),
     };
     row.Controls.Add(content);
-    return new RecordRowParts(row, content, details, deleteButton);
+    return new RecordRowParts(row, content, details, deleteButton, toggleButton, lapsPanel, []);
   }
 
   private void ShowRecordInRow(RecordRowParts parts, StopwatchRecord record)
   {
     parts.Details.Text = RecordsListControl.FormatRecordRow(record);
     parts.Delete.Tag = record.Id;
+    parts.Toggle.Tag = record.Id;
+    parts.Toggle.Visible = record.LapCount > 0;
     // Colors are reapplied on every show so a light/dark switch (which rebuilds) recolors reused rows.
     parts.Row.BackColor = Palette.Border(_dark);
     parts.Content.BackColor = Palette.RowBackground(_dark);
     parts.Details.ForeColor = Palette.Text(_dark);
+    ApplyExpansionToRow(parts, record.Id);
   }
 
   private void ApplyTheme()
@@ -520,11 +742,19 @@ internal sealed class ManageRecordsForm : Form
     _pageLabel.ForeColor = Palette.MutedText(_dark);
   }
 
-  /// <summary>The controls of one record row, kept together so the row can be reused for another record.</summary>
+  /// <summary>
+  /// The controls of one record row, kept together so the row can be reused for another record.
+  /// <see cref="LapLabels"/> is the pooled set of lap detail labels currently shown inside
+  /// <see cref="LapsPanel"/> — a mutable list, even though the record itself is immutable, so it
+  /// can be grown or shrunk in place as this row is reused for records with different lap counts.
+  /// </summary>
   private sealed record RecordRowParts(
     Panel Row,
     TableLayoutPanel Content,
     IconTextLabel Details,
-    Button Delete
+    Button Delete,
+    Button Toggle,
+    TableLayoutPanel LapsPanel,
+    List<IconTextLabel> LapLabels
   );
 }

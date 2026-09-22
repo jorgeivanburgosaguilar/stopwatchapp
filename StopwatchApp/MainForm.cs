@@ -683,12 +683,22 @@ public sealed class MainForm : Form
       _stopwatchControl.Timer.Records,
       _stopwatchControl.Timer.DeleteRecordAsync,
       _stopwatchControl.Timer.ClearRecordsAsync,
+      _stopwatchControl.Timer.GetRecordLapsAsync,
       _appIcon
     )
     {
       DarkMode = Application.IsDarkModeEnabled,
     };
-    form.FormClosed += (_, _) => _manageRecordsForm = null;
+    form.FormClosed += (_, _) =>
+    {
+      _manageRecordsForm = null;
+      // Closing an owned, non-modal window does not reliably hand activation back to its owner —
+      // most consistently reproducible after a modal confirm dialog (Delete/Clear All) has itself
+      // opened and closed inside this window, which seems to confuse Windows' owner-chain
+      // activation restoration. Reclaim it explicitly so the main window doesn't end up sitting,
+      // deactivated, behind whatever window last had focus.
+      Activate();
+    };
     _manageRecordsForm = form;
     form.Show(this);
   }

@@ -88,4 +88,18 @@ public sealed class MainFormLayoutTests
     Assert.True(worstRow < budget);
     Assert.True(longerRow > worstRow);
   }
+
+  [Fact]
+  public void ManageRecordsWidth_FitsAWorstCaseIndentedLapRow()
+  {
+    using Font font = Typography.CreateMonospaceBodyFont();
+    int budget = ManageRecordsForm.RequiredClientWidth(96, totalRecordCount: 1);
+    Lap worstLap = new(999, 0, 0, ManageRecordsForm.WorstCaseElapsedMinutes);
+
+    int worstLapRow =
+      IconTextLayout.MeasureSingleLine(RecordsListControl.FormatLapRow(worstLap), font).Width
+      + Palette.SpacingLg;
+
+    Assert.True(worstLapRow < budget);
+  }
 }

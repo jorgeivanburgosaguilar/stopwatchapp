@@ -87,11 +87,19 @@ public sealed class Database : IStopwatchStore, IAsyncDisposable
   }
 
   /// <inheritdoc />
-  public async Task<long> SaveRecordAsync(long startTimestamp, long endTimestamp, long elapsedMs)
+  public async Task<long> SaveRecordAsync(
+    long startTimestamp,
+    long endTimestamp,
+    long elapsedMs,
+    IReadOnlyList<Lap> laps
+  )
   {
     try
     {
       SqliteConnection connection = RequireConnection();
+
+      await using SqliteTransaction transaction = (SqliteTransaction)
+        await connection.BeginTransactionAsync().ConfigureAwait(false);
 
       await connection
         .ExecuteAsync(
@@ -104,13 +112,40 @@ public sealed class Database : IStopwatchStore, IAsyncDisposable
             startTimestamp,
             endTimestamp,
             elapsedMinutes = elapsedMs / 60000,
-          }
+          },
+          transaction: transaction
         )
         .ConfigureAwait(false);
 
-      return await connection
-        .ExecuteScalarAsync<long>("SELECT last_insert_rowid();")
+      long recordId = await connection
+        .ExecuteScalarAsync<long>("SELECT last_insert_rowid();", transaction: transaction)
         .ConfigureAwait(false);
+
+      if (laps.Count > 0)
+      {
+        await connection
+          .ExecuteAsync(
+            """
+            INSERT INTO record_laps
+              (recordId, lapNumber, startTimestamp, endTimestamp, elapsedMinutes)
+            VALUES
+              (@recordId, @lapNumber, @startTimestamp, @endTimestamp, @elapsedMinutes);
+            """,
+            laps.Select(lap => new
+            {
+              recordId,
+              lapNumber = lap.Id,
+              startTimestamp = lap.StartTimestamp,
+              endTimestamp = lap.EndTimestamp,
+              elapsedMinutes = lap.ElapsedMinutes,
+            }),
+            transaction: transaction
+          )
+          .ConfigureAwait(false);
+      }
+
+      await transaction.CommitAsync().ConfigureAwait(false);
+      return recordId;
     }
     catch (Exception)
     {
@@ -128,13 +163,40 @@ public sealed class Database : IStopwatchStore, IAsyncDisposable
       IEnumerable<StopwatchRecord> records = await connection
         .QueryAsync<StopwatchRecord>(
           """
-          SELECT id, startTimestamp, endTimestamp, elapsedMinutes
-          FROM records
-          ORDER BY id DESC;
+          SELECT r.id, r.startTimestamp, r.endTimestamp, r.elapsedMinutes,
+                 (SELECT COUNT(*) FROM record_laps WHERE recordId = r.id) AS lapCount
+          FROM records r
+          ORDER BY r.id DESC;
           """
         )
         .ConfigureAwait(false);
       return records.AsList();
+    }
+    catch (Exception)
+    {
+      return [];
+    }
+  }
+
+  /// <inheritdoc />
+  public async Task<IReadOnlyList<Lap>> GetLapsAsync(long recordId)
+  {
+    try
+    {
+      SqliteConnection connection = RequireConnection();
+
+      IEnumerable<Lap> laps = await connection
+        .QueryAsync<Lap>(
+          """
+          SELECT lapNumber AS id, startTimestamp, endTimestamp, elapsedMinutes
+          FROM record_laps
+          WHERE recordId = @recordId
+          ORDER BY lapNumber DESC;
+          """,
+          new { recordId }
+        )
+        .ConfigureAwait(false);
+      return laps.AsList();
     }
     catch (Exception)
     {
@@ -148,9 +210,19 @@ public sealed class Database : IStopwatchStore, IAsyncDisposable
     try
     {
       SqliteConnection connection = RequireConnection();
+      await using SqliteTransaction transaction = (SqliteTransaction)
+        await connection.BeginTransactionAsync().ConfigureAwait(false);
       await connection
-        .ExecuteAsync("DELETE FROM records WHERE id = @id;", new { id })
+        .ExecuteAsync(
+          "DELETE FROM record_laps WHERE recordId = @id;",
+          new { id },
+          transaction: transaction
+        )
         .ConfigureAwait(false);
+      await connection
+        .ExecuteAsync("DELETE FROM records WHERE id = @id;", new { id }, transaction: transaction)
+        .ConfigureAwait(false);
+      await transaction.CommitAsync().ConfigureAwait(false);
     }
     catch (Exception)
     {
@@ -164,7 +236,15 @@ public sealed class Database : IStopwatchStore, IAsyncDisposable
     try
     {
       SqliteConnection connection = RequireConnection();
-      await connection.ExecuteAsync("DELETE FROM records;").ConfigureAwait(false);
+      await using SqliteTransaction transaction = (SqliteTransaction)
+        await connection.BeginTransactionAsync().ConfigureAwait(false);
+      await connection
+        .ExecuteAsync("DELETE FROM record_laps;", transaction: transaction)
+        .ConfigureAwait(false);
+      await connection
+        .ExecuteAsync("DELETE FROM records;", transaction: transaction)
+        .ConfigureAwait(false);
+      await transaction.CommitAsync().ConfigureAwait(false);
     }
     catch (Exception)
     {
@@ -274,63 +354,6 @@ public sealed class Database : IStopwatchStore, IAsyncDisposable
   }
 
   /// <inheritdoc />
-  public async Task SaveWindowPositionAsync(int x, int y)
-  {
-    try
-    {
-      SqliteConnection connection = RequireConnection();
-
-      await connection
-        .ExecuteAsync(
-          """
-          INSERT INTO window_position (id, x, y)
-          VALUES (1, @x, @y)
-          ON CONFLICT(id) DO UPDATE SET
-            x = excluded.x,
-            y = excluded.y;
-          """,
-          new { x, y }
-        )
-        .ConfigureAwait(false);
-    }
-    catch (Exception)
-    {
-      // Deliberate per AGENTS.md §9: a failed write must never surface to the UI.
-    }
-  }
-
-  /// <inheritdoc />
-  public async Task<(int X, int Y)?> LoadWindowPositionAsync()
-  {
-    try
-    {
-      SqliteConnection connection = RequireConnection();
-
-      WindowPositionRow? row = await connection
-        .QuerySingleOrDefaultAsync<WindowPositionRow>(
-          """
-          SELECT x, y
-          FROM window_position
-          WHERE id = 1;
-          """
-        )
-        .ConfigureAwait(false);
-      if (row is null)
-      {
-        return null;
-      }
-
-      return ((int)row.X, (int)row.Y);
-    }
-    catch (Exception)
-    {
-      // Deliberate per AGENTS.md §9: a corrupt or unreadable saved position returns null rather
-      // than throwing.
-      return null;
-    }
-  }
-
-  /// <inheritdoc />
   public async ValueTask DisposeAsync()
   {
     if (_connection is not null)
@@ -353,7 +376,12 @@ public sealed class Database : IStopwatchStore, IAsyncDisposable
   /// <summary>
   /// The raw <c>paused_session</c> row shape, used only to receive Dapper's column mapping before
   /// <see cref="LapsJson"/> is deserialized into <see cref="PausedSession.Laps"/>. Not part of the
-  /// public data model — <see cref="PausedSession"/> is.
+  /// public data model — <see cref="PausedSession"/> is. Every column is <see cref="long"/>, not a
+  /// narrower integer type, because SQLite's <c>INTEGER</c> affinity always round-trips through
+  /// Microsoft.Data.Sqlite as <see cref="long"/> — Dapper's constructor-based record materialization
+  /// requires an exact parameter-type match against the column's runtime type, not just a name match
+  /// (see AGENTS.md §9). Any future row DTO that receives an <c>INTEGER</c> column must follow the
+  /// same rule, narrowing afterward if a smaller type is actually needed.
   /// </summary>
   private sealed record PausedSessionRow(
     long ElapsedTime,
@@ -363,16 +391,4 @@ public sealed class Database : IStopwatchStore, IAsyncDisposable
     long LastLapTimestamp,
     long PausedAt
   );
-
-  /// <summary>
-  /// The raw <c>window_position</c> row shape, used only to receive Dapper's column mapping
-  /// before it is narrowed to <c>int</c> and projected into the
-  /// <see cref="IStopwatchStore.LoadWindowPositionAsync"/> tuple. <c>long</c>, not <c>int</c>,
-  /// because SQLite's <c>INTEGER</c> affinity always round-trips through Microsoft.Data.Sqlite as
-  /// <see cref="long"/> — Dapper's constructor-based record materialization requires an exact
-  /// parameter-type match against the column's runtime type, not just a name match (see AGENTS.md
-  /// §9), the same reason every column in <see cref="PausedSessionRow"/> is
-  /// <see cref="long"/>.
-  /// </summary>
-  private sealed record WindowPositionRow(long X, long Y);
 }

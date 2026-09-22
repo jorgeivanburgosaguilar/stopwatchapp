@@ -196,7 +196,7 @@ public sealed class StopwatchTimer : IDisposable
       if (!isDuplicate)
       {
         await _store
-          .SaveRecordAsync(_sessionStartMs, endTimestamp, ElapsedMs)
+          .SaveRecordAsync(_sessionStartMs, endTimestamp, ElapsedMs, [.. _laps])
           .ConfigureAwait(false);
         await ReloadRecordsAsync().ConfigureAwait(false);
       }
@@ -226,6 +226,15 @@ public sealed class StopwatchTimer : IDisposable
     await _store.DeleteRecordAsync(id).ConfigureAwait(false);
     await ReloadRecordsAsync().ConfigureAwait(false);
   }
+
+  /// <summary>
+  /// Loads the laps saved for one persisted record, newest first. Routes through the timer-owned
+  /// store boundary so UI components never call <see cref="IStopwatchStore"/> directly (AGENTS.md
+  /// §3.1).
+  /// </summary>
+  /// <param name="recordId">The record's id, as it appears in <see cref="Records"/>.</param>
+  public Task<IReadOnlyList<Lap>> GetRecordLapsAsync(long recordId) =>
+    _store.GetLapsAsync(recordId);
 
   /// <summary>
   /// The tick body: recomputes <see cref="ElapsedMs"/> from the wall clock and raises

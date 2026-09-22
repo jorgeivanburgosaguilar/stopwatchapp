@@ -36,6 +36,10 @@ project-management, invoicing, monitoring, or cloud-sync product.
   autosaved at the interval configured in `settings.json` (five minutes by default); an explicit
   pause also saves immediately. Restoring either snapshot intentionally returns the session in the
   paused state.
+- Persist every session's laps alongside its record when it is stopped, in a master-detail
+  relationship (one record owns zero or more laps). The records manager lists each record's laps,
+  newest first, behind a per-record expand/collapse toggle; the main window's five-record preview
+  stays flat.
 - Ask for confirmation before Stop once a session has reached the threshold configured in
   `settings.json` (`StopConfirmationAfterMinutes`, five minutes by default, `0` disables): the clock
   pauses, a dialog asks, Stop proceeds on confirm and a running clock resumes on cancel.
@@ -206,14 +210,16 @@ refactor. Their authoritative declarations are in
 for exact signatures rather than duplicating them here.
 
 `IStopwatchStore` is the §9 data-access boundary. `Database` implements it and `StopwatchTimer`
-depends only on it, so the state machine remains independently testable. The retained window
-position methods are migration-era persistence surface; the current UI deliberately does not use
-them.
+depends only on it, so the state machine remains independently testable. `SaveRecordAsync` takes
+the session's laps and persists both atomically; `GetLapsAsync` loads one record's laps, newest
+first. There is no window-position persistence surface — it was removed with the schema rewrite in
+§9 (see §10.6).
 
 `StopwatchTimer` is UI-free and owns the timer state, laps, and newest-first records collection.
 Its asynchronous method suffixes are load-bearing: pausing persists a snapshot and stopping awaits
 a record write, so callers must await them and must never replace that flow with `.Wait()` or
-`.Result` (forbidden by §5).
+`.Result` (forbidden by §5). `GetRecordLapsAsync` routes `ManageRecordsForm`'s lap-detail loads
+through the same store boundary, so UI components never call `IStopwatchStore` directly.
 
 **Clock and tick separation.** The constructor takes a `TimeProvider`, and the tick body reads
 `_time.GetUtcNow().ToUnixTimeMilliseconds()` — identical to `DateTimeOffset.UtcNow` under
@@ -453,8 +459,8 @@ The authoritative transition implementation is in
   the previous lap, not a cumulative duration.
 - Stopping clears the recovery snapshot through the same persistence gate used by autosave. If
   laps exist, it adds any remaining positive partial split. A positive session is saved once,
-  guarded against duplicating the newest record after recovery, and the records collection is
-  reloaded.
+  together with its laps in the same atomic write, guarded against duplicating the newest record
+  (and its laps) after recovery, and the records collection is reloaded.
 - **Stop confirmation.** `StopwatchControl.StopTimerAsync` is the single gate every Stop entry point
   (button, `Enter`, all tray-menu variants) passes through. When
   `StopwatchControl.RequiresStopConfirmation` is true — threshold above zero, a session is running
@@ -539,6 +545,15 @@ Rules:
   (`ManageRecordsForm.WorstCaseElapsedMinutes`), not a function of the page shown; a longer row wraps
   to a second line instead of widening the window. Its header also has a confirmed `Clear All Records` action;
   the main card's own Clear All shortcut remains.
+- **Master-detail laps.** Each record row that has saved laps (`StopwatchRecord.LapCount > 0`)
+  shows a `▸`/`▾` expand toggle to its left; expanding reveals that record's laps beneath it,
+  indented, newest first, in the same row template the live laps panel uses (§8.5's row text
+  templates below). A record with no laps shows no toggle. Laps are fetched lazily on first expand
+  through `StopwatchTimer.GetRecordLapsAsync` and cached per record id; expansion state and the
+  cache survive a page turn and a theme flip, and are reset (expansion pruned, cache cleared) only
+  when the record set itself changes (a save, delete, or clear). The window's fixed height does not
+  grow when a record expands — the scrollable records host absorbs it, exactly as it already does
+  for a page of more rows than fit.
 - **`ButtonFactory`:** every button in the app (`Controls/ButtonFactory.cs`) is a stock
   `Button` with `FlatStyle.Flat` and a `Palette` base/hover/pressed triplet applied to
   `BackColor`/`FlatAppearance.MouseOverBackColor`/`MouseDownBackColor`. This replaced an
@@ -607,11 +622,12 @@ cost. Parameters use SQLite's `@name` form (Dapper does not recognize the `$name
 this layer was introduced).
 
 The authoritative DDL is migration 1 in `StopwatchApp/Services/SchemaMigrations.cs`, not code run
-unconditionally on every startup. It defines the completed-record table and the single-slot paused
-session table; see "Schema versioning" below.
-
-Migration 2 in the same file adds the single-slot window-position table originally created for
-position persistence (§10.6).
+unconditionally on every startup. It defines the completed-record table, the `record_laps` detail
+table (one record owns zero or more laps, `recordId` referencing `records(id)`, indexed on
+`(recordId, lapNumber DESC)` so a record's laps load newest first without a sort), and the
+single-slot paused-session table; see "Schema versioning" below. There is no `window_position`
+table — the migration-era manual-position persistence surface was removed when this migration was
+rewritten (§10.6).
 
 ### Schema versioning
 
@@ -623,12 +639,13 @@ version stamp, against the ordered, append-only list in `SchemaMigrations.All`:
   `user_version` to that migration's version.
 - **Never edit a shipped migration.** A schema change is always a new entry appended with the next
   version number — editing an existing one silently no-ops on any database that already recorded
-  that version as applied.
-- **Migration 1 keeps `IF NOT EXISTS`; migration 2 onward does not.** Migration 1 reproduces the DDL
-  above verbatim so a database that predates schema versioning (already has both tables, but
-  `user_version = 0`) adopts them as its v1 baseline instead of failing on a duplicate table. Once
-  the version stamp exists, every later migration is guaranteed to run exactly once, so plain
-  `CREATE TABLE` / `ALTER TABLE` is correct and `IF NOT EXISTS` would only hide an ordering bug.
+  that version as applied. Migration 1 was rewritten once, as a deliberate, one-time exception, to
+  fold the app's entire pre-release schema history (the original two-table baseline, then the
+  now-removed `window_position` table) into the laps-detail baseline below — justified only because
+  no shipped database held data to preserve at the time, and never to be repeated. Every future
+  schema change is a new, append-only migration.
+- `CREATE TABLE`/`CREATE INDEX` in migration 1 use no `IF NOT EXISTS`: the version stamp guarantees
+  each migration runs exactly once, so `IF NOT EXISTS` would only hide an ordering bug.
 - `PRAGMA user_version = N` cannot be parameterized; `N` always comes from the hardcoded `Version` on
   a `Migration`, never user input, so the interpolated statement carries no injection surface (keep
   the comment next to it saying so — this is exactly the shape `CA2100` flags).
@@ -637,10 +654,11 @@ version stamp, against the ordered, append-only list in `SchemaMigrations.All`:
 
 The deliberately minimal API is declared in `StopwatchApp/Services/IStopwatchStore.cs` and
 implemented in `StopwatchApp/Services/Database.cs`. There is no record-update or range-query
-surface. It supports inserting and loading newest-first records, deleting one or all records,
-single-slot paused-session persistence, and the retained migration-compatible window-position
-methods that the current UI intentionally does not call. Record insertion floors elapsed
-milliseconds to whole minutes before storage, and an unreadable saved session loads as `null`.
+surface. It supports inserting a record together with its laps atomically, loading newest-first
+records (each with its `LapCount`), loading one record's laps newest first, deleting one or all
+records (cascading their laps), and single-slot paused-session persistence. Record and lap
+insertion floors elapsed milliseconds to whole minutes before storage, and an unreadable saved
+session loads as `null`.
 
 Every storage method is wrapped in try/catch and **swallows errors**: a corrupt or unreadable saved
 session must return `null` rather than throw, and a failed write must never surface an exception to
@@ -786,13 +804,13 @@ and deliberately rejected because the requested behavior is consistent centering
 transition (first launch, tray Open/single left-click, single-instance activation, restore-from-minimize)
 calls the same `PositionWindowCentered()`, unconditionally, with no history or saved state involved.
 
-The `IStopwatchStore.SaveWindowPositionAsync`/`LoadWindowPositionAsync` methods, `Database`'s
-implementation, and the `window_position` table (migration 2, `SchemaMigrations.cs`) all still exist
-but are **no longer called by any application code path** — per this file's own "never edit a
-shipped migration" rule (§9), a released migration is not retroactively removed, so the table stays
-in the schema for any database that has already applied it. `DatabaseTests` still covers this
-persistence machinery directly (it still functions correctly), even though nothing in `MainForm`
-exercises it anymore.
+There is no manual-position persistence surface. An earlier build retained an unused
+`IStopwatchStore.SaveWindowPositionAsync`/`LoadWindowPositionAsync` pair, `Database` implementation,
+and `window_position` table, kept only because a released migration is not retroactively removed.
+That table and both methods were deleted outright when `SchemaMigrations` was rewritten to a single
+v1 baseline for the laps-detail change (§9) — the one-time exception documented there. If manual
+position persistence is ever wanted again, it needs a new migration and a new interface method, not
+a resurrection of the removed one.
 
 ---
 
@@ -836,8 +854,10 @@ contract:
   whole seconds — stopping at 1.9 s stores 1.0 s.
 - A session stopped before its first tick (under 1000 ms) leaves `ElapsedMs == 0`: **no record is
   saved and `OnStop` never fires**.
-- Laps exist only in memory and in the single recovery snapshot; they are not normalized into their
-  own permanent database table.
+- A stopped session's laps are normalized into their own permanent `record_laps` table, owned by
+  their record. Before a session is stopped, laps exist only in memory and in the single
+  in-progress recovery snapshot (`paused_session`'s `lapsJson`) — that snapshot is unrelated to,
+  and cleared independently of, the permanent per-record laps written by `StopAsync`.
 - There is exactly **one** saved-session slot. Pausing or reaching an autosave checkpoint overwrites
   the previous snapshot.
 - Autosave checkpoints are based on accumulated running time and do not pause the timer. Restoring
@@ -944,6 +964,16 @@ xUnit, in a `StopwatchApp.Tests` project.
   owner-managed window that lists all records newest first, paginated at 10 rows per page. Each row
   has a confirmed Delete action; the header has a confirmed Clear All action. Add/edit behavior is
   out of scope, and the main card's Clear All shortcut remains.
+- Lap persistence (§8.3/§9): stopping a session with laps saves them alongside the record; a
+  session stopped with no laps saves none. Stopping twice in a row without restarting persists
+  neither a duplicate record nor duplicate laps (the existing duplicate guard covers both).
+  Deleting a record deletes its laps; Clear All deletes every record's laps.
+- Manage Records master-detail (§8.5): a record with saved laps shows a `▸` expand toggle; a
+  record with none shows no toggle. Expanding flips the toggle to `▾` and lists that record's laps
+  beneath it, indented, newest first (lap 8 above lap 7, and so on down to lap 1), using the same
+  row template as the live laps panel. Collapsing hides them without discarding the fetched laps.
+  Expansion state survives a page turn and a light/dark switch, and the window does not resize when
+  a record expands or collapses. A worst-case (`23:59`) lap row does not wrap.
 - Row icons (§8.5): record and lap rows show the calendar, stopwatch, and hourglass as full-color
   images — in the main window and in Manage Records, in light and dark mode — never as flat
   text-colored glyphs. A row past the sized-for worst case wraps without splitting an icon across
@@ -1019,8 +1049,22 @@ here; do not accumulate dated implementation history.
   change-tracking layer.
 - **Schema migrations remain hand-written and append-only.** `PRAGMA user_version` gives this local
   database a small, deterministic evolution path. Existing migration SQL must never be edited,
-  including the now-unused window-position table, because installed databases may already be
-  stamped with that version.
+  because installed databases may already be stamped with that version. Migration 1 was rewritten
+  once, as a documented one-time exception (§9), to fold the app's entire pre-release schema
+  history — including the removal of the unused `window_position` table — into the laps-detail
+  baseline; that exception does not recur, and every schema change from here on is append-only.
+- **Laps are a master-detail child of records, not a separate flat table.** Each `record_laps` row
+  references its owning `records.id`; `SaveRecordAsync` writes the record and its laps in one
+  transaction so a record is never left without the laps it was stopped with. A flat table keyed
+  only by timestamp was rejected because it would need a second lookup query wherever laps are
+  shown, instead of the direct `recordId` index this schema already needs for
+  `GetLapsAsync`/`DeleteRecordAsync`.
+- **Manage Records loads laps lazily, per record, on first expand — not eagerly for the whole
+  page.** Fetching every visible record's laps up front would multiply Manage Records' database
+  round trips by the page size for a detail most records' rows never show. A per-record cache keyed
+  by id, combined with the same row-pooling `ManageRecordsForm` already uses for its record rows
+  (§17 "Manage Records reuses its row controls"), keeps a re-expand instant and a collapse/expand
+  cycle free of extra queries or control churn.
 - **The data boundary is an interface.** `StopwatchTimer` depends on `IStopwatchStore`, not
   `Database`, so transition tests use one shared in-memory fake while database tests alone touch a
   temporary SQLite file.

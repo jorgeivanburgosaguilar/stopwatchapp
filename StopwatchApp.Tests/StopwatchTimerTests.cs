@@ -174,6 +174,64 @@ public sealed class StopwatchTimerTests
   }
 
   [Fact]
+  public async Task StopAsync_PersistsTheSessionsLapsNewestFirstIncludingTheFinalPartialLap()
+  {
+    FakeStopwatchStore store = new();
+    FakeTimeProvider time = new();
+    StopwatchTimer timer = new(store, time);
+    timer.Start();
+    time.Advance(TimeSpan.FromSeconds(30));
+    timer.Tick();
+    timer.Lap();
+    time.Advance(TimeSpan.FromSeconds(20));
+    timer.Tick();
+
+    await timer.StopAsync();
+
+    long recordId = (await store.GetAllRecordsAsync())[0].Id;
+    IReadOnlyList<Lap> savedLaps = await timer.GetRecordLapsAsync(recordId);
+    Assert.Equal([2, 1], savedLaps.Select(lap => lap.Id));
+  }
+
+  [Fact]
+  public async Task StopAsync_WithNoLaps_PersistsNoLaps()
+  {
+    FakeStopwatchStore store = new();
+    FakeTimeProvider time = new();
+    StopwatchTimer timer = new(store, time);
+    timer.Start();
+    time.Advance(TimeSpan.FromSeconds(5));
+    timer.Tick();
+
+    await timer.StopAsync();
+
+    long recordId = (await store.GetAllRecordsAsync())[0].Id;
+    Assert.Empty(await timer.GetRecordLapsAsync(recordId));
+  }
+
+  [Fact]
+  public async Task StopAsync_CalledTwiceWithoutRestart_PersistsLapsOnce()
+  {
+    FakeStopwatchStore store = new();
+    FakeTimeProvider time = new();
+    StopwatchTimer timer = new(store, time);
+    timer.Start();
+    time.Advance(TimeSpan.FromSeconds(30));
+    timer.Tick();
+    timer.Lap();
+    time.Advance(TimeSpan.FromSeconds(20));
+    timer.Tick();
+
+    await timer.StopAsync();
+    long recordId = (await store.GetAllRecordsAsync())[0].Id;
+    int lapCountAfterFirstStop = (await timer.GetRecordLapsAsync(recordId)).Count;
+
+    await timer.StopAsync();
+
+    Assert.Equal(lapCountAfterFirstStop, (await timer.GetRecordLapsAsync(recordId)).Count);
+  }
+
+  [Fact]
   public async Task StopAsync_BeforeFirstTick_SavesNoRecordAndDoesNotFireOnStop()
   {
     FakeStopwatchStore store = new();
@@ -402,7 +460,7 @@ public sealed class StopwatchTimerTests
   public async Task RestoreAsync_LoadsExistingRecords()
   {
     FakeStopwatchStore store = new();
-    await store.SaveRecordAsync(0, 60_000, 60_000);
+    await store.SaveRecordAsync(0, 60_000, 60_000, []);
     StopwatchTimer timer = new(store, new FakeTimeProvider());
 
     await timer.RestoreAsync();
@@ -414,7 +472,7 @@ public sealed class StopwatchTimerTests
   public async Task ClearRecordsAsync_ClearsTheStoreReloadsRecordsAndFiresRecordsChanged()
   {
     FakeStopwatchStore store = new();
-    await store.SaveRecordAsync(0, 60_000, 60_000);
+    await store.SaveRecordAsync(0, 60_000, 60_000, []);
     StopwatchTimer timer = new(store, new FakeTimeProvider());
     int recordsChangedCount = 0;
     timer.RecordsChanged += () => recordsChangedCount++;
@@ -431,8 +489,8 @@ public sealed class StopwatchTimerTests
   public async Task DeleteRecordAsync_ReloadsRecordsAndFiresRecordsChanged()
   {
     FakeStopwatchStore store = new();
-    long firstId = await store.SaveRecordAsync(0, 60_000, 60_000);
-    long secondId = await store.SaveRecordAsync(1, 120_000, 60_000);
+    long firstId = await store.SaveRecordAsync(0, 60_000, 60_000, []);
+    long secondId = await store.SaveRecordAsync(1, 120_000, 60_000, []);
     StopwatchTimer timer = new(store, new FakeTimeProvider());
     int recordsChangedCount = 0;
     timer.RecordsChanged += () => recordsChangedCount++;

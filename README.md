@@ -13,13 +13,14 @@ Tiny stopwatch built with C#, .NET 10 and WinForms with record keeping and sessi
 - Close-to-tray behavior: the main window is hidden from the taskbar when closed or minimized, and
   a single left click on the tray icon restores it. The tray's own context menu mirrors the valid
   timer actions and is the explicit exit path.
-- Completed sessions are persisted to a local SQLite database. The main window previews the five
-  newest records, and a modeless records manager exposes the full history, paginated ten per page,
-  with confirmed per-record deletion and confirmed clear-all.
+- Completed sessions, together with their laps, are persisted to a local SQLite database. The main
+  window previews the five newest records, and a modeless records manager exposes the full history,
+  paginated ten per page, with confirmed per-record deletion and confirmed clear-all. Each record
+  with saved laps can be expanded in place to show them, newest first.
 - Laps are kept in memory during a session and included in a periodic autosaved snapshot (interval
   configurable in `settings.json`, five minutes by default), plus an immediate save on pause.
   Restoring a snapshot always resumes in the paused state, so time spent while the app was closed
-  is never counted.
+  is never counted. Once a session is stopped, its laps are saved permanently alongside its record.
 - Stop asks for confirmation once a session has run for a configurable time
   (`StopConfirmationAfterMinutes` in `settings.json`, five minutes by default, `0` to disable): the
   clock pauses while asking and resumes if you cancel.
@@ -41,7 +42,7 @@ Tiny stopwatch built with C#, .NET 10 and WinForms with record keeping and sessi
   switching and `PerMonitorV2` high-DPI awareness.
 - **Storage:** a single local SQLite file at `%LOCALAPPDATA%\StopwatchApp\stopwatch.db`, created on
   first run.
-- **Testing:** xUnit, 128 tests covering timer state transitions, formatting, layout helpers, and
+- **Testing:** xUnit, 168 tests covering timer state transitions, formatting, layout helpers, and
   SQLite persistence.
 
 ## Building

@@ -11,32 +11,46 @@ namespace StopwatchApp.Tests;
 internal sealed class FakeStopwatchStore : IStopwatchStore
 {
   private readonly List<StopwatchRecord> _records = [];
+  private readonly Dictionary<long, IReadOnlyList<Lap>> _laps = [];
   private PausedSession? _pausedSession;
-  private (int X, int Y)? _windowPosition;
 
   public TaskCompletionSource? PausedSessionSaveStarted { get; init; }
 
   public TaskCompletionSource? PausedSessionSaveGate { get; init; }
 
-  public Task<long> SaveRecordAsync(long startTimestamp, long endTimestamp, long elapsedMs)
+  public Task<long> SaveRecordAsync(
+    long startTimestamp,
+    long endTimestamp,
+    long elapsedMs,
+    IReadOnlyList<Lap> laps
+  )
   {
     long id = _records.Count + 1;
-    _records.Insert(0, new StopwatchRecord(id, startTimestamp, endTimestamp, elapsedMs / 60000));
+    _records.Insert(
+      0,
+      new StopwatchRecord(id, startTimestamp, endTimestamp, elapsedMs / 60000, laps.Count)
+    );
+    _laps[id] = [.. laps];
     return Task.FromResult(id);
   }
 
   public Task<IReadOnlyList<StopwatchRecord>> GetAllRecordsAsync() =>
     Task.FromResult<IReadOnlyList<StopwatchRecord>>([.. _records]);
 
+  public Task<IReadOnlyList<Lap>> GetLapsAsync(long recordId) =>
+    Task.FromResult(_laps.TryGetValue(recordId, out IReadOnlyList<Lap>? laps) ? laps : []);
+
   public Task DeleteRecordAsync(long id)
   {
     _records.RemoveAll(record => record.Id == id);
+    _laps.Remove(id);
     return Task.CompletedTask;
   }
 
   public Task ClearAllRecordsAsync()
   {
     _records.Clear();
+    _laps.Clear();
     return Task.CompletedTask;
   }
 
@@ -58,12 +72,4 @@ internal sealed class FakeStopwatchStore : IStopwatchStore
     _pausedSession = null;
     return Task.CompletedTask;
   }
-
-  public Task SaveWindowPositionAsync(int x, int y)
-  {
-    _windowPosition = (x, y);
-    return Task.CompletedTask;
-  }
-
-  public Task<(int X, int Y)?> LoadWindowPositionAsync() => Task.FromResult(_windowPosition);
 }

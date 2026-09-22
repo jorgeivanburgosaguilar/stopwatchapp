@@ -18,33 +18,37 @@ internal sealed record Migration(long Version, string Sql);
 /// transaction.
 /// </summary>
 /// <remarks>
-/// <para>
 /// <b>Never edit a shipped migration.</b> Once a migration has been released, its <see cref="Migration.Sql"/>
 /// is frozen — a schema change is always a new entry appended with the next version number, never an
 /// edit to an existing one. Editing a shipped migration would silently no-op on any database that
-/// already recorded that version as applied.
-/// </para>
-/// <para>
-/// <b>Migration 1 is the exception to "no <c>IF NOT EXISTS</c>".</b> It reproduces the two
-/// <c>CREATE TABLE IF NOT EXISTS</c> statements this project shipped before schema versioning
-/// existed, verbatim, so that a pre-existing database (which already has both tables but carries
-/// <c>user_version = 0</c>) adopts them as its version-1 baseline instead of failing on a duplicate
-/// table. Every migration from version 2 onward uses plain <c>CREATE TABLE</c> / <c>ALTER TABLE</c> —
-/// the version stamp guarantees each one runs exactly once, and an <c>IF NOT EXISTS</c> there would
-/// only hide an ordering bug.
-/// </para>
+/// already recorded that version as applied. Migration 1 below was rewritten as a one-time exception
+/// to that rule: it replaces the app's entire pre-release schema history (the original two-table
+/// baseline plus the now-removed <c>window_position</c> table) with the laps-detail baseline, because
+/// no shipped database existed with data to preserve at the time of the rewrite. Every future schema
+/// change is a new, append-only migration, never another edit to migration 1.
 /// </remarks>
 internal static class SchemaMigrations
 {
   private const string V1CreateTables = """
-    CREATE TABLE IF NOT EXISTS records (
+    CREATE TABLE records (
       id             INTEGER PRIMARY KEY AUTOINCREMENT,
       startTimestamp INTEGER NOT NULL,
       endTimestamp   INTEGER NOT NULL,
       elapsedMinutes INTEGER NOT NULL
     );
 
-    CREATE TABLE IF NOT EXISTS paused_session (
+    CREATE TABLE record_laps (
+      id             INTEGER PRIMARY KEY AUTOINCREMENT,
+      recordId       INTEGER NOT NULL REFERENCES records(id) ON DELETE CASCADE,
+      lapNumber      INTEGER NOT NULL,
+      startTimestamp INTEGER NOT NULL,
+      endTimestamp   INTEGER NOT NULL,
+      elapsedMinutes INTEGER NOT NULL
+    );
+
+    CREATE INDEX record_laps_recordId ON record_laps (recordId, lapNumber DESC);
+
+    CREATE TABLE paused_session (
       id               INTEGER PRIMARY KEY CHECK (id = 1),
       elapsedTime      INTEGER NOT NULL,
       sessionStartTime INTEGER NOT NULL,
@@ -55,21 +59,10 @@ internal static class SchemaMigrations
     );
     """;
 
-  // AGENTS.md §9/§10.6 — retained schema for the former manual-position experiment. No IF NOT EXISTS:
-  // only migration 1 needs it (see the type-level remarks above).
-  private const string V2CreateWindowPositionTable = """
-    CREATE TABLE window_position (
-      id INTEGER PRIMARY KEY CHECK (id = 1),
-      x  INTEGER NOT NULL,
-      y  INTEGER NOT NULL
-    );
-    """;
-
   /// <summary>
   /// Every migration, in ascending, consecutive <see cref="Migration.Version"/> order.
   /// </summary>
-  internal static IReadOnlyList<Migration> All { get; } =
-  [new Migration(1, V1CreateTables), new Migration(2, V2CreateWindowPositionTable)];
+  internal static IReadOnlyList<Migration> All { get; } = [new Migration(1, V1CreateTables)];
 
   /// <summary>
   /// The schema version a freshly initialized database ends up at — the highest version in
