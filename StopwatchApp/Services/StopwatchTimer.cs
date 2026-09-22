@@ -58,6 +58,33 @@ public sealed class StopwatchTimer : IDisposable
   /// <summary>Gets the current session's laps, newest first.</summary>
   public IReadOnlyList<Lap> Laps => _laps;
 
+  /// <summary>
+  /// Gets the elapsed time of the lap split currently in progress, in milliseconds — the time
+  /// since the last <see cref="Lap"/> press. This is a pure derivation of <see cref="ElapsedMs"/>
+  /// and <c>_lastLapElapsed</c> (no field of its own is written for it), so it inherits
+  /// <see cref="ElapsedMs"/>'s tick-only, wall-clock-anchored semantics (AGENTS.md §8.1/§12): it
+  /// freezes whenever <see cref="ElapsedMs"/> freezes (pause) and excludes paused time (a resumed
+  /// <see cref="Start"/> re-anchors the clock). <see cref="Lap"/> resets it to <c>0</c> by
+  /// advancing <c>_lastLapElapsed</c> to the current <see cref="ElapsedMs"/>.
+  /// </summary>
+  public long LapElapsedMs => ElapsedMs - _lastLapElapsed;
+
+  /// <summary>
+  /// Gets a value indicating whether a lap split is currently in progress — i.e. whether
+  /// <see cref="LapElapsedMs"/> should be shown. True only while a session is running or paused
+  /// and at least one lap has been recorded; false at idle and after <see cref="StopAsync"/>, even
+  /// though <see cref="Laps"/> itself is not cleared until the next fresh <see cref="Start"/>.
+  /// </summary>
+  public bool HasActiveLapSplit => (IsRunning || IsPaused) && _laps.Count > 0;
+
+  /// <summary>
+  /// Gets the 1-based number of the lap split currently in progress — one more than
+  /// <see cref="Laps"/>'s count, since that many laps have already been recorded. Meaningful only
+  /// when <see cref="HasActiveLapSplit"/> is true; derived, not stored, for the same reason as
+  /// <see cref="LapElapsedMs"/>.
+  /// </summary>
+  public int CurrentLapNumber => _laps.Count + 1;
+
   /// <summary>Gets every persisted record, newest first.</summary>
   public IReadOnlyList<StopwatchRecord> Records => _records;
 

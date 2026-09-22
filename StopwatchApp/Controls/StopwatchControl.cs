@@ -21,8 +21,10 @@ public sealed class StopwatchControl : UserControl
   private readonly Button _lapButton;
   private readonly Button _stopButton;
   private readonly Label _elapsedLabel;
+  private readonly Label _lapElapsedLabel;
   private readonly Label _resumedNoteLabel;
   private readonly Font _elapsedFont;
+  private readonly Font _lapElapsedFont;
   private readonly int _stopConfirmationAfterMinutes;
   private bool _darkMode;
 
@@ -77,6 +79,18 @@ public sealed class StopwatchControl : UserControl
       // inside. Centering instead comes from this label's TableLayoutPanel cell, below.
       Anchor = AnchorStyles.None,
       Font = _elapsedFont,
+      Margin = new Padding(0, 0, 0, Palette.SpacingMd),
+    };
+
+    _lapElapsedFont = Typography.CreateLapDisplayFont();
+    _lapElapsedLabel = new Label
+    {
+      AutoSize = true,
+      // AGENTS.md §8.5 — same Anchor=None centering idiom as _elapsedLabel above; shown only while
+      // a lap split is in progress (Timer.HasActiveLapSplit), so it starts hidden.
+      Anchor = AnchorStyles.None,
+      Font = _lapElapsedFont,
+      Visible = false,
       Margin = new Padding(0, 0, 0, Palette.SpacingMd),
     };
 
@@ -144,15 +158,17 @@ public sealed class StopwatchControl : UserControl
       // note is cleared by Stop — the same pitfall already documented for the card itself, below.
       AutoSizeMode = AutoSizeMode.GrowAndShrink,
       ColumnCount = 1,
-      RowCount = 3,
+      RowCount = 4,
     };
     contentLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
     contentLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
     contentLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
     contentLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+    contentLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
     contentLayout.Controls.Add(_elapsedLabel, 0, 0);
-    contentLayout.Controls.Add(_resumedNoteLabel, 0, 1);
-    contentLayout.Controls.Add(buttonRow, 0, 2);
+    contentLayout.Controls.Add(_lapElapsedLabel, 0, 1);
+    contentLayout.Controls.Add(_resumedNoteLabel, 0, 2);
+    contentLayout.Controls.Add(buttonRow, 0, 3);
 
     Controls.Add(contentLayout);
     AutoSize = true;
@@ -342,6 +358,7 @@ public sealed class StopwatchControl : UserControl
       Timer.Dispose();
       _shortcutToolTip.Dispose();
       _elapsedFont.Dispose();
+      _lapElapsedFont.Dispose();
     }
     base.Dispose(disposing);
   }
@@ -363,12 +380,16 @@ public sealed class StopwatchControl : UserControl
   {
     BackColor = Palette.CardBackground(_darkMode);
     _elapsedLabel.ForeColor = Palette.Text(_darkMode);
+    _lapElapsedLabel.ForeColor = Palette.MutedText(_darkMode);
     _resumedNoteLabel.ForeColor = Palette.MutedText(_darkMode);
   }
 
   private void UpdateDisplay()
   {
     _elapsedLabel.Text = TimeFormat.FormatTime(Timer.ElapsedMs);
+    _lapElapsedLabel.Text =
+      $"Lap {Timer.CurrentLapNumber} · {TimeFormat.FormatTime(Timer.LapElapsedMs)}";
+    _lapElapsedLabel.Visible = Timer.HasActiveLapSplit;
 
     bool running = Timer.IsRunning;
     _primaryButton.Text = Timer.IsPaused ? "Continue" : "Start";

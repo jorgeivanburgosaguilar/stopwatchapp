@@ -440,6 +440,9 @@ public sealed class MainForm : Form
     return contentWidth;
   }
 
+  // AGENTS.md §8.5 — the lap-elapsed clock shown below the main one renders a short "Lap N ·
+  // HH:mm:ss" string at Typography.LapDisplayScale (30%) of this font's size, so it never needs
+  // its own width budget here: this main-display measurement always dominates it.
   private static int DisplayWidth(float scale, string elapsedText)
   {
     using Font unscaledDisplayFont = Typography.CreateDisplayFont();

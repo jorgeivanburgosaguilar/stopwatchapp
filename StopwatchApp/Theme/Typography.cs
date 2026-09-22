@@ -22,6 +22,15 @@ public static class Typography
   public const float CaptionPointSize = 9f;
 
   /// <summary>
+  /// The lap-elapsed display's size relative to <see cref="DisplayPointSize"/> — 30% of the main
+  /// display, i.e. 50% smaller than this type scale's original 60% step (AGENTS.md §8.5).
+  /// </summary>
+  public const float LapDisplayScale = 0.3f;
+
+  /// <summary>The lap-elapsed display's point size — 30% of <see cref="DisplayPointSize"/>, 21.6pt.</summary>
+  public const float LapDisplayPointSize = DisplayPointSize * LapDisplayScale;
+
+  /// <summary>
   /// Gets the name of the installed monospace, tabular-figure font family used for the elapsed-time
   /// display and the records/laps rows (AGENTS.md §8.5): <c>Cascadia Mono</c> when installed (ships
   /// with Windows 11), else <c>Consolas</c> (ships with every Windows since Vista). Resolved once per
@@ -37,6 +46,15 @@ public static class Typography
   /// </summary>
   public static Font CreateDisplayFont() =>
     new(MonospaceFamilyName, DisplayPointSize, FontStyle.Bold);
+
+  /// <summary>
+  /// Creates the lap-elapsed display font shown below the main clock while a lap split is in
+  /// progress (AGENTS.md §8.5): <see cref="MonospaceFamilyName"/>, bold, at
+  /// <see cref="LapDisplayPointSize"/>. The caller owns the returned <see cref="Font"/> and must
+  /// dispose it.
+  /// </summary>
+  public static Font CreateLapDisplayFont() =>
+    new(MonospaceFamilyName, LapDisplayPointSize, FontStyle.Bold);
 
   /// <summary>
   /// Creates the body font: the OS message-box UI face at <see cref="BodyPointSize"/>, so it follows

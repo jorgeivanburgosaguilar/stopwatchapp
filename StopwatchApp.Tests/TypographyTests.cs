@@ -15,6 +15,20 @@ public sealed class TypographyTests
     Assert.Equal(72f, Typography.DisplayPointSize);
 
   [Fact]
+  public void LapDisplayPointSize_Is30PercentOfDisplayPointSize() =>
+    Assert.Equal(Typography.DisplayPointSize * 0.3f, Typography.LapDisplayPointSize);
+
+  [Fact]
+  public void CreateLapDisplayFont_IsBoldMonospaceAtLapDisplayPointSize()
+  {
+    using Font font = Typography.CreateLapDisplayFont();
+
+    Assert.Equal(Typography.MonospaceFamilyName, font.FontFamily.Name);
+    Assert.True(font.Bold);
+    Assert.Equal(Typography.LapDisplayPointSize, font.Size);
+  }
+
+  [Fact]
   public void MonospaceFamilyName_ResolvesToInstalledFamily()
   {
     string name = Typography.MonospaceFamilyName;

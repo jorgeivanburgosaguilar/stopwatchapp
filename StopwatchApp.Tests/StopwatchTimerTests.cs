@@ -520,6 +520,132 @@ public sealed class StopwatchTimerTests
   }
 
   [Fact]
+  public void LapElapsedMs_BeforeFirstLap_TracksTotalElapsed()
+  {
+    FakeTimeProvider time = new();
+    StopwatchTimer timer = new(new FakeStopwatchStore(), time);
+    timer.Start();
+
+    time.Advance(TimeSpan.FromSeconds(7));
+    timer.Tick();
+
+    Assert.Equal(7_000, timer.LapElapsedMs);
+    Assert.Equal(timer.ElapsedMs, timer.LapElapsedMs); // no lap yet, so it tracks total elapsed
+  }
+
+  [Fact]
+  public void LapElapsedMs_ResetsOnEachLapAndTracksIndependentlyOfElapsedMs()
+  {
+    FakeTimeProvider time = new();
+    StopwatchTimer timer = new(new FakeStopwatchStore(), time);
+    timer.Start();
+    time.Advance(TimeSpan.FromSeconds(61));
+    timer.Tick();
+    timer.Lap();
+
+    Assert.Equal(0, timer.LapElapsedMs);
+
+    time.Advance(TimeSpan.FromSeconds(4));
+    timer.Tick();
+
+    Assert.Equal(4_000, timer.LapElapsedMs);
+    Assert.Equal(65_000, timer.ElapsedMs); // total keeps counting through the lap boundary
+  }
+
+  [Fact]
+  public async Task LapElapsedMs_FreezesAcrossPauseAndExcludesPausedTimeAfterResume()
+  {
+    FakeTimeProvider time = new();
+    StopwatchTimer timer = new(new FakeStopwatchStore(), time);
+    timer.Start();
+    time.Advance(TimeSpan.FromSeconds(10));
+    timer.Tick();
+    timer.Lap();
+    time.Advance(TimeSpan.FromSeconds(3));
+    timer.Tick();
+
+    await timer.PauseAsync();
+    long lapElapsedAtPause = timer.LapElapsedMs;
+
+    time.Advance(TimeSpan.FromSeconds(30)); // time away while paused
+    Assert.Equal(lapElapsedAtPause, timer.LapElapsedMs); // frozen, no drift while paused
+
+    timer.Start();
+
+    Assert.Equal(lapElapsedAtPause, timer.LapElapsedMs); // resumed with no paused time counted
+  }
+
+  [Fact]
+  public async Task HasActiveLapSplit_TracksSessionLifecycle()
+  {
+    FakeTimeProvider time = new();
+    StopwatchTimer timer = new(new FakeStopwatchStore(), time);
+
+    Assert.False(timer.HasActiveLapSplit); // idle
+
+    timer.Start();
+    Assert.False(timer.HasActiveLapSplit); // running, no laps yet
+
+    time.Advance(TimeSpan.FromSeconds(5));
+    timer.Tick();
+    timer.Lap();
+    Assert.True(timer.HasActiveLapSplit); // running with a lap recorded
+
+    await timer.PauseAsync();
+    Assert.True(timer.HasActiveLapSplit); // paused with a lap recorded
+
+    timer.Start();
+    time.Advance(TimeSpan.FromSeconds(5));
+    timer.Tick();
+    await timer.StopAsync();
+    Assert.False(timer.HasActiveLapSplit); // stopped
+  }
+
+  [Fact]
+  public void CurrentLapNumber_IsOneMoreThanLapsRecorded()
+  {
+    FakeTimeProvider time = new();
+    StopwatchTimer timer = new(new FakeStopwatchStore(), time);
+    timer.Start();
+
+    Assert.Equal(1, timer.CurrentLapNumber); // no laps yet: currently timing lap 1
+
+    time.Advance(TimeSpan.FromSeconds(5));
+    timer.Tick();
+    timer.Lap();
+    Assert.Equal(2, timer.CurrentLapNumber); // 1 lap recorded: currently timing lap 2
+
+    time.Advance(TimeSpan.FromSeconds(5));
+    timer.Tick();
+    timer.Lap();
+    Assert.Equal(3, timer.CurrentLapNumber);
+  }
+
+  [Fact]
+  public async Task RestoreAsync_AfterPauseWithLap_RestoresFrozenLapSplitAndActiveFlag()
+  {
+    FakeStopwatchStore store = new();
+    FakeTimeProvider time = new();
+    StopwatchTimer original = new(store, time);
+    original.Start();
+    time.Advance(TimeSpan.FromSeconds(20));
+    original.Tick();
+    original.Lap();
+    time.Advance(TimeSpan.FromSeconds(6));
+    original.Tick();
+    await original.PauseAsync();
+    long lapElapsedAtPause = original.LapElapsedMs;
+    int lapNumberAtPause = original.CurrentLapNumber;
+
+    StopwatchTimer restored = new(store, time);
+    await restored.RestoreAsync();
+
+    Assert.Equal(lapElapsedAtPause, restored.LapElapsedMs);
+    Assert.True(restored.HasActiveLapSplit);
+    Assert.Equal(lapNumberAtPause, restored.CurrentLapNumber);
+  }
+
+  [Fact]
   public async Task StopAsync_AfterFreshStartFollowingPreviousStop_SavesASecondRecord()
   {
     FakeStopwatchStore store = new();

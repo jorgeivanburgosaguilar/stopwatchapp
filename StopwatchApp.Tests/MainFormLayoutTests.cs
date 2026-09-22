@@ -61,6 +61,23 @@ public sealed class MainFormLayoutTests
   }
 
   [Fact]
+  public void RequiredClientWidth_IsUnaffectedByTheLapElapsedClock()
+  {
+    // AGENTS.md §8.5 — the lap-elapsed clock renders the same HH:mm:ss text as the main display,
+    // just smaller (Typography.LapDisplayScale), so it never needs its own width budget. This test
+    // pins elapsedMs large enough that the (much larger-font) main display's width already
+    // dominates every row width, so adding a lap changes nothing about the reported total.
+    Lap lap = new(1, 0, 0, 1);
+    using Font font = Typography.CreateMonospaceBodyFont();
+    const long hugeElapsedMs = 999_999_999_999_999;
+
+    int widthWithNoLaps = MainForm.RequiredClientWidth(font, 96, [], [], hugeElapsedMs);
+    int widthWithALap = MainForm.RequiredClientWidth(font, 96, [], [lap], hugeElapsedMs);
+
+    Assert.Equal(widthWithNoLaps, widthWithALap);
+  }
+
+  [Fact]
   public void ManageRecordsWidth_IsAFixedBudgetForTheWorstCaseRow()
   {
     Assert.Equal(

@@ -271,6 +271,20 @@ public sealed class RecordsListControl : UserControl
   /// <param name="laps">The laps to display.</param>
   public void UpdateLaps(IReadOnlyList<Lap> laps)
   {
+    bool hasLaps = laps.Count > 0;
+    if (hasLaps && !_lapsListBox.Visible)
+    {
+      // AGENTS.md §8.5/§10.3 — while hidden, this list box is skipped entirely by WinForms' dock
+      // layout engine, so its own ClientSize.Width can still be the stale default control size the
+      // very first time a lap appears — MeasureItem below would then word-wrap against that too-
+      // narrow width and report a hugely inflated row height (every word landing on its own line)
+      // until the *next* lap's fresh Items.Clear()/Add re-measures against the by-then-correct
+      // width. Its parent TableLayoutPanel (`layout`) is never itself hidden, so its ClientSize is
+      // already trustworthy; syncing to it here makes the very first lap's measurement correct too
+      // instead of relying on the next lap to self-correct it.
+      _lapsListBox.Width = _lapsListBox.Parent?.ClientSize.Width ?? _lapsListBox.Width;
+    }
+
     _lapsListBox.BeginUpdate();
     _lapsListBox.Items.Clear();
     foreach (Lap lap in laps)
@@ -279,7 +293,6 @@ public sealed class RecordsListControl : UserControl
     }
     _lapsListBox.EndUpdate();
 
-    bool hasLaps = laps.Count > 0;
     _lapsHeader.Visible = hasLaps;
     _lapsListBox.Visible = hasLaps;
     _lapsListBox.Height = SumItemHeights(_lapsListBox, Math.Min(laps.Count, 3));

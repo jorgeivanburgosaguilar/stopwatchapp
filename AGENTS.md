@@ -22,6 +22,11 @@ project-management, invoicing, monitoring, or cloud-sync product.
 ### 1.1 Current functionality
 
 - Start, pause, continue, add lap splits, and stop a session.
+- Show, below the main elapsed-time readout, a smaller lap-elapsed clock counting the time since
+  the last lap split; it appears only once a lap has been recorded in the current session, freezes
+  and resumes alongside the main clock on pause/continue, and disappears on stop. It is a pure
+  display derivation of existing state — no new persistence. The tray icon and tooltip are
+  unaffected: both remain driven solely by total session elapsed time.
 - Show elapsed time in the main window and in a runtime-rendered tray icon. The icon shows minutes
   below one hour, a diagonal hour/minutes split from one hour through nine hours, whole hours from ten hours
   through one day, and whole days thereafter; its tooltip always shows the full unbounded `HH:mm:ss`
@@ -417,6 +422,9 @@ reactively — every field is written imperatively by the transition methods bel
 | `Laps` | list | empty | in-memory splits, newest first (each new lap is prepended) |
 | `LastLapElapsed` | long | `0` | `ElapsedMs` value at the last lap |
 | `LastLapTimestamp` | epoch ms | `0` | wall clock of the last lap |
+| `LapElapsedMs` | long | `0` | **derived, not stored** — `ElapsedMs - LastLapElapsed`; the lap-in-progress split shown below the main clock (§8.5). No new field, snapshot column, or schema change; it inherits `ElapsedMs`'s freeze-on-pause and paused-time-excluded behavior automatically. |
+| `HasActiveLapSplit` | bool | `false` | **derived, not stored** — `(IsRunning \|\| IsPaused) && Laps.Count > 0`; whether the lap clock should be shown. False again immediately after Stop even though `Laps` itself isn't cleared until the next fresh Start. |
+| `CurrentLapNumber` | int | `1` | **derived, not stored** — `Laps.Count + 1`; the 1-based number of the lap split currently in progress, shown alongside `LapElapsedMs`. Meaningful only when `HasActiveLapSplit` is true. |
 | `RestoredPausedAtMs` | epoch ms | `0` | greater than `0` only after restoring a saved paused session |
 | `ShowClearDialog` | bool | `false` | confirm-dialog visibility |
 
@@ -514,6 +522,17 @@ Rules:
 - The large elapsed-time display and the records/laps rows both use a monospace, tabular-figure font
   (`Typography.MonospaceFamilyName` — Cascadia Mono or Consolas) so digits don't shift width as they
   change and so dates/times column-align down the list.
+- **Lap-elapsed clock.** A second, smaller readout — `"Lap {n} · {HH:mm:ss}"`
+  (`StopwatchTimer.CurrentLapNumber`, then `TimeFormat.FormatTime(StopwatchTimer.LapElapsedMs)`,
+  `StopwatchControl`'s `_lapElapsedLabel`) — is shown directly below the main elapsed-time display,
+  above the "Resumed from a pause" note. It renders at `Typography.LapDisplayPointSize` (30% of
+  `Typography.DisplayPointSize`) in the same bold monospace family, colored `Palette.MutedText`
+  (not the main clock's `Palette.Text`) to keep the visual hierarchy. It is visible only when
+  `StopwatchTimer.HasActiveLapSplit` is true — i.e. only once at least one lap has been recorded in
+  the current session — and shows the split's lap number and the time since the last lap press. It
+  freezes and resumes exactly alongside the main clock on pause/continue and disappears on Stop.
+  The card and window resize to fit it appearing/disappearing the same way they already resize for
+  the laps panel and resumed-pause note (below).
 - **Centering:** the elapsed-time display and the button row are both centered on the
   stopwatch card's horizontal axis via `Anchor = AnchorStyles.None` inside a `TableLayoutPanel` cell
   (not `Dock` + `TextAlign`, which is a no-op on an `AutoSize` control). The button row re-centers
@@ -711,7 +730,9 @@ Update the icon at most once per second, and only when the displayed value or ac
 single most common bug in this pattern and leaks GDI handles until the process is killed.
 
 Tooltip text is `FormatTime(ElapsedMs)` — the full, unbounded `HH:MM:SS` value — plain text, no
-prefix or emoji, regardless of which layout is active.
+prefix or emoji, regardless of which layout is active. Both the icon and the tooltip are driven
+solely by total session elapsed time; the main window's lap-elapsed clock (§8.5) has no
+representation in the tray.
 
 ### 10.2 Tray context menu
 
@@ -957,6 +978,10 @@ xUnit, in a `StopwatchApp.Tests` project.
 - Row word-wrap (§8.5): a record/lap row longer than the sized-for worst case (over
   `MainForm.WorstCaseElapsedMinutes`, or a lap id past 3 digits) wraps to a second line inside its row
   card instead of clipping or ellipsizing.
+- First-lap row sizing (§8.5/§10.3): the very first lap of a session renders its row card at the
+  same single-line height as every subsequent lap — no oversized/inflated card on that first
+  appearance (`RecordsListControl.UpdateLaps` syncing the hidden list box's width before its first
+  measurement, below).
 - Records display cap (§8.5): only the 5 most recent records are listed in the main window
   regardless of how many are persisted; "Clear All Records" still clears every persisted record, and
   its own visibility still reflects the true total, not the capped display count.
@@ -984,6 +1009,16 @@ xUnit, in a `StopwatchApp.Tests` project.
   whichever button has focus, matching ordinary WinForms `Button` behavior.
 - Tray open gesture (§10.2): a single left-click opens and activates the main window;
   right-click remains exclusively available for the context menu.
+- Lap-elapsed clock (§8.1/§8.5): absent at idle and while running with no laps yet; appears
+  reading `Lap 2 · 00:00:00` immediately after the first Lap press (numbering the split currently
+  in progress, one past the laps already recorded) and resets to `00:00:00` — with the lap number
+  incremented — on every subsequent Lap press while the main clock keeps counting total elapsed
+  time uninterrupted; freezes on Pause and shows no jump across Continue (paused time excluded,
+  same as the main clock); survives an app restart after Pause, showing its saved split and lap
+  number alongside the restored main clock and the "Resumed from a saved point" note; disappears on
+  Stop. The window's height grows and shrinks to fit it appearing and disappearing, with no dead
+  space. The tray icon and tooltip are unaffected throughout — they show only total session elapsed
+  time.
 
 Implement these as automated tests wherever the behavior is UI-free, and as a manual check where it
 genuinely requires a running window (tray, hotkeys).
@@ -1059,6 +1094,14 @@ here; do not accumulate dated implementation history.
   only by timestamp was rejected because it would need a second lookup query wherever laps are
   shown, instead of the direct `recordId` index this schema already needs for
   `GetLapsAsync`/`DeleteRecordAsync`.
+- **The laps list box's width is explicitly synced before its first measurement.** WinForms' dock
+  layout engine skips a control entirely while `Visible` is `false`, which is `_lapsListBox`'s
+  initial state (AGENTS.md §8.5). Its very first `UpdateLaps` call — the first lap of a session —
+  therefore measured word-wrap against a stale/default control width instead of the real window
+  width, inflating that one row's owner-drawn height until the next lap's fresh `Items.Clear()`/
+  `Add()` re-measured it correctly. Reading the never-hidden parent `TableLayoutPanel`'s
+  `ClientSize.Width` before that first measurement fixes the first lap instead of relying on the
+  second lap to self-correct it.
 - **Manage Records loads laps lazily, per record, on first expand — not eagerly for the whole
   page.** Fetching every visible record's laps up front would multiply Manage Records' database
   round trips by the page size for a detail most records' rows never show. A per-record cache keyed
@@ -1165,6 +1208,14 @@ here; do not accumulate dated implementation history.
   way and painted another. `RowIconSet` is a per-owner disposable instance rather than a static
   cache, because static mutable state is forbidden (§5) and the bitmaps hold native memory; the
   Manage Records window shares one set across all its rows instead of decoding per row.
+- **The lap-elapsed clock is derived, not persisted.** `StopwatchTimer` already tracked
+  `_lastLapElapsed` (the `ElapsedMs` value at the last lap) and already round-tripped it through
+  the `paused_session` snapshot for the split-since-last-lap calculation in `Lap()`/`StopAsync()`.
+  Exposing `LapElapsedMs`/`HasActiveLapSplit` as computed properties over existing fields, rather
+  than adding new stored state, means pause, autosave, and restore all handle the second clock
+  correctly with no schema migration, no `IStopwatchStore` change, and no `PausedSession` change —
+  consistent with §9's rule that a schema change is only ever a new, append-only migration, never
+  one added speculatively when existing columns already cover the need.
 - **Formatting belongs to CSharpier, while analyzers own code quality.** `IDE0055` is disabled so
   the SDK formatter cannot fight CSharpier, but compiler warnings, recommended analyzers, and all
   other enforced code-style diagnostics remain build-breaking.
