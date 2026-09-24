@@ -646,6 +646,102 @@ public sealed class StopwatchTimerTests
   }
 
   [Fact]
+  public void SplitElapsedMs_BeforeFirstLap_EqualsElapsedMs()
+  {
+    FakeTimeProvider time = new();
+    StopwatchTimer timer = new(new FakeStopwatchStore(), time);
+    timer.Start();
+
+    time.Advance(TimeSpan.FromSeconds(7));
+    timer.Tick();
+
+    Assert.Equal(timer.ElapsedMs, timer.SplitElapsedMs); // no lap yet: split tracks the whole session
+  }
+
+  [Fact]
+  public void SplitElapsedMs_AfterLap_ResetsToZeroAndDrivesTheCompactTrayLayoutBackToMinutes()
+  {
+    FakeTimeProvider time = new();
+    StopwatchTimer timer = new(new FakeStopwatchStore(), time);
+    timer.Start();
+
+    time.Advance(TimeSpan.FromMinutes(10));
+    timer.Tick();
+    timer.Lap();
+
+    Assert.Equal(0, timer.SplitElapsedMs);
+    (_, _, TrayIconService.TrayIconLayout layoutAtLap) = TrayIconService.GetDisplayValues(
+      timer.SplitElapsedMs
+    );
+    Assert.Equal(TrayIconService.TrayIconLayout.LargeMinutes, layoutAtLap); // tray icon jumps back to 00
+
+    time.Advance(TimeSpan.FromSeconds(65));
+    timer.Tick();
+
+    Assert.Equal(65_000, timer.SplitElapsedMs);
+    Assert.Equal(665_000, timer.ElapsedMs); // total elapsed keeps counting through the lap
+  }
+
+  [Fact]
+  public void SplitElapsedMs_AfterLapPastOneHour_DrivesTheCompactTrayLayoutBackToMinutes()
+  {
+    FakeTimeProvider time = new();
+    StopwatchTimer timer = new(new FakeStopwatchStore(), time);
+    timer.Start();
+
+    time.Advance(TimeSpan.FromHours(1) + TimeSpan.FromMinutes(5));
+    timer.Tick();
+    timer.Lap();
+
+    (_, _, TrayIconService.TrayIconLayout layoutAtLap) = TrayIconService.GetDisplayValues(
+      timer.SplitElapsedMs
+    );
+    Assert.Equal(TrayIconService.TrayIconLayout.LargeMinutes, layoutAtLap); // not HourMinute anymore
+  }
+
+  [Fact]
+  public async Task SplitElapsedMs_FreezesOnPauseAndSurvivesRestart()
+  {
+    FakeStopwatchStore store = new();
+    FakeTimeProvider time = new();
+    StopwatchTimer original = new(store, time);
+    original.Start();
+    time.Advance(TimeSpan.FromMinutes(10));
+    original.Tick();
+    original.Lap();
+    time.Advance(TimeSpan.FromSeconds(3));
+    original.Tick();
+
+    await original.PauseAsync();
+    long splitAtPause = original.SplitElapsedMs;
+
+    time.Advance(TimeSpan.FromSeconds(30)); // time away while paused
+    Assert.Equal(splitAtPause, original.SplitElapsedMs); // frozen, no drift while paused
+
+    StopwatchTimer restored = new(store, time);
+    await restored.RestoreAsync();
+
+    Assert.Equal(splitAtPause, restored.SplitElapsedMs);
+  }
+
+  [Fact]
+  public async Task SplitElapsedMs_AfterStop_FallsBackToSessionTotal()
+  {
+    FakeTimeProvider time = new();
+    StopwatchTimer timer = new(new FakeStopwatchStore(), time);
+    timer.Start();
+    time.Advance(TimeSpan.FromMinutes(10));
+    timer.Tick();
+    timer.Lap();
+    time.Advance(TimeSpan.FromSeconds(5));
+    timer.Tick();
+
+    await timer.StopAsync();
+
+    Assert.Equal(timer.ElapsedMs, timer.SplitElapsedMs); // no active split once stopped
+  }
+
+  [Fact]
   public async Task StopAsync_AfterFreshStartFollowingPreviousStop_SavesASecondRecord()
   {
     FakeStopwatchStore store = new();

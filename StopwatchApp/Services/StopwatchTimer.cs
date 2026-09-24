@@ -85,6 +85,16 @@ public sealed class StopwatchTimer : IDisposable
   /// </summary>
   public int CurrentLapNumber => _laps.Count + 1;
 
+  /// <summary>
+  /// Gets the elapsed time of the split currently being timed — <see cref="LapElapsedMs"/> once a
+  /// lap has been recorded in the current session, otherwise <see cref="ElapsedMs"/> (the whole
+  /// session so far, including after <see cref="StopAsync"/>, when no split is active). Drives the
+  /// tray icon (AGENTS.md §10.1), which shows the in-progress lap once laps are in use instead of
+  /// the ever-growing session total. Derived, not stored, for the same reason as
+  /// <see cref="LapElapsedMs"/>.
+  /// </summary>
+  public long SplitElapsedMs => HasActiveLapSplit ? LapElapsedMs : ElapsedMs;
+
   /// <summary>Gets every persisted record, newest first.</summary>
   public IReadOnlyList<StopwatchRecord> Records => _records;
 

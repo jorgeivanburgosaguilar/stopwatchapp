@@ -10,9 +10,10 @@ namespace StopwatchApp.Services;
 /// <summary>
 /// Owns the <see cref="NotifyIcon"/>: a GDI+-rendered 32×32 icon (large minute-only digits during
 /// the first hour, then a diagonal hour-top-left / minutes-bottom-right split through the ninth
-/// hour, then large whole-hour or whole-day labels), its tooltip, and its context menu
-/// (<c>Open</c>, the state-appropriate transition(s), <c>Exit</c>). See AGENTS.md §10.1/§10.2.
-/// Takes callbacks rather than a
+/// hour, then large whole-hour or whole-day labels) driven by the current split (the lap in
+/// progress once laps are in use, otherwise the session total), its tooltip (always the full
+/// session total), and its context menu (<c>Open</c>, the state-appropriate transition(s),
+/// <c>Exit</c>). See AGENTS.md §10.1/§10.2. Takes callbacks rather than a
 /// <c>MainForm</c> reference — parent/child communication happens through delegates, never a shared
 /// mutable reference (AGENTS.md §3).
 /// </summary>
@@ -90,7 +91,7 @@ public sealed partial class TrayIconService : IDisposable
     };
 
     RebuildStateMenuItems(TrayState.Idle);
-    UpdateDisplay(elapsedMs: 0, running: false, paused: false);
+    UpdateDisplay(elapsedMs: 0, iconElapsedMs: 0, running: false, paused: false);
   }
 
   /// <summary>
@@ -122,16 +123,23 @@ public sealed partial class TrayIconService : IDisposable
   /// Refreshes the tooltip and, at most once per second and only when the simplified display actually
   /// changes, the rendered icon and the state-dependent menu items (AGENTS.md §10.1).
   /// </summary>
-  /// <param name="elapsedMs">The current elapsed time, in milliseconds.</param>
+  /// <param name="elapsedMs">
+  /// The current total session elapsed time, in milliseconds — always shown in the tooltip.
+  /// </param>
+  /// <param name="iconElapsedMs">
+  /// The elapsed time the compact icon layouts render — <see cref="StopwatchTimer.SplitElapsedMs"/>,
+  /// the lap currently in progress once laps are in use, otherwise the same as
+  /// <paramref name="elapsedMs"/>.
+  /// </param>
   /// <param name="running">Whether the stopwatch is currently running.</param>
   /// <param name="paused">Whether the stopwatch is currently paused.</param>
-  public void UpdateDisplay(long elapsedMs, bool running, bool paused)
+  public void UpdateDisplay(long elapsedMs, long iconElapsedMs, bool running, bool paused)
   {
-    // The tooltip carries the authoritative, unrounded HH:MM:SS value and updates every call —
-    // only the once-per-second icon bitmap and menu are throttled below.
+    // The tooltip carries the authoritative, unrounded total-session HH:MM:SS value and updates
+    // every call — only the once-per-second icon bitmap and menu are throttled below.
     _notifyIcon.Text = TimeFormat.FormatTime(elapsedMs);
 
-    (long value, int minutes, TrayIconLayout layout) = GetDisplayValues(elapsedMs);
+    (long value, int minutes, TrayIconLayout layout) = GetDisplayValues(iconElapsedMs);
     TrayState state =
       running ? TrayState.Running
       : paused ? TrayState.Paused

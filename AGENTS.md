@@ -25,12 +25,13 @@ project-management, invoicing, monitoring, or cloud-sync product.
 - Show, below the main elapsed-time readout, a smaller lap-elapsed clock counting the time since
   the last lap split; it appears only once a lap has been recorded in the current session, freezes
   and resumes alongside the main clock on pause/continue, and disappears on stop. It is a pure
-  display derivation of existing state — no new persistence. The tray icon and tooltip are
-  unaffected: both remain driven solely by total session elapsed time.
+  display derivation of existing state — no new persistence.
 - Show elapsed time in the main window and in a runtime-rendered tray icon. The icon shows minutes
   below one hour, a diagonal hour/minutes split from one hour through nine hours, whole hours from ten hours
-  through one day, and whole days thereafter; its tooltip always shows the full unbounded `HH:mm:ss`
-  duration.
+  through one day, and whole days thereafter — driven by the **current split** (the lap in progress
+  once a lap has been recorded in the current session, otherwise the whole session), so pressing Lap
+  resets the icon back to minutes; its tooltip is unaffected by laps and always shows the full
+  unbounded session-total `HH:mm:ss` duration.
 - Keep the main window out of the taskbar when closed or minimized, and restore it with one left
   click on the tray icon. The tray menu mirrors the valid timer actions and is the explicit exit
   path.
@@ -425,6 +426,7 @@ reactively — every field is written imperatively by the transition methods bel
 | `LapElapsedMs` | long | `0` | **derived, not stored** — `ElapsedMs - LastLapElapsed`; the lap-in-progress split shown below the main clock (§8.5). No new field, snapshot column, or schema change; it inherits `ElapsedMs`'s freeze-on-pause and paused-time-excluded behavior automatically. |
 | `HasActiveLapSplit` | bool | `false` | **derived, not stored** — `(IsRunning \|\| IsPaused) && Laps.Count > 0`; whether the lap clock should be shown. False again immediately after Stop even though `Laps` itself isn't cleared until the next fresh Start. |
 | `CurrentLapNumber` | int | `1` | **derived, not stored** — `Laps.Count + 1`; the 1-based number of the lap split currently in progress, shown alongside `LapElapsedMs`. Meaningful only when `HasActiveLapSplit` is true. |
+| `SplitElapsedMs` | long | `0` | **derived, not stored** — `LapElapsedMs` when `HasActiveLapSplit` is true, otherwise `ElapsedMs`; drives the tray icon (§10.1) so it shows the in-progress lap once laps are in use, and the session total before the first lap or after Stop. |
 | `RestoredPausedAtMs` | epoch ms | `0` | greater than `0` only after restoring a saved paused session |
 | `ShowClearDialog` | bool | `false` | confirm-dialog visibility |
 
@@ -696,21 +698,27 @@ re-anchors `StartTime` from the current clock, exactly as an in-app pause/resume
 ### 10.1 Tray icon rendering
 
 Render a 32×32 icon with GDI+ and convert it to an `HICON`. It uses one simple, unbounded
-progression while the tooltip remains authoritative:
+progression driven by `StopwatchTimer.SplitElapsedMs` — the current split — while the tooltip
+remains authoritative for the session total:
 
-- **Elapsed time under one hour**: a single large two-digit **MM** readout, centered and sized to
-  fill as much of the 32×32 canvas as legibility at the 16 px scaled-down display size allows.
-- **Elapsed time from one hour through 9:59:59**: a diagonal split — the unpadded hour anchored in
+- **Split elapsed time under one hour**: a single large two-digit **MM** readout, centered and sized
+  to fill as much of the 32×32 canvas as legibility at the 16 px scaled-down display size allows.
+- **Split elapsed time from one hour through 9:59:59**: a diagonal split — the unpadded hour anchored in
   the top-left, the zero-padded minutes (`00` through `59`) anchored in the bottom-right, and a thin
   slash stroke in the free corridor between them (`TrayIconService.HourBox`/`MinuteBox`/
   `SlashStart`/`SlashEnd`). It changes every minute, restoring the minute resolution the whole-hour label below
   would otherwise lose for up to an hour at a time. Each half is fit into its own box, so both are
   height-bound rather than sharing one width-bound line; the two boxes' glyph ink never overlaps
   (`MeasureDiagonalParts` exposes the placement the renderer draws).
-- **Elapsed time from ten hours through 23:59:59**: a single large unpadded whole-hour label, `10H`
-  through `23H`; it changes only at the next whole hour.
-- **Elapsed time from one day onward**: a single large unpadded whole-day label, `1D`, `2D`, and so
-  on; it changes only at the next whole day.
+- **Split elapsed time from ten hours through 23:59:59**: a single large unpadded whole-hour label,
+  `10H` through `23H`; it changes only at the next whole hour.
+- **Split elapsed time from one day onward**: a single large unpadded whole-day label, `1D`, `2D`,
+  and so on; it changes only at the next whole day.
+
+Pressing Lap resets the split to zero, so the icon immediately drops back to the `MM` layout (e.g.
+from a `1/05` diagonal split back to `00`) even while the main session clock keeps counting; before
+the first lap of a session, and again once the session is stopped, the split equals the whole
+session so the icon behaves exactly as it did before laps existed.
 
 All four layouts share one auto-fit rule: the largest Segoe UI Bold size, from a fixed max down to
 a fixed floor, whose **glyph ink** — a `GraphicsPath` built with `AddString`, measured via
@@ -729,10 +737,9 @@ Update the icon at most once per second, and only when the displayed value or ac
 **Call `DestroyIcon` on the previous handle every time you replace it.** Forgetting this is the
 single most common bug in this pattern and leaks GDI handles until the process is killed.
 
-Tooltip text is `FormatTime(ElapsedMs)` — the full, unbounded `HH:MM:SS` value — plain text, no
-prefix or emoji, regardless of which layout is active. Both the icon and the tooltip are driven
-solely by total session elapsed time; the main window's lap-elapsed clock (§8.5) has no
-representation in the tray.
+Tooltip text is `FormatTime(ElapsedMs)` — the full, unbounded, total-session `HH:MM:SS` value —
+plain text, no prefix or emoji, regardless of which layout is active or which lap is in progress.
+The tooltip is unaffected by laps; only the compact icon layouts above follow the current split.
 
 ### 10.2 Tray context menu
 
@@ -936,19 +943,23 @@ xUnit, in a `StopwatchApp.Tests` project.
   exception thrown.
 - A database created by an earlier build (tables present, no `user_version` stamp) opens without
   data loss and ends up stamped at the current schema version.
-- Tray: the icon updates while running and reflects the current hour/minute; the tooltip shows the
-  full `HH:MM:SS`; both close and minimize hide the window and remove its taskbar button; Exit
-  terminates the process with no icon left behind in the tray.
+- Tray: the icon updates while running and reflects the current split's hour/minute; the tooltip
+  shows the full session-total `HH:MM:SS`; both close and minimize hide the window and remove its
+  taskbar button; Exit terminates the process with no icon left behind in the tray.
 - Minimize-to-tray (§10.3 — fixes a regression where minimize left a taskbar button, and
   closing while minimized reopened the window still minimized): minimizing via the title-bar button
   removes the taskbar button exactly like Close does, and every "Open" transition (tray Open/
   single left-click, single-instance activation) always restores the window in its normal (not minimized)
   state, regardless of whether it was minimized when last hidden.
-- Tray icon layout: below one hour the icon shows large two-digit minutes; from one hour through
-  `9:59:59` it shows a diagonal split (unpadded hour top-left, zero-padded minutes bottom-right, thin
-  slash between, no overlap between the digits); from ten hours through
-  `23:59:59` it shows unpadded whole hours with `H`; from one day onward it shows unpadded whole days
-  with `D`. The tooltip's full `HH:MM:SS` text is unaffected by the compact layout.
+- Tray icon layout: below one hour of the current split the icon shows large two-digit minutes;
+  from one hour through `9:59:59` of the split it shows a diagonal split (unpadded hour top-left,
+  zero-padded minutes bottom-right, thin slash between, no overlap between the digits); from ten
+  hours through `23:59:59` it shows unpadded whole hours with `H`; from one day onward it shows
+  unpadded whole days with `D`. The tooltip's full session-total `HH:MM:SS` text is unaffected by
+  the compact layout or by which lap is in progress.
+- Tray icon split (§8.1/§10.1): pressing Lap at 10 minutes resets the icon to `00` and it counts up
+  from there for that lap, while the tooltip keeps showing the growing session total; after Stop,
+  the idle icon shows the finished session's total again (no active split).
 - Stop confirmation (§8.3/§8.5): with the default threshold, Stop before five minutes stops
   immediately with no dialog; from five minutes on, Stop pauses the clock and shows the
   confirmation. Confirm saves exactly one record and shows Start; Cancel resumes a clock that was
@@ -1017,8 +1028,8 @@ xUnit, in a `StopwatchApp.Tests` project.
   same as the main clock); survives an app restart after Pause, showing its saved split and lap
   number alongside the restored main clock and the "Resumed from a saved point" note; disappears on
   Stop. The window's height grows and shrinks to fit it appearing and disappearing, with no dead
-  space. The tray icon and tooltip are unaffected throughout — they show only total session elapsed
-  time.
+  space. The tray icon follows this same split (see the "Tray icon split" criterion above); the
+  tooltip is unaffected throughout and always shows the total session elapsed time.
 
 Implement these as automated tests wherever the behavior is UI-free, and as a manual check where it
 genuinely requires a running window (tray, hotkeys).
@@ -1216,6 +1227,14 @@ here; do not accumulate dated implementation history.
   correctly with no schema migration, no `IStopwatchStore` change, and no `PausedSession` change —
   consistent with §9's rule that a schema change is only ever a new, append-only migration, never
   one added speculatively when existing columns already cover the need.
+- **The tray icon follows the current split, not the session total.** The icon has room for only
+  one compact number; once laps are in use, the lap in progress is the more actionable value to
+  glance at, and the tooltip already carries the exact, unbounded session total for anyone who
+  needs it. `StopwatchTimer.SplitElapsedMs` (`LapElapsedMs` while `HasActiveLapSplit`, otherwise
+  `ElapsedMs`) is itself derived from fields the lap-elapsed clock already exposed, so this adds no
+  persistence, no `IStopwatchStore` change, and no `PausedSession` change — the same reasoning as
+  the lap-elapsed clock immediately above. `TrayIconService.UpdateDisplay` takes the tooltip value
+  and the icon value as two separate parameters so they can diverge once a lap is in progress.
 - **Formatting belongs to CSharpier, while analyzers own code quality.** `IDE0055` is disabled so
   the SDK formatter cannot fight CSharpier, but compiler warnings, recommended analyzers, and all
   other enforced code-style diagnostics remain build-breaking.

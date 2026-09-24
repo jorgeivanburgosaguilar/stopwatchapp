@@ -753,6 +753,7 @@ public sealed class MainForm : Form
     InvokeOnUiThread(() =>
       _trayIconService.UpdateDisplay(
         _stopwatchControl.Timer.ElapsedMs,
+        _stopwatchControl.Timer.SplitElapsedMs,
         _stopwatchControl.Timer.IsRunning,
         _stopwatchControl.Timer.IsPaused
       )
