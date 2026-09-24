@@ -77,6 +77,42 @@ public class TrayIconServiceTests
     Assert.False(hour.IntersectsWith(minute), $"Hour ink {hour} overlaps minute ink {minute}.");
   }
 
+  // Exhaustive regression guard for TrayIconService.DiagonalFontSizeBonus (AGENTS.md §10.1/§17):
+  // that constant was set to the largest value that keeps EVERY hour (1-9) × minute (0-59) pair the
+  // diagonal layout can show fully inside the canvas with no overlap, found by sweeping candidate
+  // bonus values against all 540 pairs. This test re-checks all 540 at the production bonus so a
+  // future change to the constant (or to the digit-rendering path) is caught immediately, rather
+  // than relying on the 4 spot-checked pairs above.
+  [Fact]
+  public void MeasureDiagonalParts_FitsEveryHourMinutePairAtTheProductionBonus()
+  {
+    RectangleF canvas = new(0, 0, 32, 32);
+
+    for (long hour = 1; hour <= 9; hour++)
+    {
+      for (int minute = 0; minute <= 59; minute++)
+      {
+        (RectangleF hourInk, RectangleF minuteInk) = TrayIconService.MeasureDiagonalParts(
+          hour,
+          minute
+        );
+
+        Assert.True(
+          canvas.Contains(hourInk),
+          $"({hour},{minute:D2}): hour ink {hourInk} left the canvas."
+        );
+        Assert.True(
+          canvas.Contains(minuteInk),
+          $"({hour},{minute:D2}): minute ink {minuteInk} left the canvas."
+        );
+        Assert.False(
+          hourInk.IntersectsWith(minuteInk),
+          $"({hour},{minute:D2}): hour ink {hourInk} overlaps minute ink {minuteInk}."
+        );
+      }
+    }
+  }
+
   // Regression guard for the point of the diagonal layout: each half must render larger than the
   // four-glyph single-line "9:59" label it replaced, which was width-bound.
   [Fact]

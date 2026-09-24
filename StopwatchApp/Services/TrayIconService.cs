@@ -470,7 +470,11 @@ public sealed partial class TrayIconService : IDisposable
     int minutes
   )
   {
-    (GraphicsPath hourPath, GraphicsPath minutePath) = BuildDiagonalPaths(hours, minutes);
+    (GraphicsPath hourPath, GraphicsPath minutePath) = BuildDiagonalPaths(
+      hours,
+      minutes,
+      DiagonalFontSizeBonus
+    );
     using (hourPath)
     using (minutePath)
     using (Pen slash = new(tint, SlashWidth) { StartCap = LineCap.Round, EndCap = LineCap.Round })
@@ -481,35 +485,56 @@ public sealed partial class TrayIconService : IDisposable
     }
   }
 
+  // The diagonal layout renders 1pt above its own auto-fit size. This is the exhaustively verified
+  // ceiling, not a spot-checked guess: an exhaustive sweep over every hour (1-9) × minute (0-59)
+  // pair the layout can show — 540 combinations — found bonus=1 is the largest value with zero
+  // failures across all of them. bonus=2 already fails 27/540 pairs (the first is 1/30, whose
+  // minutes half overflows the canvas width by ~0.04px); by bonus=4 every pair fails, including
+  // visible clipping at the top of the hour digit. The single-label layouts
+  // (LargeMinutes/LargeHours/LargeDays) already auto-fit the full canvas and get no such bonus.
+  // See TrayIconServiceTests.MeasureDiagonalParts_FitsEveryHourMinutePairAtTheProductionBonus for
+  // the permanent regression guard, and AGENTS.md §10.1/§17 for the write-up (including why this
+  // result holds at every OS display DPI, not just the one it was measured at).
+  private const int DiagonalFontSizeBonus = 1;
+
+  // sizeBonus is a parameter (not just the constant above) so TrayIconServiceTests can exhaustively
+  // probe candidate bonus values via the MeasureDiagonalParts(hours, minutes, sizeBonus) overload
+  // below without recompiling the app between values. Production rendering always passes the
+  // DiagonalFontSizeBonus constant (see DrawDiagonalHourMinute).
   private static (GraphicsPath Hour, GraphicsPath Minute) BuildDiagonalPaths(
     long hours,
-    int minutes
+    int minutes,
+    int sizeBonus
   ) =>
     (
       BuildLabelPath(
         hours.ToString(CultureInfo.InvariantCulture),
         HourBox,
         HourBox.Width,
-        HourBox.Height
+        HourBox.Height,
+        sizeBonus
       ),
       BuildLabelPath(
         minutes.ToString("D2", CultureInfo.InvariantCulture),
         MinuteBox,
         MinuteBox.Width,
-        MinuteBox.Height
+        MinuteBox.Height,
+        sizeBonus
       )
     );
 
-  // Builds the label's glyph path at the largest size whose ink fits the budget, translated so the
-  // ink (not the padded line box) is centered in the given box.
+  // Builds the label's glyph path at the largest size whose ink fits the budget (plus an optional
+  // adjustment — the diagonal layout's fixed bonus above), translated so the ink (not the padded
+  // line box) is centered in the given box.
   private static GraphicsPath BuildLabelPath(
     string text,
     RectangleF box,
     float widthBudget,
-    float heightBudget
+    float heightBudget,
+    int sizeAdjustment = 0
   )
   {
-    int size = MeasureLabelFontSize(text, widthBudget, heightBudget);
+    int size = MeasureLabelFontSize(text, widthBudget, heightBudget) + sizeAdjustment;
     using FontFamily family = new("Segoe UI");
     GraphicsPath path = new();
     path.AddString(
@@ -533,16 +558,32 @@ public sealed partial class TrayIconService : IDisposable
 
   /// <summary>
   /// Returns the glyph ink rectangles the diagonal <c>h / mm</c> layout draws for the hour (top-left)
-  /// and the minutes (bottom-right). The renderer consumes the same paths, so measured and drawn
-  /// geometry cannot diverge. Internal so placement can be unit tested without a
-  /// <see cref="Graphics"/> surface.
+  /// and the minutes (bottom-right), at the production <see cref="DiagonalFontSizeBonus"/>. The
+  /// renderer consumes the same paths, so measured and drawn geometry cannot diverge. Internal so
+  /// placement can be unit tested without a <see cref="Graphics"/> surface.
   /// </summary>
   internal static (RectangleF HourInk, RectangleF MinuteInk) MeasureDiagonalParts(
     long hours,
     int minutes
+  ) => MeasureDiagonalParts(hours, minutes, DiagonalFontSizeBonus);
+
+  /// <summary>
+  /// Same as <see cref="MeasureDiagonalParts(long, int)"/>, at an explicit <paramref name="sizeBonus"/>
+  /// instead of the production constant — the seam <c>TrayIconServiceTests</c> used to exhaustively
+  /// probe candidate bonus values (every hour × minute pair the layout can show) before
+  /// <see cref="DiagonalFontSizeBonus"/> was set.
+  /// </summary>
+  internal static (RectangleF HourInk, RectangleF MinuteInk) MeasureDiagonalParts(
+    long hours,
+    int minutes,
+    int sizeBonus
   )
   {
-    (GraphicsPath hourPath, GraphicsPath minutePath) = BuildDiagonalPaths(hours, minutes);
+    (GraphicsPath hourPath, GraphicsPath minutePath) = BuildDiagonalPaths(
+      hours,
+      minutes,
+      sizeBonus
+    );
     using (hourPath)
     using (minutePath)
     {

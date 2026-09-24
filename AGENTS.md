@@ -731,6 +731,25 @@ of the minutes readout's size. Sharing one rule means the common `1D`/`10H` labe
 the same size as `45`. A paused stopwatch freezes whichever layout it reached; running, paused, and
 idle may differ in tint but not layout.
 
+The diagonal `h/mm` layout renders **one point above** that auto-fit size
+(`TrayIconService.DiagonalFontSizeBonus`) — the single-label layouts already auto-fit the full
+canvas and get no such bonus. This is not a spot-checked guess: it is the largest bonus that keeps
+**every** hour (1–9) × minute (0–59) pair the layout can show — 540 combinations — fully inside the
+32×32 canvas with the two halves never colliding, found by sweeping candidate bonus values against
+all 540 pairs. `+2` already fails 27 of the 540 (the first, `1/30`, overflows the canvas width by
+about 0.04px); by `+4` every pair fails, including visible clipping at the top of the hour digit.
+At `+1` the glyph ink does slightly exceed `HourBox`/`MinuteBox` themselves (by under 1px at the
+widest case) but never the outer canvas.
+`TrayIconServiceTests.MeasureDiagonalParts_FitsEveryHourMinutePairAtTheProductionBonus` re-checks
+all 540 pairs at the production bonus so a future change is caught immediately, not just the 4
+pairs `_KeepsBothHalvesInsideTheCanvas`/`_NeverOverlapsTheTwoHalves` spot-check.
+
+This result is the same at every OS display DPI: the icon is always rendered into the fixed 32×32
+canvas above (`TrayIconService.IconSize`, not derived from `DeviceDpi`), and only afterward does
+Windows scale that finished bitmap to whatever physical size the tray slot needs at the monitor's
+DPI. DPI changes the final on-screen pixel size uniformly; it never changes what fraction of the
+32×32 canvas the ink occupies, so this sweep did not need to be repeated per DPI.
+
 Update the icon at most once per second, and only when the displayed value or active layout changes
 — track both explicitly in the dirty-check state.
 
@@ -1227,6 +1246,16 @@ here; do not accumulate dated implementation history.
   correctly with no schema migration, no `IStopwatchStore` change, and no `PausedSession` change —
   consistent with §9's rule that a schema change is only ever a new, append-only migration, never
   one added speculatively when existing columns already cover the need.
+- **The diagonal `h/mm` layout carries a fixed +1pt bonus over its own auto-fit size, chosen by an
+  exhaustive experiment, not a spot check.** The repo owner asked to push it up for more visibility
+  and find the actual ceiling. A sweep of candidate bonus values against every hour (1–9) × minute
+  (0–59) pair the layout can render (540 combinations) found `+1` is the largest value with zero
+  canvas overflows or half-to-half collisions across all of them; `+2` already fails 27 pairs and by
+  `+4` every pair fails, with visible clipping. Kept as a small fixed constant
+  (`DiagonalFontSizeBonus`), with the sweep's seam (`MeasureDiagonalParts`'s `sizeBonus` overload)
+  left in place as a permanent, harmless way to re-run the same experiment if the box geometry ever
+  changes, rather than folded into the shared auto-fit rule — the single-label layouts already use
+  the full canvas as their budget and have no headroom to spare.
 - **The tray icon follows the current split, not the session total.** The icon has room for only
   one compact number; once laps are in use, the lap in progress is the more actionable value to
   glance at, and the tooltip already carries the exact, unbounded session total for anyone who
