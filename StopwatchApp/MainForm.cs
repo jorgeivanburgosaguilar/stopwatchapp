@@ -104,6 +104,7 @@ public sealed class MainForm : Form
       Dock = DockStyle.Fill,
     };
     _stopwatchControl.ConfirmStop = ConfirmStop;
+    _stopwatchControl.ConfirmReset = ConfirmReset;
     _recordsListControl = new RecordsListControl();
     _trayIconService = new TrayIconService(_stopwatchControl, RestoreWindow, ExitApplication);
     _activateMessage = (int)Program.RegisterWindowMessage(Program.ActivateMessageName);
@@ -677,6 +678,16 @@ public sealed class MainForm : Form
 
     return StopConfirmationDialog.ShowConfirm(this, _stopwatchControl.Timer.ElapsedMs)
       == DialogResult.Yes;
+  }
+
+  private bool ConfirmReset()
+  {
+    if (!Visible)
+    {
+      RestoreWindow();
+    }
+
+    return ResetConfirmationDialog.ShowConfirm(this) == DialogResult.Yes;
   }
 
   private async void ClearRecordsAsync()

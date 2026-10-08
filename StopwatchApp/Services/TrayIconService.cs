@@ -288,16 +288,19 @@ public sealed partial class TrayIconService : IDisposable
         CreateMenuItem("Pause", TrayMenuAction.Pause, () => _control.PauseTimerAsync()),
         CreateMenuItem("Lap", TrayMenuAction.Lap, _control.AddLap),
         CreateMenuItem("Stop", TrayMenuAction.Stop, () => _control.StopTimerAsync()),
+        CreateMenuItem("Reset", TrayMenuAction.Reset, () => _control.ResetTimerAsync()),
       ],
       TrayState.Paused =>
       [
         CreateMenuItem("Continue", TrayMenuAction.Continue, _control.StartTimer),
         CreateMenuItem("Stop", TrayMenuAction.Stop, () => _control.StopTimerAsync()),
+        CreateMenuItem("Reset", TrayMenuAction.Reset, () => _control.ResetTimerAsync()),
       ],
       _ =>
       [
         CreateMenuItem("Start", TrayMenuAction.Start, _control.StartTimer),
         CreateMenuItem("Stop", TrayMenuAction.Stop, () => _control.StopTimerAsync()),
+        CreateMenuItem("Reset", TrayMenuAction.Reset, () => _control.ResetTimerAsync()),
       ],
     };
 
@@ -338,6 +341,7 @@ public sealed partial class TrayIconService : IDisposable
       TrayMenuAction.Start or TrayMenuAction.Continue => Palette.StartButton.Base,
       TrayMenuAction.Pause => Palette.PauseButton.Base,
       TrayMenuAction.Lap or TrayMenuAction.Open => Palette.LapButton.Base,
+      TrayMenuAction.Reset => Palette.ResetButton.Base,
       _ => Palette.StopButton.Base,
     };
     using SolidBrush brush = new(color);
@@ -366,6 +370,10 @@ public sealed partial class TrayIconService : IDisposable
         break;
       case TrayMenuAction.Stop:
         graphics.FillRectangle(brush, 3, 3, 10, 10);
+        break;
+      case TrayMenuAction.Reset:
+        graphics.DrawArc(pen, bounds, 210, 290);
+        graphics.DrawLines(pen, [new Point(2, 3), new Point(2, 7), new Point(6, 7)]);
         break;
       case TrayMenuAction.Exit:
         graphics.DrawRectangle(pen, 3, 2, 7, 12);
@@ -661,6 +669,7 @@ public sealed partial class TrayIconService : IDisposable
     Pause,
     Lap,
     Stop,
+    Reset,
     Exit,
   }
 }

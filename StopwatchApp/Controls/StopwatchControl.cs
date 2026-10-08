@@ -20,6 +20,7 @@ public sealed class StopwatchControl : UserControl
   private readonly Button _pauseButton;
   private readonly Button _lapButton;
   private readonly Button _stopButton;
+  private readonly Button _resetButton;
   private readonly Label _elapsedLabel;
   private readonly Label _lapElapsedLabel;
   private readonly Label _resumedNoteLabel;
@@ -27,6 +28,7 @@ public sealed class StopwatchControl : UserControl
   private readonly Font _lapElapsedFont;
   private readonly int _stopConfirmationAfterMinutes;
   private bool _darkMode;
+  private bool _endingSession;
 
   /// <summary>
   /// Initializes a new instance of the <see cref="StopwatchControl"/> class.
@@ -118,6 +120,9 @@ public sealed class StopwatchControl : UserControl
     _stopButton = ButtonFactory.Create("Stop", Palette.StopButton);
     _stopButton.Click += async (_, _) => await StopTimerAsync();
 
+    _resetButton = ButtonFactory.Create("Reset", Palette.ResetButton);
+    _resetButton.Click += async (_, _) => await ResetTimerAsync();
+
     _shortcutToolTip = new ToolTip();
     _shortcutToolTip.SetToolTip(_pauseButton, "Pause (Space)");
     _shortcutToolTip.SetToolTip(_lapButton, "Lap (Shift+Space)");
@@ -131,13 +136,14 @@ public sealed class StopwatchControl : UserControl
       Anchor = AnchorStyles.None,
     };
     // Added in the fixed left-to-right order from AGENTS.md §8.5; hidden buttons take no flow space,
-    // so idle/paused render "Start/Continue, Stop" and running renders "Pause, Lap, Stop". The
+    // so idle/paused render "Start/Continue, Stop, Reset" and running "Pause, Lap, Stop, Reset". The
     // FlowLayoutPanel's own AutoSize shrinks to fit whichever set is visible, and re-centers via its
     // TableLayoutPanel cell's Anchor=None below.
     buttonRow.Controls.Add(_primaryButton);
     buttonRow.Controls.Add(_pauseButton);
     buttonRow.Controls.Add(_lapButton);
     buttonRow.Controls.Add(_stopButton);
+    buttonRow.Controls.Add(_resetButton);
 
     // AGENTS.md §8.5/§10.3 — an interior TableLayoutPanel with Anchor=None cells is this repo's
     // centering idiom: a plain Controls collection never re-centers a child on its own, only a
@@ -211,6 +217,10 @@ public sealed class StopwatchControl : UserControl
   [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
   public Func<bool> ConfirmStop { get; set; } = () => true;
 
+  /// <summary>Gets or sets the mandatory Reset confirmation callback; defaults to cancellation.</summary>
+  [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+  public Func<bool> ConfirmReset { get; set; } = () => false;
+
   /// <summary>
   /// Gets or sets whether the control renders its palette-driven surfaces in dark mode. Defaults
   /// to <see langword="false"/>; <c>MainForm</c> wires it to the OS setting (AGENTS.md §7/§11).
@@ -250,6 +260,10 @@ public sealed class StopwatchControl : UserControl
   /// </summary>
   public void StartTimer()
   {
+    if (_endingSession)
+    {
+      return;
+    }
     Timer.Start();
     UpdateDisplay();
     StateChanged?.Invoke();
@@ -261,6 +275,10 @@ public sealed class StopwatchControl : UserControl
   /// </summary>
   public async Task PauseTimerAsync()
   {
+    if (_endingSession)
+    {
+      return;
+    }
     await Timer.PauseAsync();
     UpdateDisplay();
     StateChanged?.Invoke();
@@ -272,6 +290,10 @@ public sealed class StopwatchControl : UserControl
   /// </summary>
   public void AddLap()
   {
+    if (_endingSession)
+    {
+      return;
+    }
     Timer.Lap();
     UpdateDisplay();
     StateChanged?.Invoke();
@@ -285,35 +307,91 @@ public sealed class StopwatchControl : UserControl
   /// </summary>
   public async Task StopTimerAsync()
   {
-    if (
-      RequiresStopConfirmation(
-        Timer.ElapsedMs,
-        Timer.IsRunning,
-        Timer.IsPaused,
-        _stopConfirmationAfterMinutes
+    if (_endingSession)
+    {
+      return;
+    }
+
+    _endingSession = true;
+    try
+    {
+      if (
+        RequiresStopConfirmation(
+          Timer.ElapsedMs,
+          Timer.IsRunning,
+          Timer.IsPaused,
+          _stopConfirmationAfterMinutes
+        )
       )
-    )
+      {
+        bool wasRunning = Timer.IsRunning;
+        if (wasRunning)
+        {
+          await Timer.PauseAsync();
+          UpdateDisplay();
+          StateChanged?.Invoke();
+        }
+
+        if (!ConfirmStop())
+        {
+          if (wasRunning)
+          {
+            Timer.Start();
+          }
+
+          return;
+        }
+      }
+
+      await Timer.StopAsync();
+    }
+    finally
+    {
+      _endingSession = false;
+      UpdateDisplay();
+      StateChanged?.Invoke();
+    }
+  }
+
+  /// <summary>
+  /// Always asks for confirmation, then discards the entire session and its recovery snapshot.
+  /// Cancelling resumes a previously running clock and preserves an already-paused clock.
+  /// </summary>
+  public async Task ResetTimerAsync()
+  {
+    if (_endingSession)
+    {
+      return;
+    }
+
+    _endingSession = true;
+    try
     {
       bool wasRunning = Timer.IsRunning;
       if (wasRunning)
       {
-        await PauseTimerAsync();
+        await Timer.PauseAsync();
+        UpdateDisplay();
+        StateChanged?.Invoke();
       }
 
-      if (!ConfirmStop())
+      if (!ConfirmReset())
       {
         if (wasRunning)
         {
-          StartTimer();
+          Timer.Start();
         }
-
         return;
       }
-    }
 
-    await Timer.StopAsync();
-    UpdateDisplay();
-    StateChanged?.Invoke();
+      await Timer.ResetAsync();
+    }
+    finally
+    {
+      _endingSession = false;
+      UpdateDisplay();
+      StateChanged?.Invoke();
+    }
   }
 
   /// <summary>

@@ -21,10 +21,14 @@ project-management, invoicing, monitoring, or cloud-sync product.
 
 ### 1.1 Current functionality
 
-- Start, pause, continue, add lap splits, and stop a session.
+- Start, pause, continue, add lap splits, stop and save a session, or reset and discard it.
+- Reset always asks for confirmation, including while idle. It returns the clock to `00:00:00`,
+  clears the current session and laps, and deletes its recovery snapshot without saving a record.
+  Previously saved history is retained. Reset appears immediately after Stop in the main window
+  and tray menu, in dark orange; it has no keyboard shortcut or configuration setting.
 - Show, below the main elapsed-time readout, a smaller lap-elapsed clock counting the time since
   the last lap split; it appears only once a lap has been recorded in the current session, freezes
-  and resumes alongside the main clock on pause/continue, and disappears on stop. It is a pure
+  and resumes alongside the main clock on pause/continue, and disappears on Stop or Reset. It is a pure
   display derivation of existing state — no new persistence.
 - Show elapsed time in the main window and in a runtime-rendered tray icon. The icon shows minutes
   below one hour, a diagonal hour/minutes split from one hour through nine hours, whole hours from ten hours
@@ -148,6 +152,7 @@ StopwatchApp/
     RowIcon.cs             the three row icons; RowIconSet.cs owns their decoded bitmaps
     ClearRecordsDialog.cs  confirm dialog
     StopConfirmationDialog.cs  Stop confirmation dialog (§8.3/§8.5)
+    ResetConfirmationDialog.cs  unconditional Reset confirmation (§8.3/§8.5)
     DeleteRecordDialog.cs  per-record delete confirmation
     ManageRecordsForm.cs   modeless, paginated full-history window
   Models/                  one record type per file (§5)
@@ -211,7 +216,7 @@ refactor. Their authoritative declarations are in
 `StopwatchApp/Services/IStopwatchStore.cs`, `StopwatchApp/Services/StopwatchTimer.cs`,
 `StopwatchApp/Controls/StopwatchControl.cs`, `StopwatchApp/Services/TrayIconService.cs`,
 `StopwatchApp/Controls/RecordsListControl.cs`, `StopwatchApp/Controls/ClearRecordsDialog.cs`,
-`StopwatchApp/Controls/StopConfirmationDialog.cs`,
+`StopwatchApp/Controls/StopConfirmationDialog.cs`, `StopwatchApp/Controls/ResetConfirmationDialog.cs`,
 `StopwatchApp/Formatting/TimeFormat.cs`, and `StopwatchApp/Theme/Palette.cs`. Consult those files
 for exact signatures rather than duplicating them here.
 
@@ -222,8 +227,9 @@ first. There is no window-position persistence surface — it was removed with t
 §9 (see §10.6).
 
 `StopwatchTimer` is UI-free and owns the timer state, laps, and newest-first records collection.
-Its asynchronous method suffixes are load-bearing: pausing persists a snapshot and stopping awaits
-a record write, so callers must await them and must never replace that flow with `.Wait()` or
+Its asynchronous method suffixes are load-bearing: pausing persists a snapshot, stopping awaits
+a record write, and resetting awaits snapshot deletion, so callers must await them and must never
+replace that flow with `.Wait()` or
 `.Result` (forbidden by §5). `GetRecordLapsAsync` routes `ManageRecordsForm`'s lap-detail loads
 through the same store boundary, so UI components never call `IStopwatchStore` directly.
 
@@ -249,6 +255,12 @@ transitions and display refreshes cannot diverge. `TrayIconService` takes callba
 `MainForm` reference. `RecordsListControl` accepts pushed record and lap lists, raises requests for
 record-management actions, and never reads `IStopwatchStore`. The clear-records dialog returns Yes
 only for explicit confirmation; Cancel, Escape, and closing the window all cancel the operation.
+`StopwatchControl.ResetTimerAsync` is the shared Reset gate for the button and tray. Its
+`ConfirmReset` callback defaults to cancellation; `MainForm` supplies the dialog and restores a
+hidden window before showing it. The control guards timer actions while confirmation/reset is
+in progress so duplicate or conflicting actions cannot change the session being discarded.
+`StopwatchTimer.ResetAsync` owns the UI-free discard transition and uses the existing snapshot
+deletion boundary; no persistence interface or schema change is needed.
 
 ---
 
@@ -416,9 +428,9 @@ reactively — every field is written imperatively by the transition methods bel
 |---|---|---|---|
 | `IsRunning` | bool | `false` | drives the timer |
 | `IsPaused` | bool | `false` | distinct from idle (neither running nor paused) |
-| `ElapsedMs` | long | `0` | **written only by the 1-second tick**; never zeroed by Stop |
+| `ElapsedMs` | long | `0` | advancing elapsed time is written only by the 1-second tick; fresh Start and Reset zero it, Restore loads it; never zeroed by Stop |
 | `StartTime` | epoch ms | `0` | anchor = `Now - ElapsedMs`, re-set on every start/resume |
-| `SessionStartMs` | epoch ms | `0` | wall-clock start of the whole session; survives pause; set to `0` at the end of Stop; doubles as the "a session exists" guard |
+| `SessionStartMs` | epoch ms | `0` | wall-clock start of the whole session; survives pause; set to `0` by Stop and Reset; doubles as the "a session exists" guard |
 | `Records` | list | empty | loaded from SQLite, newest first |
 | `Laps` | list | empty | in-memory splits, newest first (each new lap is prepended) |
 | `LastLapElapsed` | long | `0` | `ElapsedMs` value at the last lap |
@@ -445,8 +457,9 @@ After `Tick()`, `StopwatchControl` awaits `SaveAutosaveIfDueAsync()`. While runn
 persists the current session into the same single snapshot slot whenever accumulated running time
 reaches the next configured interval. The cadence comes from `settings.json` beside the executable;
 missing, unreadable, malformed, zero, or negative values fall back to five minutes. Paused time does
-not advance the checkpoint. Snapshot writes and Stop's snapshot deletion share a `SemaphoreSlim`, so
-an in-flight autosave can never recreate a recovery snapshot after Stop clears it.
+not advance the checkpoint. Snapshot writes and Stop/Reset snapshot deletion share a
+`SemaphoreSlim`, so an in-flight autosave can never recreate a recovery snapshot after either
+transition clears it.
 
 Clock source is `DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()` — **not**
 `System.Diagnostics.Stopwatch`. The wall-clock anchor is deliberate: a late/delayed tick
@@ -482,7 +495,19 @@ The authoritative transition implementation is in
   paused. A threshold of `0` (or a negative configured value) disables the confirmation; below the
   threshold, and while idle, Stop behaves exactly as before.
 
-**There is no Reset button.** Reset is implicit in the next `Start()`.
+- **Reset.** `StopwatchTimer.ResetAsync` returns to idle and zeros elapsed time, timing anchors,
+  lap markers, restored-session metadata, and autosave scheduling; it clears all in-memory laps
+  and deletes the recovery snapshot through the same gate as autosave. It never appends a final
+  lap, saves a record or laps, emits `OnStop`, or modifies the records collection. Reset is valid
+  and harmless in every state, including idle and before the first tick; a fresh Start afterward
+  begins from zero. Snapshot deletion waits for an in-flight write, preventing recovery of the
+  discarded session on restart.
+- **Reset confirmation.** Every button and tray Reset passes through
+  `StopwatchControl.ResetTimerAsync`, which always asks `ConfirmReset`, regardless of elapsed time,
+  timer state, or Stop settings. A running clock first pauses using the normal pause flow. Cancel
+  resumes it with confirmation time excluded; an already-paused or idle clock retains that state.
+  Confirm discards the session and refreshes the main clock, laps, restored note, tray icon and
+  tooltip to idle/zero. Duplicate and conflicting timer actions are ignored while this gate runs.
 
 ### 8.4 Formatters
 
@@ -506,9 +531,9 @@ Control row by state — exact labels and order:
 
 | State | Buttons shown (left → right) | Color intent |
 |---|---|---|
-| idle (not running, not paused) | Start, Stop | green, red |
-| running | Pause, Lap, Stop | yellow, blue, red |
-| paused | Continue, Stop | green, red |
+| idle (not running, not paused) | Start, Stop, Reset | green, red, dark orange |
+| running | Pause, Lap, Stop, Reset | yellow, blue, red, dark orange |
+| paused | Continue, Stop, Reset | green, red, dark orange |
 
 Rules:
 
@@ -532,7 +557,7 @@ Rules:
   (not the main clock's `Palette.Text`) to keep the visual hierarchy. It is visible only when
   `StopwatchTimer.HasActiveLapSplit` is true — i.e. only once at least one lap has been recorded in
   the current session — and shows the split's lap number and the time since the last lap press. It
-  freezes and resumes exactly alongside the main clock on pause/continue and disappears on Stop.
+  freezes and resumes exactly alongside the main clock on pause/continue and disappears on Stop or Reset.
   The card and window resize to fit it appearing/disappearing the same way they already resize for
   the laps panel and resumed-pause note (below).
 - **Centering:** the elapsed-time display and the button row are both centered on the
@@ -593,9 +618,14 @@ Rules:
   buttons `Cancel` (dark slate, `Palette.CancelButton`) and `Stop` (red, `Palette.StopButton`), laid
   out like the Clear All dialog. It has no `AcceptButton` — `Enter` is the Stop shortcut, so the
   keypress that opened it must not also confirm it; Cancel, Escape, and the close box all cancel.
+- The Reset confirmation dialog (`Controls/ResetConfirmationDialog.cs`), titled `Reset Stopwatch`,
+  body text `Reset the clock to zero and discard this session, all its laps, and its recovery snapshot? Previously saved records will be kept.`,
+  has `Cancel` (dark slate, `Palette.CancelButton`) and `Reset` (dark orange, `Palette.ResetButton`)
+  buttons from `ButtonFactory`. Cancel has initial focus; Escape and the close box cancel. Only
+  explicit Reset confirms the discard. This dialog appears even when idle.
 - A note reading `Resumed from a pause on {date} at {time}` (via `FormatDate`/`FormatTimeOnly` on
   `RestoredPausedAtMs`) appears under the timer only after restoring a saved session. It persists
-  through Continue and is cleared by Stop or a fresh Start.
+  through Continue and is cleared by Stop, Reset, or a fresh Start.
 
 Row text templates, literal (including the emoji):
 
@@ -629,6 +659,10 @@ Four events with no-op defaults so the control works standalone:
 | `OnPause` | End of `Pause()`, only if it was running, after the session snapshot is saved | `ElapsedMs` |
 | `OnTick` | Inside the 1-second tick, only at 5 s, 10 s, 15 s… of elapsed time, never while paused or stopped | `ElapsedMs` |
 | `OnStop` | In `Stop()`, before the database write, only when `ElapsedMs > 0 && SessionStartMs > 0` | `ElapsedMs`, `SessionStartMs`, `EndTimestamp` |
+
+Reset does not emit `OnStop`; its control refreshes and raises `StateChanged` after the awaited
+discard. `ConfirmReset` is a confirmation callback, separate from these service events, and its
+standalone default is `false` so an unwired control cannot silently discard a session.
 
 ---
 
@@ -690,6 +724,8 @@ Restore runs once at startup, after the database connection opens: if a paused s
 UI shows the frozen elapsed time, a `Continue` button, the restored laps, and the "resumed from a
 pause" note (§8.5). **Time spent away while the app was closed is never counted** — resuming
 re-anchors `StartTime` from the current clock, exactly as an in-app pause/resume does.
+Reset deletes this single snapshot slot through the existing API, preserving completed records
+and their persisted laps. It adds neither a schema migration nor a settings property.
 
 ---
 
@@ -763,7 +799,9 @@ The tooltip is unaffected by laps; only the compact icon layouts above follow th
 ### 10.2 Tray context menu
 
 Order: `Open`, separator, the state-appropriate action(s) from §8.5 (`Start`/`Pause`/`Continue`/
-`Lap`/`Stop`), separator, `Exit`. Single left-clicking the tray icon opens (restores and activates)
+`Lap`/`Stop`/`Reset`), separator, `Exit`. Reset follows Stop in every state and uses a dark-orange
+reset-arrow glyph matching `Palette.ResetButton`; it calls the shared Reset confirmation gate.
+Single left-clicking the tray icon opens (restores and activates)
 the main window; right-click remains reserved for the context menu. `Exit` is the only way to quit
 the application.
 
@@ -814,6 +852,9 @@ while the main window has focus:
 | `Space` | Start / Pause / Continue — whatever the primary button currently does |
 | `Shift+Space` | Lap |
 | `Enter` | Stop |
+
+Reset has no keyboard shortcut. Modal confirmation dialogs do not dispatch the main-window
+shortcuts, and the shared action guard ignores actions while a reset confirmation is pending.
 
 `StopwatchControl.MapShortcut(Keys keyData)` is the pure, unit-tested key table (bare `Space` →
 `Toggle`, `Shift+Space` → `Lap`, `Enter` → `Stop`, everything else → `null` — any other modifier on
@@ -885,10 +926,12 @@ Button colors (base / hover / pressed), same in both themes:
 | Pause (yellow) | `#CA8A04` | `#A16207` | `#854D0E` |
 | Lap (blue) — also `Manage Records` | `#2563EB` | `#1D4ED8` | `#1E40AF` |
 | Stop (red) — also `Clear All Records`/dialog `Clear All` | `#DC2626` | `#B91C1C` | `#991B1B` |
+| Reset (dark orange) — also dialog `Reset` | `#C2410C` | `#9A3412` | `#7C2D12` |
 | Cancel (dark slate) — dialog `Cancel` | `#334155` | `#1E293B` | `#0F172A` |
 
 `Theme/Palette.cs` holds the color and spacing tokens above; `Theme/Typography.cs` is the
 second token file, holding the type scale (§8.5) and the shared monospace-family resolution.
+Reset uses white button text in both themes and the base orange for its tray action glyph.
 
 ---
 
@@ -897,8 +940,11 @@ second token file, holding the type scale (§8.5) and the shared monospace-famil
 These are the specified contract, not oversights. A change that "corrects" one of these breaks the
 contract:
 
-- `ElapsedMs` is written only by the 1-second tick, so all recorded durations are truncated to
-  whole seconds — stopping at 1.9 s stores 1.0 s.
+- Advancing `ElapsedMs` is written only by the 1-second tick, so all recorded durations are
+  truncated to whole seconds — stopping at 1.9 s stores 1.0 s. Start and Reset may zero elapsed
+  time and Restore may load it; these transitions do not sample extra elapsed time.
+- Reset always confirms, even at zero or idle, and discards the entire live session and its
+  checkpoint. It never saves an unfinished or final lap and never deletes completed history.
 - A session stopped before its first tick (under 1000 ms) leaves `ElapsedMs == 0`: **no record is
   saved and `OnStop` never fires**.
 - A stopped session's laps are normalized into their own permanent `record_laps` table, owned by
@@ -940,7 +986,7 @@ xUnit, in a `StopwatchApp.Tests` project.
 
 ## 14. Acceptance criteria (standing regression checklist)
 
-- Initial display is exactly `00:00:00`; Start and Stop are both visible at idle.
+- Initial display is exactly `00:00:00`; Start, Stop, and Reset are visible at idle in that order.
 - The Lap button exists only while running — absent at idle and while paused.
 - Consecutive laps are splits, not cumulative totals: a lap after 61 s shows `00:01`; a second lap
   121 s later shows `00:02` (not `00:03`).
@@ -986,9 +1032,25 @@ xUnit, in a `StopwatchApp.Tests` project.
   from the Stop button, `Enter`, and every tray-menu Stop (the tray path restores the hidden window
   first). Setting `StopConfirmationAfterMinutes` to `0` disables it; a missing or malformed value
   falls back to five without affecting `AutosaveIntervalMinutes`, and vice versa.
+- Reset (§8.3/§8.5): dark-orange Reset sits directly to the right of Stop in every main-window
+  state and after Stop in every tray state. Every invocation confirms, including idle,
+  zero-duration, and with Stop confirmation disabled. The dialog text matches §8.5, initially
+  focuses Cancel, and Cancel/Escape/closing preserve the session; a previously running clock
+  resumes with dialog time excluded, while an already-paused clock stays paused. Tray Reset
+  restores a hidden main window before showing the dialog. No Reset shortcut is introduced.
+- Confirmed Reset from running, paused, restored, or idle states returns to `00:00:00`, clears
+  laps and the restored-session note, hides the lap clock, and displays tray `00` with tooltip
+  `00:00:00`. Saved records and their laps remain unchanged; no record, final lap, or `OnStop`
+  event is produced. Restart shows Start with no recovery session. Repeated resets are harmless
+  and the next Start begins cleanly with a fresh autosave cadence.
+- Reset racing an in-flight autosave waits for it, then clears its snapshot without allowing a
+  late checkpoint to restore the discarded session. Cover this with the fake store's deterministic
+  save gate, not sleeps. Duplicate/reset-conflicting timer actions are ignored while confirmation
+  or deletion awaits completion. Manually check button/dialog sizing and colors in both themes
+  and at increased DPI, along with the tray close/minimize/Exit checks.
 - Keyboard shortcuts: with the main window focused, `Space` starts/pauses/continues, `Shift+Space`
   laps, and `Enter` stops, matching the mouse-click behavior of the same buttons; none of the three
-  fires while the window is hidden to the tray or while `ClearRecordsDialog` is open.
+  fires while the window is hidden to the tray or while any modal confirmation dialog is open.
 - Window position (§10.6): the window always opens centered on the primary screen — on first
   launch, tray Open/single left-click, single-instance activation, and restore-from-minimize alike. It
   never remembers or restores a previous position, and cannot be dragged-then-resized since the frame
@@ -1046,7 +1108,7 @@ xUnit, in a `StopwatchApp.Tests` project.
   time uninterrupted; freezes on Pause and shows no jump across Continue (paused time excluded,
   same as the main clock); survives an app restart after Pause, showing its saved split and lap
   number alongside the restored main clock and the "Resumed from a saved point" note; disappears on
-  Stop. The window's height grows and shrinks to fit it appearing and disappearing, with no dead
+  Stop or Reset. The window's height grows and shrinks to fit it appearing and disappearing, with no dead
   space. The tray icon follows this same split (see the "Tray icon split" criterion above); the
   tooltip is unaffected throughout and always shows the total session elapsed time.
 
@@ -1150,8 +1212,8 @@ here; do not accumulate dated implementation history.
   ticks self-correct from a wall-clock anchor and makes tests deterministic without sleeping.
 - **Autosave reuses the paused-session slot.** A second recovery table or event log would add
   competing recovery semantics. Pause and periodic running-time checkpoints serialize writes
-  through one gate, and Stop clears the slot through that same gate to prevent a late write from
-  resurrecting a stopped session.
+  through one gate, and Stop and Reset clear the slot through that same gate to prevent a late
+  write from resurrecting a stopped or discarded session.
 - **Records are owned by the state machine.** Main-window preview, records manager, tray actions, and
   shortcuts all observe one timer-owned newest-first collection. After save/delete/clear, the timer
   reloads it and raises `RecordsChanged`; UI components never mutate a shared list or query the
@@ -1164,6 +1226,14 @@ here; do not accumulate dated implementation history.
   interval means "use the default", because a disabled autosave has no sensible meaning but a
   disabled confirmation does. Settings validate per property so one bad value never discards the
   other, which is why the loader is `AppSettings` rather than an autosave-only type.
+- **Reset discards the whole live session and always confirms.** A separate `ResetAsync` transition
+  makes discard explicit without reusing Stop's record-save or final-lap logic. It zeros the clock
+  and clears the existing recovery slot, so a discarded checkpoint cannot reappear after restart;
+  completed history stays intact and no new persistence surface is needed. The shared
+  `ResetTimerAsync` gate covers both button and tray, uses a cancellation-default `ConfirmReset`
+  callback, and excludes concurrent timer actions while awaiting confirmation/deletion. Dark orange
+  distinguishes this discard action from red Stop/save, and confirmation has no disable setting
+  because a mistaken Reset loses the entire session.
 - **UI actions route through `StopwatchControl`.** Buttons, tray menu items, and keyboard shortcuts
   call the same action methods so state transitions, display updates, timer enablement, and
   `StateChanged` notifications cannot drift into separate implementations.

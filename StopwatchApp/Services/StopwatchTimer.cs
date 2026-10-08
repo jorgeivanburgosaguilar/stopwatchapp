@@ -3,7 +3,7 @@ using StopwatchApp.Models;
 namespace StopwatchApp.Services;
 
 /// <summary>
-/// The UI-free stopwatch state machine: tick loop, start/pause/lap/stop transitions, and the
+/// The UI-free stopwatch state machine: tick loop, start/pause/lap/stop/reset transitions, and the
 /// records list. See AGENTS.md §8 for the full behavioral contract, including §12's intentional
 /// behaviors — this class reproduces that pseudocode verbatim, not a reinterpretation of it.
 /// </summary>
@@ -50,8 +50,9 @@ public sealed class StopwatchTimer : IDisposable
   public bool IsPaused { get; private set; }
 
   /// <summary>
-  /// Gets the current elapsed time, in milliseconds. Written only by <see cref="Tick"/>; never
-  /// zeroed by <see cref="StopAsync"/>.
+  /// Gets the current elapsed time, in milliseconds. Advances only through <see cref="Tick"/>;
+  /// a fresh <see cref="Start"/> or <see cref="ResetAsync"/> zeroes it, while
+  /// <see cref="StopAsync"/> preserves it.
   /// </summary>
   public long ElapsedMs { get; private set; }
 
@@ -240,6 +241,28 @@ public sealed class StopwatchTimer : IDisposable
     }
 
     _sessionStartMs = 0;
+  }
+
+  /// <summary>
+  /// Discards the current session and its recovery snapshot, returns to idle with zero elapsed
+  /// time and no laps, and leaves completed records untouched. An in-flight snapshot write must
+  /// finish before the shared persistence gate deletes it. Never saves a record or raises
+  /// <see cref="OnStop"/>. See AGENTS.md §8.3.
+  /// </summary>
+  public async Task ResetAsync()
+  {
+    IsRunning = false;
+    IsPaused = false;
+    await ClearSnapshotAsync().ConfigureAwait(false);
+
+    ElapsedMs = 0;
+    _laps.Clear();
+    _startTime = 0;
+    _sessionStartMs = 0;
+    _lastLapElapsed = 0;
+    _lastLapTimestamp = 0;
+    _nextAutosaveElapsedMs = 0;
+    RestoredPausedAtMs = 0;
   }
 
   /// <summary>

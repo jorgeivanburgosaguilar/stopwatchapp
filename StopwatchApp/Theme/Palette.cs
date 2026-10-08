@@ -123,6 +123,14 @@ public static class Palette
       Color.FromArgb(0x99, 0x1B, 0x1B)
     );
 
+  /// <summary>Gets the Reset button's base, hover, and pressed colors (dark orange; same in both themes).</summary>
+  public static (Color Base, Color Hover, Color Pressed) ResetButton { get; } =
+    (
+      Color.FromArgb(0xC2, 0x41, 0x0C),
+      Color.FromArgb(0x9A, 0x34, 0x12),
+      Color.FromArgb(0x7C, 0x2D, 0x12)
+    );
+
   /// <summary>
   /// Gets the Cancel/dismiss button's base, hover, and pressed colors (dark slate; same in both
   /// themes) — used for a dialog's non-destructive action, paired against a destructive action in
