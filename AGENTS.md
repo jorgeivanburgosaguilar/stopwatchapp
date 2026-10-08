@@ -40,16 +40,17 @@ project-management, invoicing, monitoring, or cloud-sync product.
   click on the tray icon. The tray menu mirrors the valid timer actions and is the explicit exit
   path.
 - Persist completed records in SQLite, show the five newest records in the main window, and expose
-  the full history in one modeless records manager with ten records per page, confirmed deletion,
-  and confirmed clear-all.
+  the full history in one modeless records manager with five records per page, confirmed deletion,
+  and confirmed clear-all. Deletion preserves the current page and scroll offset, clamped only
+  when the remaining content is shorter.
 - Preserve laps in memory and in a saved live-session snapshot. A running session is periodically
   autosaved at the interval configured in `settings.json` (five minutes by default); an explicit
   pause also saves immediately. Restoring either snapshot intentionally returns the session in the
   paused state.
 - Persist every session's laps alongside its record when it is stopped, in a master-detail
   relationship (one record owns zero or more laps). The records manager lists each record's laps,
-  newest first, behind a per-record expand/collapse toggle; the main window's five-record preview
-  stays flat.
+  newest first, behind an expand/collapse toggle on every record. Empty details show
+  `No laps recorded for this session.`; the main window's five-record preview stays flat.
 - Ask for confirmation before Stop once a session has reached the threshold configured in
   `settings.json` (`StopConfirmationAfterMinutes`, five minutes by default, `0` disables): the clock
   pauses, a dialog asks, Stop proceeds on confirm and a running clock resumes on cancel.
@@ -586,18 +587,23 @@ Rules:
   matching the destructive-action color used elsewhere.
 - A **`Manage Records`** button sits beside `Clear All Records`, is always enabled, and
   opens one modeless manager window. Styled blue (`Palette.LapButton`).
-- The manager lists every saved record newest first, 10 per page, with Previous/Next navigation and
+- The manager lists every saved record newest first, 5 per page, with Previous/Next navigation and
   confirmed per-row `Delete` actions. Its width is a fixed budget for a worst-case row with a `23:59` duration
-  (`ManageRecordsForm.WorstCaseElapsedMinutes`), not a function of the page shown; a longer row wraps
+  (`ManageRecordsForm.WorstCaseElapsedMinutes`) plus 50 design pixels (scaled with DPI), not a function of the page shown; a longer row wraps
   to a second line instead of widening the window. Its header also has a confirmed `Clear All Records` action;
   the main card's own Clear All shortcut remains.
-- **Master-detail laps.** Each record row that has saved laps (`StopwatchRecord.LapCount > 0`)
+- **Master-detail laps.** Every record row, including records without saved laps,
   shows a `▸`/`▾` expand toggle to its left; expanding reveals that record's laps beneath it,
   indented, newest first, in the same row template the live laps panel uses (§8.5's row text
-  templates below). A record with no laps shows no toggle. Laps are fetched lazily on first expand
+  templates below). Empty details show `No laps recorded for this session.`; pending loads show
+  `Loading laps…`. Laps are fetched lazily on first expand
   through `StopwatchTimer.GetRecordLapsAsync` and cached per record id; expansion state and the
-  cache survive a page turn and a theme flip, and are reset (expansion pruned, cache cleared) only
-  when the record set itself changes (a save, delete, or clear). The window's fixed height does not
+  cache survive page turns, theme flips, and reloads for surviving immutable records; deleted ids
+  are pruned from both. Deletion retains the current page and scroll offset (clamped to remaining
+  content) and focuses the Delete button at the same row position, or the preceding row if needed.
+  An empty final page falls back to the last remaining page. The manager's client height is
+  460 design pixels for its five-record page, scaled with DPI and clamped to the screen.
+  The window's fixed height does not
   grow when a record expands — the scrollable records host absorbs it, exactly as it already does
   for a page of more rows than fit.
 - **`ButtonFactory`:** every button in the app (`Controls/ButtonFactory.cs`) is a stock
@@ -1078,15 +1084,21 @@ xUnit, in a `StopwatchApp.Tests` project.
   regardless of how many are persisted; "Clear All Records" still clears every persisted record, and
   its own visibility still reflects the true total, not the capped display count.
 - Manage Records window (§8.5): `Manage Records` is enabled and opens a single modeless,
-  owner-managed window that lists all records newest first, paginated at 10 rows per page. Each row
+  owner-managed window that lists all records newest first, paginated at 5 rows per page. Each row
   has a confirmed Delete action; the header has a confirmed Clear All action. Add/edit behavior is
-  out of scope, and the main card's Clear All shortcut remains.
+  out of scope, and the main card's Clear All shortcut remains. The width includes 50 extra
+  design pixels, scaled at higher DPI and clamped to the screen. Verify page navigation and
+  repeated lap collapse/expand stay responsive, retain controls, and display the correct record's laps.
 - Lap persistence (§8.3/§9): stopping a session with laps saves them alongside the record; a
   session stopped with no laps saves none. Stopping twice in a row without restarting persists
   neither a duplicate record nor duplicate laps (the existing duplicate guard covers both).
   Deleting a record deletes its laps; Clear All deletes every record's laps.
-- Manage Records master-detail (§8.5): a record with saved laps shows a `▸` expand toggle; a
-  record with none shows no toggle. Expanding flips the toggle to `▾` and lists that record's laps
+- Manage Records deletion (§8.5): deleting from a scrolled page retains its offset, clamped only
+  to remaining content, and focuses the neighboring Delete button. Check middle/last-row deletion,
+  expanded details, deletion of the last record on the last page, and deletion to empty.
+- Manage Records master-detail (§8.5): every record shows a `▸` expand toggle, including records
+  without laps, whose expanded details read `No laps recorded for this session.`.
+  Expanding flips the toggle to `▾` and lists that record's laps
   beneath it, indented, newest first (lap 8 above lap 7, and so on down to lap 1), using the same
   row template as the live laps panel. Collapsing hides them without discarding the fetched laps.
   Expansion state survives a page turn and a light/dark switch, and the window does not resize when
@@ -1199,7 +1211,11 @@ here; do not accumulate dated implementation history.
   round trips by the page size for a detail most records' rows never show. A per-record cache keyed
   by id, combined with the same row-pooling `ManageRecordsForm` already uses for its record rows
   (§17 "Manage Records reuses its row controls"), keeps a re-expand instant and a collapse/expand
-  cycle free of extra queries or control churn.
+  cycle free of extra queries or control churn. Surviving records retain their cached laps on
+  deletion because records cannot be edited; this prevents temporary detail collapse and scroll
+  clamping during reload. Every row keeps the same toggle column with explicit empty details.
+  Deletion releases focus before disabling buttons and restores the viewport after layout and
+  focus changes, preventing WinForms focus traversal from scrolling to an unrelated row.
 - **The data boundary is an interface.** `StopwatchTimer` depends on `IStopwatchStore`, not
   `Database`, so transition tests use one shared in-memory fake while database tests alone touch a
   temporary SQLite file.
@@ -1289,10 +1305,14 @@ here; do not accumulate dated implementation history.
   button, so recreating a page on every delete or page turn (and leaving the detached rows
   undisposed) made the window lag. `ManageRecordsForm.RebuildRows` instead updates the existing
   rows' text and record id and creates or disposes rows only when the page count changes; a delete
-  toggles button enablement rather than rebuilding, and `IconTextLabel` caches its layout and
+  toggles button enablement rather than rebuilding. Nested row and lap panels suspend layout while
+  their children change, then resume from the inside out, avoiding a layout pass per lap mutation.
+  Collapsing hides and retains lap controls; expanding rebinds them to the current record, so row
+  reuse cannot show stale details. The manager is sized before its first rows are built.
+  `IconTextLabel` caches its layout and
   `RowIconSet.GetScaled` caches per-size icon bitmaps so painting never re-measures or resamples.
 - **The main window is a five-record summary; full history has its own modeless window.** Limiting
-  the dashboard keeps its size stable. The manager uses pages of ten and routes delete/clear through
+  the dashboard keeps its size stable. The manager uses pages of five and routes delete/clear through
   the same timer-owned records path, so both views stay synchronized.
 - **The application icon is a licensed Fluent System Icons asset.** It is embedded for the live form
   and configured as `ApplicationIcon` for Explorer/publish output; attribution remains in

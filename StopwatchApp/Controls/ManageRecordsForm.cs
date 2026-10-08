@@ -6,8 +6,9 @@ namespace StopwatchApp.Controls;
 /// <summary>A modeless, paginated view of every persisted stopwatch record.</summary>
 internal sealed class ManageRecordsForm : Form
 {
-  internal const int PageSize = 10;
-  private const int DesignClientHeight = 660;
+  internal const int PageSize = 5;
+  private const int DesignClientHeight = 560;
+  private const int AdditionalClientWidth = 30;
 
   // The two expand-toggle glyph states, both the same width (a filled triangle), so the toggle
   // column never reflows when a row flips between collapsed and expanded.
@@ -24,6 +25,7 @@ internal sealed class ManageRecordsForm : Form
   private readonly Label _pageLabel;
   private readonly Label _emptyStateLabel;
   private readonly TableLayoutPanel _rowsLayout;
+  private readonly Panel _rowsHost;
   private readonly TableLayoutPanel _rootLayout;
   private readonly Button _clearAllButton;
   private readonly Button _previousButton;
@@ -31,7 +33,7 @@ internal sealed class ManageRecordsForm : Form
   private readonly List<RecordRowParts> _rows = [];
 
   // Expansion survives a page turn, a theme flip, and a records reload; the lap cache is
-  // per-record and repopulated lazily on first expand, and reset whenever the record set changes
+  // per-record and populated lazily on first expand, and pruned whenever the record set changes
   // (AGENTS.md §8.5 — master-detail laps).
   private readonly HashSet<long> _expandedRecordIds = [];
   private readonly HashSet<long> _loadingLapRecordIds = [];
@@ -102,13 +104,13 @@ internal sealed class ManageRecordsForm : Form
       Margin = new Padding(0),
     };
     _rowsLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-    Panel rowsHost = new()
+    _rowsHost = new Panel
     {
       Dock = DockStyle.Fill,
       AutoScroll = true,
       Padding = new Padding(0, 0, SystemInformation.VerticalScrollBarWidth, 0),
     };
-    rowsHost.Controls.Add(_rowsLayout);
+    _rowsHost.Controls.Add(_rowsLayout);
     _emptyStateLabel = new Label
     {
       Text = "No records yet",
@@ -116,7 +118,7 @@ internal sealed class ManageRecordsForm : Form
       TextAlign = ContentAlignment.MiddleCenter,
       Visible = false,
     };
-    rowsHost.Controls.Add(_emptyStateLabel);
+    _rowsHost.Controls.Add(_emptyStateLabel);
 
     _previousButton = ButtonFactory.Create("Previous", Palette.CancelButton);
     _previousButton.Margin = new Padding(0, 0, Palette.SpacingSm, 0);
@@ -153,10 +155,11 @@ internal sealed class ManageRecordsForm : Form
     _rootLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
     _rootLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
     _rootLayout.Controls.Add(header, 0, 0);
-    _rootLayout.Controls.Add(rowsHost, 0, 1);
+    _rootLayout.Controls.Add(_rowsHost, 0, 1);
     _rootLayout.Controls.Add(pagination, 0, 2);
     Controls.Add(_rootLayout);
 
+    ResizeToCurrentPage(DeviceDpi);
     UpdateRecords(records);
     ApplyTheme();
   }
@@ -183,11 +186,14 @@ internal sealed class ManageRecordsForm : Form
   {
     _records = records;
     _pageIndex = ClampPageIndex(_pageIndex, records.Count);
-    // The record set changed (a save/delete/clear), so any cached laps could now be stale; drop
-    // them and re-fetch lazily for whatever stays expanded. Expansion itself is kept, pruned to
-    // the records that still exist, so a refresh doesn't silently collapse the user's view.
-    _lapCache.Clear();
-    _expandedRecordIds.IntersectWith(records.Select(record => record.Id).ToHashSet());
+    // Saved records are immutable. Keep surviving details so deletion cannot temporarily shrink
+    // expanded rows (and clamp the scroll position) while their laps are fetched again.
+    HashSet<long> recordIds = records.Select(record => record.Id).ToHashSet();
+    foreach (long id in _lapCache.Keys.Where(id => !recordIds.Contains(id)).ToArray())
+    {
+      _lapCache.Remove(id);
+    }
+    _expandedRecordIds.IntersectWith(recordIds);
     RebuildRows();
     RefreshExpandedLapsForCurrentPage();
   }
@@ -247,6 +253,8 @@ internal sealed class ManageRecordsForm : Form
       return;
     }
 
+    Point scrollPosition = _rowsHost.AutoScrollPosition;
+    int rowIndex = _rows.FindIndex(parts => parts.Delete.Tag is long rowId && rowId == id);
     SetOperationInProgress(true);
     try
     {
@@ -255,6 +263,14 @@ internal sealed class ManageRecordsForm : Form
     finally
     {
       SetOperationInProgress(false);
+      if (!IsDisposed)
+      {
+        if (_rows.Count > 0 && rowIndex >= 0)
+        {
+          _rows[Math.Min(rowIndex, _rows.Count - 1)].Delete.Focus();
+        }
+        RestoreScrollPosition(scrollPosition);
+      }
     }
   }
 
@@ -306,7 +322,10 @@ internal sealed class ManageRecordsForm : Form
     try
     {
       IReadOnlyList<Lap> laps = await _getLapsAsync(id);
-      _lapCache[id] = laps;
+      if (!IsDisposed && _records.Any(record => record.Id == id))
+      {
+        _lapCache[id] = laps;
+      }
     }
     finally
     {
@@ -348,29 +367,59 @@ internal sealed class ManageRecordsForm : Form
     RecordRowParts? parts = FindVisibleRow(id);
     if (parts is not null)
     {
-      ApplyExpansionToRow(parts, id);
+      _rowsHost.SuspendLayout();
+      _rowsLayout.SuspendLayout();
+      try
+      {
+        ApplyExpansionToRow(parts, id);
+      }
+      finally
+      {
+        _rowsLayout.ResumeLayout(true);
+        _rowsHost.ResumeLayout(true);
+      }
     }
   }
 
   private void ApplyExpansionToRow(RecordRowParts parts, long id)
   {
-    bool expanded = _expandedRecordIds.Contains(id);
-    bool loading = _loadingLapRecordIds.Contains(id);
-    parts.Toggle.Text = expanded ? ExpandedGlyph : CollapsedGlyph;
-    parts.Toggle.AccessibleName = expanded ? "Hide laps" : "Show laps";
-    parts.Toggle.Enabled = !loading && !_operationInProgress;
+    // Suspending the outer table alone does not suspend these nested layout engines.
+    parts.Row.SuspendLayout();
+    parts.Content.SuspendLayout();
+    parts.LapsPanel.SuspendLayout();
+    try
+    {
+      bool expanded = _expandedRecordIds.Contains(id);
+      bool loading = _loadingLapRecordIds.Contains(id);
+      parts.Toggle.Text = expanded ? ExpandedGlyph : CollapsedGlyph;
+      parts.Toggle.AccessibleName = expanded ? "Hide laps" : "Show laps";
+      parts.Toggle.Enabled = !loading && !_operationInProgress;
 
-    IReadOnlyList<Lap> laps =
-      expanded && _lapCache.TryGetValue(id, out IReadOnlyList<Lap>? cached) ? cached : [];
-    PopulateLaps(parts, laps);
-    parts.LapsPanel.Visible = expanded && laps.Count > 0;
+      // Keep hidden labels intact on collapse. Rebinding happens only when details are shown,
+      // including when this pooled row has since been assigned to another record.
+      if (expanded)
+      {
+        IReadOnlyList<Lap> laps = _lapCache.TryGetValue(id, out IReadOnlyList<Lap>? cached)
+          ? cached
+          : [];
+        PopulateLaps(parts, laps, loading || !_lapCache.ContainsKey(id));
+      }
+      parts.LapsPanel.Visible = expanded;
+    }
+    finally
+    {
+      parts.LapsPanel.ResumeLayout(true);
+      parts.Content.ResumeLayout(true);
+      parts.Row.ResumeLayout(true);
+    }
   }
 
-  private void PopulateLaps(RecordRowParts parts, IReadOnlyList<Lap> laps)
+  private void PopulateLaps(RecordRowParts parts, IReadOnlyList<Lap> laps, bool loading)
   {
     // Pooled exactly like the record rows themselves (AGENTS.md §17): a label is created or
     // disposed only when this row's lap count changes, otherwise its text is reassigned.
-    while (parts.LapLabels.Count > laps.Count)
+    int labelCount = Math.Max(1, laps.Count);
+    while (parts.LapLabels.Count > labelCount)
     {
       IconTextLabel surplus = parts.LapLabels[^1];
       parts.LapLabels.RemoveAt(parts.LapLabels.Count - 1);
@@ -382,7 +431,7 @@ internal sealed class ManageRecordsForm : Form
       parts.LapsPanel.RowStyles.RemoveAt(parts.LapsPanel.RowStyles.Count - 1);
     }
 
-    for (int i = 0; i < laps.Count; i++)
+    for (int i = 0; i < labelCount; i++)
     {
       if (i >= parts.LapLabels.Count)
       {
@@ -401,7 +450,11 @@ internal sealed class ManageRecordsForm : Form
         parts.LapsPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         parts.LapsPanel.Controls.Add(lapLabel, 0, i);
       }
-      parts.LapLabels[i].Text = RecordsListControl.FormatLapRow(laps[i]);
+      parts.LapLabels[i].Font = laps.Count > 0 ? _rowFont : _bodyFont;
+      parts.LapLabels[i].Text =
+        laps.Count > 0 ? RecordsListControl.FormatLapRow(laps[i])
+        : loading ? "Loading laps…"
+        : "No laps recorded for this session.";
       parts.LapLabels[i].ForeColor = Palette.Text(_dark);
     }
   }
@@ -410,11 +463,22 @@ internal sealed class ManageRecordsForm : Form
 
   private void SetOperationInProgress(bool operationInProgress)
   {
+    Point scrollPosition = _rowsHost.AutoScrollPosition;
+    // Disabling a focused button otherwise advances focus through the rows, scrolling each into
+    // view. Release it first; deletion restores focus to the neighboring row when it completes.
+    if (operationInProgress)
+    {
+      ActiveControl = null;
+    }
     _operationInProgress = operationInProgress;
     // Only enablement changes; rebuilding every row for that (and again when the records reload)
     // made each delete recreate the whole page several times.
     UpdateButtonStates();
+    RestoreScrollPosition(scrollPosition);
   }
+
+  private void RestoreScrollPosition(Point position) =>
+    _rowsHost.AutoScrollPosition = new Point(-position.X, -position.Y);
 
   private void UpdateButtonStates()
   {
@@ -432,38 +496,46 @@ internal sealed class ManageRecordsForm : Form
 
   private void RebuildRows()
   {
+    Point scrollPosition = _rowsHost.AutoScrollPosition;
+    _rowsHost.SuspendLayout();
     _rowsLayout.SuspendLayout();
-    IReadOnlyList<StopwatchRecord> page = GetPage(_records, _pageIndex);
+    try
+    {
+      IReadOnlyList<StopwatchRecord> page = GetPage(_records, _pageIndex);
 
-    // Reuse the existing row controls and only change what each shows: creating a row is a nest of
-    // panels, a table layout and a button, so recreating a whole page for every delete or page turn
-    // was what made the window lag. Rows are created or disposed only when the page count changes.
-    // (Controls.Remove alone would leak them, so surplus rows are disposed explicitly.)
-    while (_rows.Count > page.Count)
-    {
-      RecordRowParts surplus = _rows[^1];
-      _rows.RemoveAt(_rows.Count - 1);
-      _rowsLayout.Controls.Remove(surplus.Row);
-      surplus.Row.Dispose();
-    }
-    while (_rowsLayout.RowStyles.Count > _rows.Count)
-    {
-      _rowsLayout.RowStyles.RemoveAt(_rowsLayout.RowStyles.Count - 1);
-    }
-
-    for (int i = 0; i < page.Count; i++)
-    {
-      if (i >= _rows.Count)
+      // Reuse the existing row controls and only change what each shows: creating a row is a nest of
+      // panels, a table layout and a button, so recreating a whole page for every delete or page turn
+      // was what made the window lag. Rows are created or disposed only when the page count changes.
+      // (Controls.Remove alone would leak them, so surplus rows are disposed explicitly.)
+      while (_rows.Count > page.Count)
       {
-        RecordRowParts created = CreateRecordRow();
-        _rows.Add(created);
-        _rowsLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        _rowsLayout.Controls.Add(created.Row, 0, i);
+        RecordRowParts surplus = _rows[^1];
+        _rows.RemoveAt(_rows.Count - 1);
+        _rowsLayout.Controls.Remove(surplus.Row);
+        surplus.Row.Dispose();
       }
-      ShowRecordInRow(_rows[i], page[i]);
-    }
+      while (_rowsLayout.RowStyles.Count > _rows.Count)
+      {
+        _rowsLayout.RowStyles.RemoveAt(_rowsLayout.RowStyles.Count - 1);
+      }
 
-    _rowsLayout.ResumeLayout();
+      for (int i = 0; i < page.Count; i++)
+      {
+        if (i >= _rows.Count)
+        {
+          RecordRowParts created = CreateRecordRow();
+          _rows.Add(created);
+          _rowsLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+          _rowsLayout.Controls.Add(created.Row, 0, i);
+        }
+        ShowRecordInRow(_rows[i], page[i]);
+      }
+    }
+    finally
+    {
+      _rowsLayout.ResumeLayout(true);
+      _rowsHost.ResumeLayout(true);
+    }
     bool hasRecords = _records.Count > 0;
     _rowsLayout.Visible = hasRecords;
     _emptyStateLabel.Visible = !hasRecords;
@@ -472,6 +544,7 @@ internal sealed class ManageRecordsForm : Form
     UpdateButtonStates();
     ApplyTheme();
     ResizeToCurrentPage(DeviceDpi);
+    RestoreScrollPosition(scrollPosition);
   }
 
   private void ResizeToCurrentPage(int deviceDpi)
@@ -628,7 +701,8 @@ internal sealed class ManageRecordsForm : Form
     int rootChrome = (int)
       Math.Ceiling((Palette.SpacingLg * 2 + SystemInformation.VerticalScrollBarWidth) * scale);
     return Math.Max(Math.Max(Math.Max(rowWidth, headerWidth), paginationWidth), lapRowWidth)
-      + rootChrome;
+      + rootChrome
+      + (int)Math.Ceiling(AdditionalClientWidth * scale);
   }
 
   private RecordRowParts CreateRecordRow()
@@ -723,15 +797,24 @@ internal sealed class ManageRecordsForm : Form
 
   private void ShowRecordInRow(RecordRowParts parts, StopwatchRecord record)
   {
-    parts.Details.Text = RecordsListControl.FormatRecordRow(record);
-    parts.Delete.Tag = record.Id;
-    parts.Toggle.Tag = record.Id;
-    parts.Toggle.Visible = record.LapCount > 0;
-    // Colors are reapplied on every show so a light/dark switch (which rebuilds) recolors reused rows.
-    parts.Row.BackColor = Palette.Border(_dark);
-    parts.Content.BackColor = Palette.RowBackground(_dark);
-    parts.Details.ForeColor = Palette.Text(_dark);
-    ApplyExpansionToRow(parts, record.Id);
+    parts.Row.SuspendLayout();
+    parts.Content.SuspendLayout();
+    try
+    {
+      parts.Details.Text = RecordsListControl.FormatRecordRow(record);
+      parts.Delete.Tag = record.Id;
+      parts.Toggle.Tag = record.Id;
+      // Colors are reapplied on every show so a light/dark switch (which rebuilds) recolors reused rows.
+      parts.Row.BackColor = Palette.Border(_dark);
+      parts.Content.BackColor = Palette.RowBackground(_dark);
+      parts.Details.ForeColor = Palette.Text(_dark);
+      ApplyExpansionToRow(parts, record.Id);
+    }
+    finally
+    {
+      parts.Content.ResumeLayout(true);
+      parts.Row.ResumeLayout(true);
+    }
   }
 
   private void ApplyTheme()
