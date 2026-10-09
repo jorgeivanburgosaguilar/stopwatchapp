@@ -1,4 +1,4 @@
-using Microsoft.Extensions.Time.Testing;
+﻿using Microsoft.Extensions.Time.Testing;
 using StopwatchApp.Models;
 using StopwatchApp.Services;
 
@@ -189,7 +189,8 @@ public sealed class StopwatchTimerTests
     await timer.StopAsync();
 
     long recordId = (await store.GetAllRecordsAsync())[0].Id;
-    IReadOnlyList<Lap> savedLaps = await timer.GetRecordLapsAsync(recordId);
+    IReadOnlyList<Lap>? savedLaps = await timer.GetRecordLapsAsync(recordId);
+    Assert.NotNull(savedLaps);
     Assert.Equal([2, 1], savedLaps.Select(lap => lap.Id));
   }
 
@@ -206,7 +207,7 @@ public sealed class StopwatchTimerTests
     await timer.StopAsync();
 
     long recordId = (await store.GetAllRecordsAsync())[0].Id;
-    Assert.Empty(await timer.GetRecordLapsAsync(recordId));
+    Assert.Empty(await store.GetLapsAsync(recordId));
   }
 
   [Fact]
@@ -224,11 +225,11 @@ public sealed class StopwatchTimerTests
 
     await timer.StopAsync();
     long recordId = (await store.GetAllRecordsAsync())[0].Id;
-    int lapCountAfterFirstStop = (await timer.GetRecordLapsAsync(recordId)).Count;
+    int lapCountAfterFirstStop = (await store.GetLapsAsync(recordId)).Count;
 
     await timer.StopAsync();
 
-    Assert.Equal(lapCountAfterFirstStop, (await timer.GetRecordLapsAsync(recordId)).Count);
+    Assert.Equal(lapCountAfterFirstStop, (await store.GetLapsAsync(recordId)).Count);
   }
 
   [Fact]
@@ -244,6 +245,94 @@ public sealed class StopwatchTimerTests
 
     Assert.False(onStopFired);
     Assert.Empty(await store.GetAllRecordsAsync());
+  }
+
+  [Fact]
+  public async Task StopAsync_Success_SavesOneRecordAndLeavesNoSnapshot()
+  {
+    FakeStopwatchStore store = new();
+    FakeTimeProvider time = new();
+    using StopwatchTimer timer = new(store, time);
+    timer.Start();
+    time.Advance(TimeSpan.FromSeconds(30));
+    timer.Tick();
+    await timer.PauseAsync();
+    Assert.NotNull(await store.LoadPausedSessionAsync());
+
+    await timer.StopAsync();
+
+    Assert.Single(await store.GetAllRecordsAsync());
+    Assert.Null(await store.LoadPausedSessionAsync());
+    Assert.False(timer.IsPaused);
+  }
+
+  [Fact]
+  public async Task StopAsync_WhenTheSaveFails_KeepsTheSessionPausedAndRecoverable()
+  {
+    FakeStopwatchStore store = new() { FailRecordSaves = true };
+    FakeTimeProvider time = new();
+    using StopwatchTimer timer = new(store, time);
+    timer.Start();
+    time.Advance(TimeSpan.FromSeconds(30));
+    timer.Tick();
+    timer.Lap();
+    time.Advance(TimeSpan.FromSeconds(10));
+    timer.Tick();
+
+    await timer.StopAsync();
+
+    Assert.Empty(await store.GetAllRecordsAsync());
+    Assert.True(timer.IsPaused);
+    Assert.False(timer.IsRunning);
+    Assert.Equal(40_000, timer.ElapsedMs);
+    PausedSession? snapshot = await store.LoadPausedSessionAsync();
+    Assert.NotNull(snapshot);
+    Assert.Equal(40_000, snapshot.ElapsedTime);
+
+    using StopwatchTimer restarted = new(store, time);
+    await restarted.RestoreAsync();
+    Assert.True(restarted.IsPaused);
+    Assert.Equal(40_000, restarted.ElapsedMs);
+  }
+
+  [Fact]
+  public async Task StopAsync_RetriedAfterAFailedSave_SavesOneRecordWithoutDuplicatingTheFinalLap()
+  {
+    FakeStopwatchStore store = new() { FailRecordSaves = true };
+    FakeTimeProvider time = new();
+    using StopwatchTimer timer = new(store, time);
+    timer.Start();
+    time.Advance(TimeSpan.FromSeconds(30));
+    timer.Tick();
+    timer.Lap();
+    time.Advance(TimeSpan.FromSeconds(10));
+    timer.Tick();
+    await timer.StopAsync();
+
+    store.FailRecordSaves = false;
+    await timer.StopAsync();
+
+    StopwatchRecord record = Assert.Single(await store.GetAllRecordsAsync());
+    Assert.Equal([2, 1], (await store.GetLapsAsync(record.Id)).Select(lap => lap.Id));
+    Assert.Null(await store.LoadPausedSessionAsync());
+    Assert.False(timer.IsPaused);
+    Assert.Single(timer.Records);
+  }
+
+  [Fact]
+  public async Task RecordsReload_WhenTheReadFails_KeepsTheLastKnownRecords()
+  {
+    FakeStopwatchStore store = new();
+    await store.SaveRecordAsync(0, 60_000, 60_000, []);
+    using StopwatchTimer timer = new(store, new FakeTimeProvider());
+    await timer.RestoreAsync();
+    Assert.Single(timer.Records);
+
+    store.FailReads = true;
+    await timer.ClearRecordsAsync();
+
+    Assert.Single(timer.Records);
+    Assert.Null(await timer.GetRecordLapsAsync(1));
   }
 
   [Fact]

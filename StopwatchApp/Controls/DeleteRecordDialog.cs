@@ -1,4 +1,4 @@
-using StopwatchApp.Theme;
+﻿using StopwatchApp.Theme;
 
 namespace StopwatchApp.Controls;
 
@@ -20,13 +20,18 @@ internal static class DeleteRecordDialog
       AutoSizeMode = AutoSizeMode.GrowAndShrink,
       Padding = new Padding(Palette.SpacingLg),
       Font = bodyFont,
+      // Same explicit baseline as the main and records windows: WinForms then scales this dialog's
+      // padding, margins and the message's 420 design-pixel MaximumSize for the monitor it actually
+      // appears on, instead of the DPI an unshown dialog reports before it is placed.
+      AutoScaleMode = AutoScaleMode.Dpi,
+      AutoScaleDimensions = new SizeF(96F, 96F),
     };
 
     Label message = new()
     {
       Text = "Are you sure you want to delete this record? This action cannot be undone.",
       AutoSize = true,
-      MaximumSize = new Size((int)Math.Ceiling(420 * (dialog.DeviceDpi / 96f)), 0),
+      MaximumSize = new Size(420, 0),
       Margin = new Padding(0, 0, 0, Palette.SpacingLg),
       Dock = DockStyle.Top,
     };

@@ -1,4 +1,4 @@
-using System.Drawing.Drawing2D;
+﻿using System.Drawing.Drawing2D;
 using StopwatchApp.Formatting;
 using StopwatchApp.Models;
 using StopwatchApp.Theme;
@@ -389,16 +389,18 @@ public sealed class RecordsListControl : UserControl
     listBox.DrawMode = DrawMode.OwnerDrawVariable;
     listBox.MeasureItem += (_, e) =>
     {
+      float scale = listBox.DeviceDpi / 96f;
       int availableWidth = Math.Max(
         1,
         listBox.ClientSize.Width
-          - (Palette.SpacingSm * 2)
+          - Scaled(Palette.SpacingSm * 2, scale)
           - SystemInformation.VerticalScrollBarWidth
       );
       e.ItemHeight = MeasureRowHeight(
         listBox.Items[e.Index]?.ToString() ?? string.Empty,
         listBox.Font,
-        availableWidth
+        availableWidth,
+        scale
       );
     };
     listBox.DrawItem += (_, e) => DrawRow(listBox, e);
@@ -421,11 +423,21 @@ public sealed class RecordsListControl : UserControl
   /// <param name="font">The row font.</param>
   /// <param name="availableWidth">The width, in pixels, available for the text itself (chrome
   /// already excluded).</param>
-  internal static int MeasureRowHeight(string text, Font font, int availableWidth)
+  /// <param name="scale">
+  /// The device-DPI scale (<c>DeviceDpi / 96</c>) applied to the 96-dpi design spacing. Owner-drawn
+  /// geometry is not touched by WinForms' automatic scaling, so it converts here, once, and
+  /// <see cref="DrawRow"/> uses the same scale.
+  /// </param>
+  internal static int MeasureRowHeight(string text, Font font, int availableWidth, float scale = 1f)
   {
     Size measured = IconTextLayout.Measure(text, font, availableWidth);
-    return measured.Height + (Palette.SpacingSm * 2) + Palette.SpacingXs;
+    return measured.Height
+      + Scaled(Palette.SpacingSm * 2, scale)
+      + Scaled(Palette.SpacingXs, scale);
   }
+
+  private static int Scaled(int designPixels, float scale) =>
+    (int)Math.Ceiling(designPixels * scale);
 
   private void DrawRow(ListBox listBox, DrawItemEventArgs e)
   {
@@ -443,8 +455,13 @@ public sealed class RecordsListControl : UserControl
       e.Graphics.FillRectangle(gapBrush, e.Bounds);
     }
 
-    Rectangle rowBounds = Rectangle.Inflate(e.Bounds, 0, -(Palette.SpacingXs / 2));
-    using GraphicsPath path = RoundedRectangle.Path(rowBounds, Palette.ControlCornerRadius);
+    // The same scale MeasureRowHeight used, so a row is painted at the height it was measured for.
+    float scale = listBox.DeviceDpi / 96f;
+    Rectangle rowBounds = Rectangle.Inflate(e.Bounds, 0, -(Scaled(Palette.SpacingXs, scale) / 2));
+    using GraphicsPath path = RoundedRectangle.Path(
+      rowBounds,
+      Scaled(Palette.ControlCornerRadius, scale)
+    );
     using (SolidBrush rowBrush = new(Palette.RowBackground(_dark)))
     {
       e.Graphics.FillPath(rowBrush, path);
@@ -454,7 +471,7 @@ public sealed class RecordsListControl : UserControl
       e.Graphics.DrawPath(borderPen, path);
     }
 
-    Rectangle textBounds = Rectangle.Inflate(rowBounds, -Palette.SpacingSm, 0);
+    Rectangle textBounds = Rectangle.Inflate(rowBounds, -Scaled(Palette.SpacingSm, scale), 0);
     // AGENTS.md §8.5 — IconTextLayout word-wraps, not ellipsizes: a row past the window's sized-for
     // worst case (a session over 24h, a 4-digit lap id) wraps to a second line. It is the same
     // engine MeasureRowHeight above uses, so a wrapped row is never sized one way and painted

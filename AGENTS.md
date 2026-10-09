@@ -223,8 +223,10 @@ for exact signatures rather than duplicating them here.
 
 `IStopwatchStore` is the §9 data-access boundary. `Database` implements it and `StopwatchTimer`
 depends only on it, so the state machine remains independently testable. `SaveRecordAsync` takes
-the session's laps and persists both atomically; `GetLapsAsync` loads one record's laps, newest
-first. There is no window-position persistence surface — it was removed with the schema rewrite in
+the session's laps and persists the record, its laps, **and the deletion of the recovery snapshot**
+in one atomic write, returning `0` when nothing was committed; `GetLapsAsync` loads one record's
+laps, newest first. `GetAllRecordsAsync` and `GetLapsAsync` return `null` when the read failed, which
+is distinct from an empty result. There is no window-position persistence surface — it was removed with the schema rewrite in
 §9 (see §10.6).
 
 `StopwatchTimer` is UI-free and owns the timer state, laps, and newest-first records collection.
@@ -481,10 +483,14 @@ The authoritative transition implementation is in
   recovery snapshot before raising the pause event.
 - Adding a lap is a no-op unless running. Each newest-first lap represents only the interval since
   the previous lap, not a cumulative duration.
-- Stopping clears the recovery snapshot through the same persistence gate used by autosave. If
-  laps exist, it adds any remaining positive partial split. A positive session is saved once,
-  together with its laps in the same atomic write, guarded against duplicating the newest record
-  (and its laps) after recovery, and the records collection is reloaded.
+- Stopping saves under the same persistence gate used by autosave. If laps exist, it adds any
+  remaining positive partial split. A positive session is saved once, together with its laps and
+  the deletion of the recovery snapshot in the same atomic write, guarded against duplicating the
+  newest record (and its laps) after recovery, and the records collection is reloaded. **If that
+  write commits nothing, the session is not finished:** it stays paused with its (already applied)
+  final lap, a fresh recovery snapshot is written, and pressing Stop again retries without
+  appending another lap. A session with nothing to save (idle, or stopped before the first tick)
+  just clears the snapshot.
 - **Stop confirmation.** `StopwatchControl.StopTimerAsync` is the single gate every Stop entry point
   (button, `Enter`, all tray-menu variants) passes through. When
   `StopwatchControl.RequiresStopConfirmation` is true — threshold above zero, a session is running
@@ -724,7 +730,25 @@ session loads as `null`.
 Every storage method is wrapped in try/catch and **swallows errors**: a corrupt or unreadable saved
 session must return `null` rather than throw, and a failed write must never surface an exception to
 the UI. **This is deliberate — keep a comment next to the code saying so**, so it doesn't read as
-an oversight.
+an oversight. Failure is still *reported*, never disguised as success: `SaveRecordAsync` returns `0`
+when nothing was committed (leaving the recovery snapshot intact), and the two list reads return
+`null`, not an empty list, when they could not read. `StopwatchTimer` keeps its last-known records on
+a `null` reload, and `ManageRecordsForm` never caches a `null` lap load as "no laps" (it shows a
+retryable message instead).
+
+`GetAllRecordsAsync` maps its rows through a property-based private row type rather than
+`StopwatchRecord`'s positional constructor: `lapCount` is an expression column with no declared
+type, so SQLite reports a non-integer type for it when the table is empty and Dapper's exact-type
+constructor matching throws.
+
+`Database.InitializeAsync` rejects (throws `NotSupportedException`, shown by `MainForm`'s existing
+database-error dialog) a database whose `user_version` is newer than `SchemaMigrations.Current`
+rather than running against a schema this build does not understand.
+
+**Known limits (deferred, not bugs to fix incidentally):** `Microsoft.Data.Sqlite`'s async methods
+execute synchronously, so storage work runs on the UI thread; every records reload reads the whole
+history (the manager paginates in memory); and an expanded record creates one label per lap with no
+virtualization. None matters at the intended scale; each would be an architecture decision.
 
 Restore runs once at startup, after the database connection opens: if a paused session exists, the
 UI shows the frozen elapsed time, a `Continue` button, the restored laps, and the "resumed from a
@@ -832,11 +856,14 @@ is content-driven** (`MainForm.ResizeToContent`) — the window ends a few pixel
 whatever is actually shown (idle vs. running, how many records/laps), recomputed on every content
 change (`RefreshRecords`, `RefreshLaps`, the stopwatch card's `StateChanged`, `OnDpiChanged`) by
 asking the real, live control tree for its preferred size, rather than a single constant sized
-for the worst case of everything visible at once. Both dimensions are clamped to
-`Screen.PrimaryScreen.WorkingArea` on every resize — at higher OS scaling the requested width could
-otherwise exceed the working area with no way for the user to shrink it back — and the window's
-`Location` is nudged back on-screen (`ClampLocationToWorkingArea`) if a resize would otherwise push
-part of it past the working area's edge. This sizing behavior is independent of the
+for the worst case of everything visible at once. Both dimensions are clamped to the working area
+of the monitor the window is on (`Screen.FromRectangle(Bounds)`, not the primary screen) on every
+resize — at higher OS scaling the requested width could otherwise exceed the working area with no
+way for the user to shrink it back — and the window's `Location` is nudged back on-screen
+(`ClampLocationToWorkingArea`) if a resize would otherwise push part of it past the working area's
+edge. A content or DPI resize does **not** re-center (§10.6). After a DPI change the records/laps
+list boxes are re-populated (`RefreshLists`), because owner-drawn row heights are measured only
+when an item is added. This sizing behavior is independent of the
 `ControlStyles.ResizeRedraw` rule that stops stale-border repaint artifacts — the two are not
 the same thing.
 
@@ -877,19 +904,20 @@ Stop confirmation dialog instead of stopping immediately.
 ### 10.5 Single instance
 
 Named `System.Threading.Mutex` created at startup. If a second instance detects the mutex already
-exists, it locates the first instance's window with `FindWindow` (matched by `MainForm.WindowTitle`
-— **fixed for the life of one build**, not literally constant text: the title includes
-`$"Stopwatch {Application.ProductVersion}"`, §8.5 —
-but both the running instance and the one calling `FindWindow` are the same build, so the strings
-always match) and sends it a registered window message (via `RegisterWindowMessage` + `PostMessage`)
-asking it to restore and activate itself, then exits immediately — never runs a second copy.
+exists, it locates the first instance's window (`Program.FindRunningInstanceWindow`) and sends it a
+registered window message (via `RegisterWindowMessage` + `PostMessage`) asking it to restore and
+activate itself, then exits immediately — never runs a second copy. The window is found by walking
+the top-level windows (`FindWindowEx`, which includes hidden ones) for one whose title starts with
+`MainForm.WindowTitlePrefix` (`"Stopwatch "`) **and** whose owning process has this process's name
+and a different id. The full title includes the version (`MainForm.WindowTitle`, §8.5), so matching
+it exactly would let a different build fail to find the running one and silently exit.
 
 **Not `PostMessage(HWND_BROADCAST, ...)`**: once hidden to tray, §10.3's
 `ShowInTaskbar = false` gives the window an
 owner (the mechanism WinForms uses to drop its taskbar button), and Windows excludes owned windows
 from `HWND_BROADCAST` delivery regardless of visibility — so a broadcast posted while the window is
 hidden is silently never delivered, in exactly the one state single-instance activation exists to
-handle. A direct, title-targeted `FindWindow` lookup is not subject to that exclusion.
+handle. A direct per-window lookup is not subject to that exclusion.
 
 ### 10.6 Window position (always centered)
 
@@ -897,6 +925,10 @@ handle. A direct, title-targeted `FindWindow` lookup is not subject to that excl
 and deliberately rejected because the requested behavior is consistent centering. Every "Open"
 transition (first launch, tray Open/single left-click, single-instance activation, restore-from-minimize)
 calls the same `PositionWindowCentered()`, unconditionally, with no history or saved state involved.
+Startup centers twice — at construction and again after the first asynchronous content load in
+`InitializeAsync`, once the window has its real size. **Only** Open transitions center: a
+content-driven or DPI resize (§10.3) keeps the window where it is, so a window the user moved to
+another monitor stays there when they press Lap or Stop.
 
 There is no manual-position persistence surface. An earlier build retained an unused
 `IStopwatchStore.SaveWindowPositionAsync`/`LoadWindowPositionAsync` pair, `Database` implementation,
@@ -962,7 +994,8 @@ contract:
 - Autosave checkpoints are based on accumulated running time and do not pause the timer. Restoring
   an autosaved running session still opens it paused; this is intentional recovery semantics.
 - Elapsed time is defined against the system clock (`DateTimeOffset.UtcNow`), so a manual clock
-  change or a DST transition mid-run shifts the reported elapsed time.
+  change or a time-sync correction mid-run shifts the reported elapsed time. A DST transition does
+  not: it changes the local offset, not the UTC difference.
 - The "every 5 seconds" tick filter (`totalSeconds % 5 == 0`) can skip a bucket if a tick is delayed
   past a 5-second boundary — acceptable, do not "correct" with a reference-counting workaround.
 
@@ -1012,8 +1045,18 @@ xUnit, in a `StopwatchApp.Tests` project.
   (by insertion) read back as 2, 1, 0 (newest first).
 - A corrupt or missing saved-session row returns `null` from `LoadPausedSessionAsync()` with no
   exception thrown.
-- A database created by an earlier build (tables present, no `user_version` stamp) opens without
-  data loss and ends up stamped at the current schema version.
+- A fresh database is created and stamped at the current schema version; opening a database already
+  at that version applies nothing; opening one stamped *newer* than this build supports is refused
+  with a clear message instead of being used. (There is no upgrade path for an unversioned database
+  that already has tables: migration 1 uses plain `CREATE TABLE`, and every shipped database is
+  stamped.)
+- Stop failure (§8.3/§9): when the atomic record write commits nothing, no record exists, the
+  recovery snapshot survives, the session stays paused at its current elapsed time with the final lap
+  applied, and pressing Stop again saves exactly one record with no duplicate lap. A failed records
+  reload keeps the last list shown, and a failed lap load in Manage Records is not shown as "No laps
+  recorded" and is retried on the next expand.
+- Reads on an empty database succeed: `GetAllRecordsAsync()` returns an empty list (not `null`) on an
+  empty `records` table.
 - Tray: the icon updates while running and reflects the current split's hour/minute; the tooltip
   shows the full session-total `HH:MM:SS`; both close and minimize hide the window and remove its
   taskbar button; Exit terminates the process with no icon left behind in the tray.
@@ -1059,8 +1102,10 @@ xUnit, in a `StopwatchApp.Tests` project.
   fires while the window is hidden to the tray or while any modal confirmation dialog is open.
 - Window position (§10.6): the window always opens centered on the primary screen — on first
   launch, tray Open/single left-click, single-instance activation, and restore-from-minimize alike. It
-  never remembers or restores a previous position, and cannot be dragged-then-resized since the frame
-  itself is non-resizable (§10.3).
+  never remembers or restores a previous position. Lap, Stop, record changes, and DPI changes resize
+  it without moving it (apart from being nudged back on-screen on the monitor it is on), so a window
+  dragged to another monitor stays there. A second launch of a *different build* still finds and
+  activates the running one, including when it is hidden in the tray (§10.5).
 - Window frame and icon (§10.3): the frame cannot be resized (no maximize button, no drag on
   any edge/corner); the stopwatch icon shows in the title bar, the taskbar button, and on the built
   `.exe` in Explorer; the chrono, buttons, and record/lap rows render at the documented type scale
@@ -1194,7 +1239,10 @@ here; do not accumulate dated implementation history.
   baseline; that exception does not recur, and every schema change from here on is append-only.
 - **Laps are a master-detail child of records, not a separate flat table.** Each `record_laps` row
   references its owning `records.id`; `SaveRecordAsync` writes the record and its laps in one
-  transaction so a record is never left without the laps it was stopped with. A flat table keyed
+  transaction so a record is never left without the laps it was stopped with. The same transaction
+  deletes the recovery snapshot, so there is no instant at which a finished session has neither a
+  record nor a snapshot; a failed write commits nothing and the timer keeps the session paused and
+  retryable. A flat table keyed
   only by timestamp was rejected because it would need a second lookup query wherever laps are
   shown, instead of the direct `recordId` index this schema already needs for
   `GetLapsAsync`/`DeleteRecordAsync`.
@@ -1260,9 +1308,12 @@ here; do not accumulate dated implementation history.
 - **Only window-scoped shortcuts are supported.** Global hotkeys were rejected because they create
   system-wide conflicts and exceed this focused app's scope. `ProcessCmdKey` gives predictable
   behavior while the window is active and reuses the normal control actions.
-- **Single-instance activation targets the existing title directly.** Broadcasting does not reliably
-  reach a hidden owned window after `ShowInTaskbar = false`. `FindWindow` plus a registered direct
-  message restores the one existing instance without creating a second UI.
+- **Single-instance activation targets the existing window directly, found by a version-independent
+  title prefix and its process name.** Broadcasting does not reliably reach a hidden owned window
+  after `ShowInTaskbar = false`. Walking the top-level windows plus a registered direct message
+  restores the one existing instance without creating a second UI. The version in the title is not
+  part of the match so one build can activate another; the process-name check keeps an unrelated
+  window that starts with "Stopwatch " from being activated.
 - **The tray icon remains a square notification icon.** Windows gives third-party notification-area
   icons a square slot; a taskbar-clock-style rectangular widget is not available through the public
   tray API. The current compact display therefore uses one shared ink-bounds auto-fit rule for
@@ -1279,7 +1330,9 @@ here; do not accumulate dated implementation history.
   leaks and ghost tray icons.
 - **The window always reopens centered.** Remembering manually dragged positions was explored and
   rejected because the desired product behavior is deterministic centering on every Open path. The
-  old persistence surface stays only because shipped migrations are immutable.
+  old persistence surface stays only because shipped migrations are immutable. Centering is limited
+  to Open paths on purpose: re-centering on every resize moved a window the user had placed on
+  another monitor back to the primary one each time content changed.
 - **Window height is content-driven.** Fixed worst-case heights repeatedly created dead space or DPI
   clipping. The live control tree supplies preferred height after state/content changes; width
   budgets for a 24-hour row, and longer records or lap identifiers wrap instead of growing the
@@ -1288,7 +1341,21 @@ here; do not accumulate dated implementation history.
   `Typography` centralize geometry, interaction colors, disabled states, font fallback, and
   spacing for the remaining owner-drawn surfaces — the stopwatch/records cards' rounded outline
   and the records/laps rows. This was chosen after duplicated or stock rendering produced
-  inconsistent alignment, dark-mode colors, and rounded borders.
+  inconsistent alignment, dark-mode colors, and rounded borders. WinForms' automatic scaling does
+  not reach inside paint handlers, so the row insets, card gap, and corner radius in
+  `RecordsListControl` convert their 96-dpi design values by the list box's `DeviceDpi / 96` in both
+  `MeasureRowHeight` and `DrawRow`; a row is therefore painted at the height it was measured for.
+- **The four confirmation dialogs use the same `AutoScaleMode.Dpi` / 96-dpi baseline as the main
+  windows.** Their message wrap width is a plain 420 design-pixel `MaximumSize` that WinForms scales
+  for the monitor the dialog actually appears on. Reading `dialog.DeviceDpi` before the dialog is
+  shown reported the primary monitor's DPI whatever monitor the owner was on.
+- **Known measurement inconsistency (open, needs a multi-DPI desktop check before changing):**
+  `MainForm.RequiredClientWidth` measures with fonts pre-multiplied by the DPI factor, while
+  `ManageRecordsForm.RequiredClientWidth` deliberately does not (its comment records that scaling
+  double-counted). Both are the result of fixes made against real displays, they cannot both be right
+  at a system DPI other than 96, and the main window's width cap (`CompactClientWidth`) hides any
+  overestimate. Do not unify them from the code alone: measure rendered text against the computed
+  width at 100%, 125%, 150%, and 200% first.
 - **Buttons moved back to a stock `Button` (`ButtonFactory`), reversing the owner-drawn
   `GlyphButton` this app used previously.** `GlyphButton` set `ControlStyles.UserPaint` and never
   called `base.OnPaint`, so it never drew a keyboard-focus indicator — a real accessibility gap.

@@ -1,4 +1,4 @@
-using StopwatchApp.Models;
+﻿using StopwatchApp.Models;
 using StopwatchApp.Services;
 
 namespace StopwatchApp.Tests;
@@ -18,6 +18,12 @@ internal sealed class FakeStopwatchStore : IStopwatchStore
 
   public TaskCompletionSource? PausedSessionSaveGate { get; init; }
 
+  /// <summary>When set, <see cref="SaveRecordAsync"/> commits nothing and returns 0 (a failed write).</summary>
+  public bool FailRecordSaves { get; set; }
+
+  /// <summary>When set, the interface reads report failure (<see langword="null"/>).</summary>
+  public bool FailReads { get; set; }
+
   public Task<long> SaveRecordAsync(
     long startTimestamp,
     long endTimestamp,
@@ -25,12 +31,19 @@ internal sealed class FakeStopwatchStore : IStopwatchStore
     IReadOnlyList<Lap> laps
   )
   {
+    if (FailRecordSaves)
+    {
+      return Task.FromResult(0L);
+    }
+
     long id = _records.Count + 1;
     _records.Insert(
       0,
       new StopwatchRecord(id, startTimestamp, endTimestamp, elapsedMs / 60000, laps.Count)
     );
     _laps[id] = [.. laps];
+    // Mirrors Database: the record and the snapshot deletion are one atomic write.
+    _pausedSession = null;
     return Task.FromResult(id);
   }
 
@@ -39,6 +52,14 @@ internal sealed class FakeStopwatchStore : IStopwatchStore
 
   public Task<IReadOnlyList<Lap>> GetLapsAsync(long recordId) =>
     Task.FromResult(_laps.TryGetValue(recordId, out IReadOnlyList<Lap>? laps) ? laps : []);
+
+  // The interface reports a failed read as null; the public members above stay non-null so tests
+  // that inspect the fake directly need no null handling.
+  async Task<IReadOnlyList<StopwatchRecord>?> IStopwatchStore.GetAllRecordsAsync() =>
+    FailReads ? null : await GetAllRecordsAsync();
+
+  async Task<IReadOnlyList<Lap>?> IStopwatchStore.GetLapsAsync(long recordId) =>
+    FailReads ? null : await GetLapsAsync(recordId);
 
   public Task DeleteRecordAsync(long id)
   {

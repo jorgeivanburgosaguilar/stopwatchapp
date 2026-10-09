@@ -80,9 +80,12 @@ public sealed class MainFormLayoutTests
   [Fact]
   public void ManageRecordsWidth_IsAFixedBudgetForTheWorstCaseRow()
   {
+    // The budget must not depend on how many records exist (so the window never resizes between
+    // pages). The pagination label's digit count is the one record-dependent term, and the worst-case
+    // row dominates it.
     Assert.Equal(
       ManageRecordsForm.RequiredClientWidth(96, totalRecordCount: 1),
-      ManageRecordsForm.RequiredClientWidth(96, totalRecordCount: 1)
+      ManageRecordsForm.RequiredClientWidth(96, totalRecordCount: 500)
     );
     Assert.Equal(23 * 60 + 59, ManageRecordsForm.WorstCaseElapsedMinutes);
   }

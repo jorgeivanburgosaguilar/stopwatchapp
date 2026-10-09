@@ -20,7 +20,7 @@ public sealed class ManageRecordsFormTests
         _ => Task.CompletedTask,
         () => Task.CompletedTask,
         recordId =>
-          Task.FromResult<IReadOnlyList<Lap>>(
+          Task.FromResult<IReadOnlyList<Lap>?>(
             Enumerable
               .Range(1, 50)
               .Select(id => new Lap((int)recordId * 100 + id, 0, 0, 1))
@@ -81,7 +81,7 @@ public sealed class ManageRecordsFormTests
         _ => Task.CompletedTask,
         () => Task.CompletedTask,
         _ =>
-          Task.FromResult<IReadOnlyList<Lap>>(
+          Task.FromResult<IReadOnlyList<Lap>?>(
             Enumerable.Range(1, 20).Select(id => new Lap(id, 0, 0, 1)).ToArray()
           ),
         System.Drawing.SystemIcons.Application
@@ -116,7 +116,7 @@ public sealed class ManageRecordsFormTests
         [new StopwatchRecord(1, 0, 0, 1)],
         _ => Task.CompletedTask,
         () => Task.CompletedTask,
-        _ => Task.FromResult<IReadOnlyList<Lap>>([]),
+        _ => Task.FromResult<IReadOnlyList<Lap>?>([]),
         System.Drawing.SystemIcons.Application
       );
       Button toggle = Descendants(form)
@@ -145,7 +145,7 @@ public sealed class ManageRecordsFormTests
         _ =>
         {
           loads++;
-          return Task.FromResult<IReadOnlyList<Lap>>([new Lap(1, 0, 0, 1)]);
+          return Task.FromResult<IReadOnlyList<Lap>?>([new Lap(1, 0, 0, 1)]);
         },
         System.Drawing.SystemIcons.Application
       );
@@ -159,6 +159,43 @@ public sealed class ManageRecordsFormTests
       );
       form.UpdateRecords([]);
       Assert.DoesNotContain(Descendants(form).OfType<Button>(), button => button.Tag is long);
+    });
+
+  [Fact]
+  public Task FailedLapLoad_IsNotCachedAsEmptyAndIsRetriedOnReExpand() =>
+    RunOnStaAsync(() =>
+    {
+      int loads = 0;
+      using ManageRecordsForm form = new(
+        [new StopwatchRecord(1, 0, 0, 1, 1)],
+        _ => Task.CompletedTask,
+        () => Task.CompletedTask,
+        _ =>
+        {
+          loads++;
+          return Task.FromResult<IReadOnlyList<Lap>?>(loads == 1 ? null : [new Lap(1, 0, 0, 1)]);
+        },
+        System.Drawing.SystemIcons.Application
+      );
+
+      Invoke(form, "ToggleLapsAsync", 1L);
+      Assert.Contains(
+        Descendants(form),
+        control => control.Text.StartsWith("Couldn't load laps", StringComparison.Ordinal)
+      );
+      Assert.DoesNotContain(
+        Descendants(form),
+        control => control.Text == "No laps recorded for this session."
+      );
+
+      Invoke(form, "ToggleLapsAsync", 1L);
+      Invoke(form, "ToggleLapsAsync", 1L);
+
+      Assert.Equal(2, loads);
+      Assert.Contains(
+        Descendants(form),
+        control => control.Text.Contains("Lap 1:", StringComparison.Ordinal)
+      );
     });
 
   private static void Invoke(ManageRecordsForm form, string methodName, params object[] arguments)

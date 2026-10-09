@@ -1,4 +1,4 @@
-using StopwatchApp.Models;
+﻿using StopwatchApp.Models;
 
 namespace StopwatchApp.Services;
 
@@ -12,13 +12,15 @@ namespace StopwatchApp.Services;
 public interface IStopwatchStore
 {
   /// <summary>
-  /// Persists a completed session as a new record together with its laps, atomically.
+  /// Persists a completed session as a new record together with its laps, and deletes the
+  /// saved paused-session snapshot, all in one atomic write. Either everything commits or nothing
+  /// does, so a failed save leaves the recovery snapshot intact.
   /// </summary>
   /// <param name="startTimestamp">The session's start time, in epoch milliseconds (UTC).</param>
   /// <param name="endTimestamp">The session's end time, in epoch milliseconds (UTC).</param>
   /// <param name="elapsedMs">The session's elapsed time, in milliseconds. Floored to whole minutes internally before storing.</param>
   /// <param name="laps">The session's laps, in any order; each lap's own elapsed minutes are stored as already floored.</param>
-  /// <returns>The new row's id.</returns>
+  /// <returns>The new row's id, or <c>0</c> if nothing was committed.</returns>
   Task<long> SaveRecordAsync(
     long startTimestamp,
     long endTimestamp,
@@ -29,14 +31,18 @@ public interface IStopwatchStore
   /// <summary>
   /// Loads every persisted record, newest first.
   /// </summary>
-  Task<IReadOnlyList<StopwatchRecord>> GetAllRecordsAsync();
+  /// <returns>The records, or <see langword="null"/> if they could not be read (distinct from an empty table).</returns>
+  Task<IReadOnlyList<StopwatchRecord>?> GetAllRecordsAsync();
 
   /// <summary>
   /// Loads the laps saved for one record, newest lap first.
   /// </summary>
   /// <param name="recordId">The owning record's id.</param>
-  /// <returns>The record's laps, newest first, or an empty list if none exist or the record is unknown.</returns>
-  Task<IReadOnlyList<Lap>> GetLapsAsync(long recordId);
+  /// <returns>
+  /// The record's laps, newest first (empty if none exist or the record is unknown), or
+  /// <see langword="null"/> if they could not be read.
+  /// </returns>
+  Task<IReadOnlyList<Lap>?> GetLapsAsync(long recordId);
 
   /// <summary>
   /// Deletes one persisted record, and its laps, by its identifier. A missing identifier is a

@@ -1,4 +1,4 @@
-using System.Diagnostics.CodeAnalysis;
+﻿using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using Dapper;
 using Microsoft.Data.Sqlite;
@@ -48,6 +48,7 @@ public sealed class Database : IStopwatchStore, IAsyncDisposable
   /// once at startup, after construction; idempotent across repeated calls — a database already at
   /// the current version applies nothing.
   /// </summary>
+  /// <exception cref="NotSupportedException">The database's schema is newer than this build supports.</exception>
   public async Task InitializeAsync()
   {
     if (_connection is null)
@@ -65,6 +66,16 @@ public sealed class Database : IStopwatchStore, IAsyncDisposable
     long appliedVersion = await _connection
       .ExecuteScalarAsync<long>("PRAGMA user_version;")
       .ConfigureAwait(false);
+
+    // A database written by a newer build has tables this build does not understand; running
+    // against it could silently misread or corrupt data, so refuse it outright (AGENTS.md §9).
+    if (appliedVersion > SchemaMigrations.Current)
+    {
+      throw new NotSupportedException(
+        $"The database was created by a newer version of Stopwatch (schema {appliedVersion}; "
+          + $"this version supports up to {SchemaMigrations.Current})."
+      );
+    }
 
     foreach (Migration migration in SchemaMigrations.All)
     {
@@ -144,24 +155,36 @@ public sealed class Database : IStopwatchStore, IAsyncDisposable
           .ConfigureAwait(false);
       }
 
+      // The recovery snapshot goes in the same commit as the record, so a failure anywhere above
+      // leaves the snapshot intact and the session still recoverable (AGENTS.md §8.3/§9).
+      await connection
+        .ExecuteAsync("DELETE FROM paused_session WHERE id = 1;", transaction: transaction)
+        .ConfigureAwait(false);
+
       await transaction.CommitAsync().ConfigureAwait(false);
       return recordId;
     }
     catch (Exception)
     {
+      // Deliberate per AGENTS.md §9: a failed write must never surface to the UI. The 0 return is
+      // how the caller learns nothing was committed.
       return 0;
     }
   }
 
   /// <inheritdoc />
-  public async Task<IReadOnlyList<StopwatchRecord>> GetAllRecordsAsync()
+  public async Task<IReadOnlyList<StopwatchRecord>?> GetAllRecordsAsync()
   {
     try
     {
       SqliteConnection connection = RequireConnection();
 
-      IEnumerable<StopwatchRecord> records = await connection
-        .QueryAsync<StopwatchRecord>(
+      // Mapped through a property-based row, not StopwatchRecord's positional constructor:
+      // lapCount is an expression column with no declared type, so SQLite reports it as a
+      // non-integer type when the result has no rows, and Dapper's exact-type constructor
+      // matching then throws on an empty table. Property setters convert whatever arrives.
+      IEnumerable<RecordRow> rows = await connection
+        .QueryAsync<RecordRow>(
           """
           SELECT r.id, r.startTimestamp, r.endTimestamp, r.elapsedMinutes,
                  (SELECT COUNT(*) FROM record_laps WHERE recordId = r.id) AS lapCount
@@ -170,16 +193,27 @@ public sealed class Database : IStopwatchStore, IAsyncDisposable
           """
         )
         .ConfigureAwait(false);
-      return records.AsList();
+      return
+      [
+        .. rows.Select(row => new StopwatchRecord(
+          row.Id,
+          row.StartTimestamp,
+          row.EndTimestamp,
+          row.ElapsedMinutes,
+          row.LapCount
+        )),
+      ];
     }
     catch (Exception)
     {
-      return [];
+      // Deliberate per AGENTS.md §9: a failed read never throws; null (not an empty list) tells
+      // the caller the data is unavailable so it can keep what it has and retry.
+      return null;
     }
   }
 
   /// <inheritdoc />
-  public async Task<IReadOnlyList<Lap>> GetLapsAsync(long recordId)
+  public async Task<IReadOnlyList<Lap>?> GetLapsAsync(long recordId)
   {
     try
     {
@@ -200,7 +234,9 @@ public sealed class Database : IStopwatchStore, IAsyncDisposable
     }
     catch (Exception)
     {
-      return [];
+      // Deliberate per AGENTS.md §9: a failed read never throws; null (not an empty list) tells
+      // the caller the data is unavailable so it can keep what it has and retry.
+      return null;
     }
   }
 
@@ -372,6 +408,24 @@ public sealed class Database : IStopwatchStore, IAsyncDisposable
   private SqliteConnection RequireConnection() =>
     _connection
     ?? throw new InvalidOperationException("Database.InitializeAsync must be called before use.");
+
+  /// <summary>
+  /// The <c>records</c> query's row shape, with settable properties so Dapper converts column
+  /// values by name instead of requiring an exact constructor-parameter type match (see the
+  /// comment in <see cref="GetAllRecordsAsync"/>). Mapped into <see cref="StopwatchRecord"/>.
+  /// </summary>
+  private sealed class RecordRow
+  {
+    public long Id { get; set; }
+
+    public long StartTimestamp { get; set; }
+
+    public long EndTimestamp { get; set; }
+
+    public long ElapsedMinutes { get; set; }
+
+    public long LapCount { get; set; }
+  }
 
   /// <summary>
   /// The raw <c>paused_session</c> row shape, used only to receive Dapper's column mapping before

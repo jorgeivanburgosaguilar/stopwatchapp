@@ -1,4 +1,4 @@
-using StopwatchApp.Theme;
+﻿using StopwatchApp.Theme;
 
 namespace StopwatchApp.Controls;
 
@@ -37,11 +37,15 @@ public static class ResetConfirmationDialog
       AutoSizeMode = AutoSizeMode.GrowAndShrink,
       Padding = new Padding(Palette.SpacingLg),
       Font = bodyFont,
+      // Same explicit baseline as the main and records windows: WinForms then scales this dialog's
+      // padding, margins and the message's 420 design-pixel MaximumSize for the monitor it actually
+      // appears on, instead of the DPI an unshown dialog reports before it is placed.
+      AutoScaleMode = AutoScaleMode.Dpi,
+      AutoScaleDimensions = new SizeF(96F, 96F),
     };
 
-    // 420 is a 96dpi design-pixel literal, scaled to the dialog's real device DPI (same
-    // convention as ClearRecordsDialog).
-    int messageMaxWidth = (int)Math.Ceiling(420 * (dialog.DeviceDpi / 96f));
+    // 420 is a 96dpi design-pixel literal; AutoScaleMode.Dpi above scales it.
+    const int messageMaxWidth = 420;
     Label message = new()
     {
       Text = Message,

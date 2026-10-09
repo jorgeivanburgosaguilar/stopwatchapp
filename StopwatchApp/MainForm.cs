@@ -1,4 +1,4 @@
-using System.Reflection;
+﻿using System.Reflection;
 using Microsoft.Data.Sqlite;
 using Microsoft.Win32;
 using StopwatchApp.Controls;
@@ -26,7 +26,14 @@ public sealed class MainForm : Form
   /// computable before <see cref="Program"/> ever constructs one, matching how §10.5's
   /// second-instance path already used it.
   /// </summary>
-  internal static readonly string WindowTitle = $"Stopwatch {Application.ProductVersion}";
+  internal static readonly string WindowTitle = $"{WindowTitlePrefix}{Application.ProductVersion}";
+
+  /// <summary>
+  /// The part of <see cref="WindowTitle"/> that does not change between builds. A second instance
+  /// matches on this (plus the owning process) rather than the full title, so a different build can
+  /// still find and activate the running one (AGENTS.md §10.5).
+  /// </summary>
+  internal const string WindowTitlePrefix = "Stopwatch ";
 
   // The non-text chrome a records/laps row must fit alongside, in 96dpi
   // design pixels: RecordsListControl.DrawRow's text inset, RecordsListControl's card Padding, the
@@ -153,6 +160,7 @@ public sealed class MainForm : Form
     // system DPI); OnDpiChanged re-derives this once the window is actually placed on a specific
     // monitor.
     ResizeToContent(DeviceDpi);
+    PositionWindowCentered();
 
     // AGENTS.md §7/§11 — apply the OS's current effective dark/light state once at
     // startup, then keep it live for the rest of the process by reacting to SystemEvents.
@@ -250,6 +258,10 @@ public sealed class MainForm : Form
     // reset ClientSize to raw design pixels here, undoing whatever PerformAutoScale had just
     // correctly done for the new monitor.
     ResizeToContent(e.DeviceDpiNew);
+    // The records/laps list boxes are owner-drawn with per-row heights measured when an item is
+    // added, so a width/DPI change alone never re-measures them. Re-populate them now that the
+    // window is at its final width (and let that resize the window again for any new row heights).
+    RefreshLists();
   }
 
   /// <inheritdoc />
@@ -357,16 +369,11 @@ public sealed class MainForm : Form
     {
       ClientSize = clamped;
     }
-    // AGENTS.md §10.6 — re-center on every content-driven resize, not just the explicit
-    // Open transitions: keeping Location fixed while Size changes grows/shrinks the window from its
-    // top-left corner, so once real content loads asynchronously (RestoreAsync populating records/
-    // laps after the constructor's own initial, empty-state centering) the window visibly drifts
-    // off-center both horizontally and vertically. Centering here — the same "always centered, never
-    // remembers a position" rule §10.6 already applies to Open transitions — keeps every resize
-    // centered too, and as a side effect keeps the window on-screen without a separate clamp: a size
-    // already clamped to the working area, centered on that same working area, is always fully
-    // visible.
-    PositionWindowCentered();
+    // AGENTS.md §10.6 — a content or DPI resize keeps the window where it is (it grows from its
+    // top-left corner) and only nudges it back inside the working area of the monitor it is on.
+    // Centering belongs to the Open transitions alone: re-centering here sent a window the user had
+    // moved to another monitor straight back to the primary one on every Lap or Stop.
+    ClampLocationToWorkingArea();
   }
 
   /// <summary>Computes the DPI-scaled fixed window width for <paramref name="deviceDpi"/>
@@ -537,7 +544,7 @@ public sealed class MainForm : Form
 
   /// <summary>
   /// Reduces <paramref name="size"/>, if necessary, so that a <see cref="FormBorderStyle.FixedSingle"/>
-  /// window of that client size fits within <see cref="Screen.PrimaryScreen"/>'s working area
+  /// window of that client size fits within the working area of the monitor it is on
   /// (AGENTS.md §10.3). This window cannot be resized by dragging, so unlike a normal window, it must
   /// never be allowed to render taller or wider than the screen in the first place — there would be
   /// no way for the user to shrink it back down. <paramref name="size"/> must already be in device
@@ -545,10 +552,9 @@ public sealed class MainForm : Form
   /// in physical pixels, so comparing it against a 96dpi design size silently under-clamped at any
   /// DPI above 100%.
   /// </summary>
-  private static Size ClampToWorkingArea(Size size)
+  private Size ClampToWorkingArea(Size size)
   {
-    Screen primary = Screen.PrimaryScreen ?? Screen.AllScreens[0];
-    Rectangle workingArea = primary.WorkingArea;
+    Rectangle workingArea = CurrentWorkingArea();
     int chromeHeight =
       SystemInformation.CaptionHeight + (SystemInformation.FixedFrameBorderSize.Height * 2);
     int chromeWidth = SystemInformation.FixedFrameBorderSize.Width * 2;
@@ -558,13 +564,34 @@ public sealed class MainForm : Form
   }
 
   /// <summary>
+  /// The working area of the monitor this window is on. Uses the window's bounds rather than
+  /// <c>Screen.FromControl</c>, which would force the native handle into existence when called from
+  /// the constructor.
+  /// </summary>
+  private Rectangle CurrentWorkingArea() => Screen.FromRectangle(Bounds).WorkingArea;
+
+  /// <summary>
+  /// Moves the window the minimum distance needed to bring it fully inside the working area of the
+  /// monitor it is on (AGENTS.md §10.3), leaving it untouched if it already fits.
+  /// </summary>
+  private void ClampLocationToWorkingArea()
+  {
+    Rectangle workingArea = CurrentWorkingArea();
+    int x = Math.Max(workingArea.Left, Math.Min(Left, workingArea.Right - Width));
+    int y = Math.Max(workingArea.Top, Math.Min(Top, workingArea.Bottom - Height));
+    if (x != Left || y != Top)
+    {
+      Location = new Point(x, y);
+    }
+  }
+
+  /// <summary>
   /// Sets <see cref="Form.Location"/> to center the window (both axes) on the primary screen's
-  /// working area (AGENTS.md §10.3/§10.6) — called from <see cref="ResizeToContent"/>
-  /// on every content-driven resize (so the window stays centered as it grows/shrinks with content,
-  /// not just on the "Open" transitions below) and separately from every tray Open/single click,
-  /// single-instance activation, or restore-from-minimize via <see cref="RestoreWindow"/> (redundant
-  /// with the resize that already happened via a live update, but cheap and keeps each Open path
-  /// correct independently). The window never remembers or restores a previous position.
+  /// working area (AGENTS.md §10.3/§10.6) — called only on the "Open" transitions: once at
+  /// construction, once after the first content load in <see cref="InitializeAsync"/>, and from
+  /// every tray Open/single click, single-instance activation, or restore-from-minimize via
+  /// <see cref="RestoreWindow"/>. Content and DPI resizes do not re-center (see
+  /// <see cref="ResizeToContent"/>). The window never remembers or restores a previous position.
   /// </summary>
   private void PositionWindowCentered()
   {
@@ -618,7 +645,13 @@ public sealed class MainForm : Form
     {
       await _database.InitializeAsync();
     }
-    catch (Exception ex) when (ex is SqliteException or IOException or UnauthorizedAccessException)
+    catch (Exception ex)
+      when (ex
+          is SqliteException
+            or IOException
+            or UnauthorizedAccessException
+            or NotSupportedException
+      )
     {
       // Deliberately not swallowed the way the rest of the storage layer is (AGENTS.md §9 scopes
       // that rule to individual reads/writes, not schema initialization) — a half-migrated schema
@@ -638,6 +671,9 @@ public sealed class MainForm : Form
     await _stopwatchControl.RestoreAsync();
     RefreshLists();
     RefreshTray();
+    // The content that arrives asynchronously after the constructor's centering changes the window's
+    // size, and resizes no longer re-center, so center once more now that it has its real size.
+    PositionWindowCentered();
   }
 
   private async void DispatchShortcut(StopwatchShortcut shortcut)

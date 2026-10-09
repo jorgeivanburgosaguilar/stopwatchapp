@@ -1,4 +1,4 @@
-using System.Diagnostics.CodeAnalysis;
+﻿using System.Diagnostics.CodeAnalysis;
 using Microsoft.Data.Sqlite;
 using StopwatchApp.Models;
 using StopwatchApp.Services;
@@ -40,7 +40,7 @@ public sealed class DatabaseTests : IAsyncLifetime
   [Fact]
   public async Task GetAllRecordsAsync_OnEmptyTable_ReturnsEmptyList()
   {
-    IReadOnlyList<StopwatchRecord> records = await _database.GetAllRecordsAsync();
+    IReadOnlyList<StopwatchRecord> records = await AllRecordsAsync();
 
     Assert.Empty(records);
   }
@@ -52,7 +52,7 @@ public sealed class DatabaseTests : IAsyncLifetime
     await _database.SaveRecordAsync(1, 2000, 120_000, []);
     await _database.SaveRecordAsync(2, 3000, 180_000, []);
 
-    IReadOnlyList<StopwatchRecord> records = await _database.GetAllRecordsAsync();
+    IReadOnlyList<StopwatchRecord> records = await AllRecordsAsync();
 
     Assert.Equal(3, records.Count);
     Assert.Equal(2, records[0].StartTimestamp);
@@ -70,7 +70,7 @@ public sealed class DatabaseTests : IAsyncLifetime
       laps: []
     );
 
-    IReadOnlyList<StopwatchRecord> records = await _database.GetAllRecordsAsync();
+    IReadOnlyList<StopwatchRecord> records = await AllRecordsAsync();
 
     Assert.Equal(0, Assert.Single(records).ElapsedMinutes);
   }
@@ -82,7 +82,7 @@ public sealed class DatabaseTests : IAsyncLifetime
     await _database.SaveRecordAsync(1, 2000, 120_000, []);
 
     await _database.ClearAllRecordsAsync();
-    IReadOnlyList<StopwatchRecord> records = await _database.GetAllRecordsAsync();
+    IReadOnlyList<StopwatchRecord> records = await AllRecordsAsync();
 
     Assert.Empty(records);
   }
@@ -97,7 +97,7 @@ public sealed class DatabaseTests : IAsyncLifetime
     await _database.DeleteRecordAsync(secondId);
     await _database.DeleteRecordAsync(id: 999_999);
 
-    IReadOnlyList<StopwatchRecord> records = await _database.GetAllRecordsAsync();
+    IReadOnlyList<StopwatchRecord> records = await AllRecordsAsync();
     Assert.Equal([thirdId, firstId], records.Select(record => record.Id));
   }
 
@@ -113,7 +113,7 @@ public sealed class DatabaseTests : IAsyncLifetime
 
     long recordId = await _database.SaveRecordAsync(0, 190_000, 190_000, laps);
 
-    IReadOnlyList<Lap> loadedLaps = await _database.GetLapsAsync(recordId);
+    IReadOnlyList<Lap> loadedLaps = await LapsAsync(recordId);
     Assert.Equal([3, 2, 1], loadedLaps.Select(lap => lap.Id));
     Assert.Equal(laps[2], loadedLaps[0]);
     Assert.Equal(laps[1], loadedLaps[1]);
@@ -125,7 +125,7 @@ public sealed class DatabaseTests : IAsyncLifetime
   {
     long recordId = await _database.SaveRecordAsync(0, 60_000, 60_000, []);
 
-    IReadOnlyList<Lap> loadedLaps = await _database.GetLapsAsync(recordId);
+    IReadOnlyList<Lap> loadedLaps = await LapsAsync(recordId);
 
     Assert.Empty(loadedLaps);
   }
@@ -133,7 +133,7 @@ public sealed class DatabaseTests : IAsyncLifetime
   [Fact]
   public async Task GetLapsAsync_OnUnknownRecordId_ReturnsAnEmptyList()
   {
-    IReadOnlyList<Lap> loadedLaps = await _database.GetLapsAsync(999_999);
+    IReadOnlyList<Lap> loadedLaps = await LapsAsync(999_999);
 
     Assert.Empty(loadedLaps);
   }
@@ -144,7 +144,7 @@ public sealed class DatabaseTests : IAsyncLifetime
     await _database.SaveRecordAsync(0, 60_000, 60_000, [new Lap(1, 0, 60_000, 1)]);
     await _database.SaveRecordAsync(1, 60_000, 60_000, []);
 
-    IReadOnlyList<StopwatchRecord> records = await _database.GetAllRecordsAsync();
+    IReadOnlyList<StopwatchRecord> records = await AllRecordsAsync();
 
     // Newest first: index 0 is the second save (no laps), index 1 is the first (one lap).
     Assert.Equal(0, records[0].LapCount);
@@ -159,8 +159,8 @@ public sealed class DatabaseTests : IAsyncLifetime
 
     await _database.DeleteRecordAsync(deletedId);
 
-    Assert.NotEmpty(await _database.GetLapsAsync(keptId));
-    Assert.Empty(await _database.GetLapsAsync(deletedId));
+    Assert.NotEmpty(await LapsAsync(keptId));
+    Assert.Empty(await LapsAsync(deletedId));
   }
 
   [Fact]
@@ -171,8 +171,8 @@ public sealed class DatabaseTests : IAsyncLifetime
 
     await _database.ClearAllRecordsAsync();
 
-    Assert.Empty(await _database.GetLapsAsync(firstId));
-    Assert.Empty(await _database.GetLapsAsync(secondId));
+    Assert.Empty(await LapsAsync(firstId));
+    Assert.Empty(await LapsAsync(secondId));
   }
 
   [Fact]
@@ -265,7 +265,7 @@ public sealed class DatabaseTests : IAsyncLifetime
 
     await _database.InitializeAsync();
 
-    IReadOnlyList<StopwatchRecord> records = await _database.GetAllRecordsAsync();
+    IReadOnlyList<StopwatchRecord> records = await AllRecordsAsync();
     long userVersion = await ReadUserVersionAsync();
     Assert.Equal(SchemaMigrations.Current, userVersion);
     Assert.Single(records);
@@ -281,12 +281,79 @@ public sealed class DatabaseTests : IAsyncLifetime
       laps: [new Lap(1, 111, 999_222, 3)]
     );
 
-    StopwatchRecord record = Assert.Single(await _database.GetAllRecordsAsync());
+    StopwatchRecord record = Assert.Single(await AllRecordsAsync());
 
     Assert.Equal(111, record.StartTimestamp);
     Assert.Equal(999_222, record.EndTimestamp);
     Assert.Equal(3, record.ElapsedMinutes);
     Assert.Equal(1, record.LapCount);
+  }
+
+  [Fact]
+  public async Task SaveRecordAsync_DeletesTheRecoverySnapshotInTheSameWrite()
+  {
+    await _database.SavePausedSessionAsync(new PausedSession(1000, 0, [], 0, 0, 1000));
+
+    long id = await _database.SaveRecordAsync(0, 60_000, 60_000, []);
+
+    Assert.NotEqual(0, id);
+    Assert.Null(await _database.LoadPausedSessionAsync());
+  }
+
+  [Fact]
+  public async Task SaveRecordAsync_WhenTheWriteFails_KeepsTheSnapshotAndSavesNothing()
+  {
+    await _database.SavePausedSessionAsync(new PausedSession(1000, 0, [], 0, 0, 1000));
+    await ExecuteRawAsync(
+      "CREATE TRIGGER fail_lap BEFORE INSERT ON record_laps BEGIN SELECT RAISE(ABORT, 'x'); END;"
+    );
+
+    long id = await _database.SaveRecordAsync(0, 60_000, 60_000, [new Lap(1, 0, 60_000, 1)]);
+
+    Assert.Equal(0, id);
+    Assert.Empty(await AllRecordsAsync());
+    Assert.NotNull(await _database.LoadPausedSessionAsync());
+  }
+
+  [Fact]
+  public async Task GetAllRecordsAsync_WhenTheReadFails_ReturnsNullNotAnEmptyList()
+  {
+    await ExecuteRawAsync("DROP TABLE record_laps;");
+
+    Assert.Null(await _database.GetAllRecordsAsync());
+    Assert.Null(await _database.GetLapsAsync(1));
+  }
+
+  [Fact]
+  public async Task InitializeAsync_OnADatabaseNewerThanThisBuild_IsRejected()
+  {
+    await ExecuteRawAsync($"PRAGMA user_version = {SchemaMigrations.Current + 1};");
+    await using Database newer = new(_databasePath);
+
+    await Assert.ThrowsAsync<NotSupportedException>(newer.InitializeAsync);
+  }
+
+  private async Task<IReadOnlyList<StopwatchRecord>> AllRecordsAsync()
+  {
+    IReadOnlyList<StopwatchRecord>? records = await _database.GetAllRecordsAsync();
+    Assert.NotNull(records);
+    return records;
+  }
+
+  private async Task<IReadOnlyList<Lap>> LapsAsync(long recordId)
+  {
+    IReadOnlyList<Lap>? laps = await _database.GetLapsAsync(recordId);
+    Assert.NotNull(laps);
+    return laps;
+  }
+
+  private async Task ExecuteRawAsync(string sql)
+  {
+    await using SqliteConnection connection = new($"Data Source={_databasePath}");
+    await connection.OpenAsync();
+    await using SqliteCommand command = connection.CreateCommand();
+    command.CommandText = sql;
+    await command.ExecuteNonQueryAsync();
   }
 
   private async Task CorruptLapsJsonAsync()

@@ -1,4 +1,4 @@
-using StopwatchApp.Models;
+﻿using StopwatchApp.Models;
 
 namespace StopwatchApp.Services;
 
@@ -202,14 +202,14 @@ public sealed class StopwatchTimer : IDisposable
   /// <summary>
   /// Stops the current session (a harmless no-op if idle), appends a final partial lap when one
   /// is owed, and — unless it would duplicate the most recent record — persists the session and
-  /// reloads <see cref="Records"/>. See AGENTS.md §8.3.
+  /// reloads <see cref="Records"/>. The record and the recovery-snapshot deletion are one atomic
+  /// store write; if it fails the session stays paused and recoverable so Stop can be retried.
+  /// See AGENTS.md §8.3.
   /// </summary>
   public async Task StopAsync()
   {
     IsRunning = false;
     IsPaused = false;
-    RestoredPausedAtMs = 0;
-    await ClearSnapshotAsync().ConfigureAwait(false);
     long endTimestamp = NowMs();
 
     if (_laps.Count > 0 && ElapsedMs > _lastLapElapsed)
@@ -226,18 +226,51 @@ public sealed class StopwatchTimer : IDisposable
       _lastLapTimestamp = endTimestamp;
     }
 
-    if (ElapsedMs > 0 && _sessionStartMs > 0)
+    if (ElapsedMs <= 0 || _sessionStartMs <= 0)
     {
-      OnStop?.Invoke(ElapsedMs, _sessionStartMs, endTimestamp);
+      // Nothing to save (idle, or stopped before the first tick): just discard any snapshot.
+      await ClearSnapshotAsync().ConfigureAwait(false);
+      RestoredPausedAtMs = 0;
+      _sessionStartMs = 0;
+      return;
+    }
 
-      bool isDuplicate = Records.Count > 0 && Records[0].StartTimestamp == _sessionStartMs;
-      if (!isDuplicate)
+    OnStop?.Invoke(ElapsedMs, _sessionStartMs, endTimestamp);
+
+    bool isDuplicate = Records.Count > 0 && Records[0].StartTimestamp == _sessionStartMs;
+
+    // The record, its laps, and the snapshot deletion commit together under the snapshot gate, so
+    // neither an autosave nor a failed write can leave the session with no record and no snapshot.
+    await _snapshotGate.WaitAsync().ConfigureAwait(false);
+    try
+    {
+      if (isDuplicate)
       {
+        await _store.ClearPausedSessionAsync().ConfigureAwait(false);
+      }
+      else if (
         await _store
           .SaveRecordAsync(_sessionStartMs, endTimestamp, ElapsedMs, [.. _laps])
-          .ConfigureAwait(false);
-        await ReloadRecordsAsync().ConfigureAwait(false);
+          .ConfigureAwait(false) == 0
+      )
+      {
+        // Nothing was committed, so the session is not finished: freeze it as paused (any final
+        // lap is already applied, so pressing Stop again retries without duplicating it) and
+        // re-checkpoint it so it also survives a restart.
+        IsPaused = true;
+        await SaveSnapshotCoreAsync().ConfigureAwait(false);
+        return;
       }
+    }
+    finally
+    {
+      _snapshotGate.Release();
+    }
+
+    RestoredPausedAtMs = 0;
+    if (!isDuplicate)
+    {
+      await ReloadRecordsAsync().ConfigureAwait(false);
     }
 
     _sessionStartMs = 0;
@@ -293,7 +326,8 @@ public sealed class StopwatchTimer : IDisposable
   /// §3.1).
   /// </summary>
   /// <param name="recordId">The record's id, as it appears in <see cref="Records"/>.</param>
-  public Task<IReadOnlyList<Lap>> GetRecordLapsAsync(long recordId) =>
+  /// <returns>The laps, or <see langword="null"/> if they could not be read.</returns>
+  public Task<IReadOnlyList<Lap>?> GetRecordLapsAsync(long recordId) =>
     _store.GetLapsAsync(recordId);
 
   /// <summary>
@@ -417,7 +451,16 @@ public sealed class StopwatchTimer : IDisposable
 
   private async Task ReloadRecordsAsync()
   {
-    _records = await _store.GetAllRecordsAsync().ConfigureAwait(false);
+    IReadOnlyList<StopwatchRecord>? records = await _store
+      .GetAllRecordsAsync()
+      .ConfigureAwait(false);
+    if (records is null)
+    {
+      // A failed read must not masquerade as an empty history (AGENTS.md §9): keep what is shown.
+      return;
+    }
+
+    _records = records;
     RecordsChanged?.Invoke();
   }
 }

@@ -17,7 +17,7 @@ internal sealed class ManageRecordsForm : Form
 
   private readonly Func<long, Task> _deleteRecordAsync;
   private readonly Func<Task> _clearRecordsAsync;
-  private readonly Func<long, Task<IReadOnlyList<Lap>>> _getLapsAsync;
+  private readonly Func<long, Task<IReadOnlyList<Lap>?>> _getLapsAsync;
   private readonly Font _bodyFont;
   private readonly Font _rowFont;
   private readonly RowIconSet _rowIcons = new();
@@ -38,6 +38,7 @@ internal sealed class ManageRecordsForm : Form
   private readonly HashSet<long> _expandedRecordIds = [];
   private readonly HashSet<long> _loadingLapRecordIds = [];
   private readonly Dictionary<long, IReadOnlyList<Lap>> _lapCache = [];
+  private readonly HashSet<long> _failedLapRecordIds = [];
   private IReadOnlyList<StopwatchRecord> _records;
   private int _pageIndex;
   private bool _dark;
@@ -47,7 +48,7 @@ internal sealed class ManageRecordsForm : Form
     IReadOnlyList<StopwatchRecord> records,
     Func<long, Task> deleteRecordAsync,
     Func<Task> clearRecordsAsync,
-    Func<long, Task<IReadOnlyList<Lap>>> getLapsAsync,
+    Func<long, Task<IReadOnlyList<Lap>?>> getLapsAsync,
     Icon appIcon
   )
   {
@@ -194,6 +195,7 @@ internal sealed class ManageRecordsForm : Form
       _lapCache.Remove(id);
     }
     _expandedRecordIds.IntersectWith(recordIds);
+    _failedLapRecordIds.IntersectWith(recordIds);
     RebuildRows();
     RefreshExpandedLapsForCurrentPage();
   }
@@ -317,14 +319,24 @@ internal sealed class ManageRecordsForm : Form
       return;
     }
 
+    _failedLapRecordIds.Remove(id);
     _loadingLapRecordIds.Add(id);
     ApplyExpansionToVisibleRow(id);
     try
     {
-      IReadOnlyList<Lap> laps = await _getLapsAsync(id);
+      IReadOnlyList<Lap>? laps = await _getLapsAsync(id);
       if (!IsDisposed && _records.Any(record => record.Id == id))
       {
-        _lapCache[id] = laps;
+        // A failed read (null) is never cached as "no laps": it is flagged so the row says so, and
+        // collapsing then expanding it again retries.
+        if (laps is null)
+        {
+          _failedLapRecordIds.Add(id);
+        }
+        else
+        {
+          _lapCache[id] = laps;
+        }
       }
     }
     finally
@@ -399,10 +411,9 @@ internal sealed class ManageRecordsForm : Form
       // including when this pooled row has since been assigned to another record.
       if (expanded)
       {
-        IReadOnlyList<Lap> laps = _lapCache.TryGetValue(id, out IReadOnlyList<Lap>? cached)
-          ? cached
-          : [];
-        PopulateLaps(parts, laps, loading || !_lapCache.ContainsKey(id));
+        bool cachedLaps = _lapCache.TryGetValue(id, out IReadOnlyList<Lap>? cached);
+        bool failed = !cachedLaps && !loading && _failedLapRecordIds.Contains(id);
+        PopulateLaps(parts, cached ?? [], loading: !cachedLaps && !failed, failed);
       }
       parts.LapsPanel.Visible = expanded;
     }
@@ -414,7 +425,12 @@ internal sealed class ManageRecordsForm : Form
     }
   }
 
-  private void PopulateLaps(RecordRowParts parts, IReadOnlyList<Lap> laps, bool loading)
+  private void PopulateLaps(
+    RecordRowParts parts,
+    IReadOnlyList<Lap> laps,
+    bool loading,
+    bool failed
+  )
   {
     // Pooled exactly like the record rows themselves (AGENTS.md §17): a label is created or
     // disposed only when this row's lap count changes, otherwise its text is reassigned.
@@ -453,6 +469,7 @@ internal sealed class ManageRecordsForm : Form
       parts.LapLabels[i].Font = laps.Count > 0 ? _rowFont : _bodyFont;
       parts.LapLabels[i].Text =
         laps.Count > 0 ? RecordsListControl.FormatLapRow(laps[i])
+        : failed ? "Couldn't load laps. Collapse and expand to retry."
         : loading ? "Loading laps…"
         : "No laps recorded for this session.";
       parts.LapLabels[i].ForeColor = Palette.Text(_dark);
@@ -556,7 +573,10 @@ internal sealed class ManageRecordsForm : Form
     int height = (int)Math.Ceiling(DesignClientHeight * (deviceDpi / 96f));
     Screen screen = Screen.FromControl(this);
     int chromeWidth = SystemInformation.FixedFrameBorderSize.Width * 2;
-    int chromeHeight = SystemInformation.FixedFrameBorderSize.Height * 2;
+    // The title bar counts against the working area too; without it a clamped window's outer
+    // height exceeded the screen by the caption's height.
+    int chromeHeight =
+      SystemInformation.CaptionHeight + (SystemInformation.FixedFrameBorderSize.Height * 2);
     Size clientSize = new(
       Math.Max(1, Math.Min(width, screen.WorkingArea.Width - chromeWidth)),
       Math.Max(1, Math.Min(height, screen.WorkingArea.Height - chromeHeight))
