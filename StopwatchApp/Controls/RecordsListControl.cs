@@ -37,7 +37,6 @@ public sealed class RecordsListControl : UserControl
   private readonly ListBox _recordsListBox;
   private readonly Label _emptyStateLabel;
   private readonly Button _manageRecordsButton;
-  private int _hoveredPillIndex = -1;
   private readonly Panel _recordsHost;
   private readonly Font _rowFont;
   private readonly RowIconSet _rowIcons = new();
@@ -116,7 +115,7 @@ public sealed class RecordsListControl : UserControl
     ConfigureRowRendering(_recordsListBox, withResumePill: true);
     _recordsListBox.MouseClick += OnRecordsMouseClick;
     _recordsListBox.MouseMove += OnRecordsMouseMove;
-    _recordsListBox.MouseLeave += (_, _) => SetHoveredPill(-1);
+    _recordsListBox.MouseLeave += (_, _) => SetPillCursor(false);
     _emptyStateLabel = new Label
     {
       Text = "No records yet",
@@ -240,7 +239,6 @@ public sealed class RecordsListControl : UserControl
   {
     _shownRecords.Clear();
     _shownRecords.AddRange(records.Take(MaxDisplayedRecords));
-    _hoveredPillIndex = -1;
 
     _recordsListBox.BeginUpdate();
     _recordsListBox.Items.Clear();
@@ -489,19 +487,18 @@ public sealed class RecordsListControl : UserControl
     }
   }
 
+  // The pill has no hover visual: repainting owner-drawn rows on hover flickered the list, so
+  // hovering only swaps the cursor and never invalidates anything.
   private void OnRecordsMouseMove(object? sender, MouseEventArgs e) =>
-    SetHoveredPill(PillIndexAt(e.Location));
+    SetPillCursor(PillIndexAt(e.Location) >= 0);
 
-  private void SetHoveredPill(int index)
+  private void SetPillCursor(bool overPill)
   {
-    if (_hoveredPillIndex == index)
+    Cursor wanted = overPill ? Cursors.Hand : Cursors.Default;
+    if (_recordsListBox.Cursor != wanted)
     {
-      return;
+      _recordsListBox.Cursor = wanted;
     }
-
-    _hoveredPillIndex = index;
-    _recordsListBox.Cursor = index >= 0 ? Cursors.Hand : Cursors.Default;
-    _recordsListBox.Invalidate();
   }
 
   /// <summary>
@@ -544,13 +541,14 @@ public sealed class RecordsListControl : UserControl
       return;
     }
 
-    e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+    Graphics g = e.Graphics;
+    g.SmoothingMode = SmoothingMode.AntiAlias;
 
     // The card background (set on the list box itself in ApplyTheme) shows through as the gap
     // between rounded row cards, so it only needs painting here, not a separate lookup.
     using (SolidBrush gapBrush = new(listBox.BackColor))
     {
-      e.Graphics.FillRectangle(gapBrush, e.Bounds);
+      g.FillRectangle(gapBrush, e.Bounds);
     }
 
     // The same scale MeasureRowHeight used, so a row is painted at the height it was measured for.
@@ -562,11 +560,11 @@ public sealed class RecordsListControl : UserControl
     );
     using (SolidBrush rowBrush = new(Palette.RowBackground(_dark)))
     {
-      e.Graphics.FillPath(rowBrush, path);
+      g.FillPath(rowBrush, path);
     }
     using (Pen borderPen = new(Palette.Border(_dark), 1f))
     {
-      e.Graphics.DrawPath(borderPen, path);
+      g.DrawPath(borderPen, path);
     }
 
     Rectangle textBounds = Rectangle.Inflate(rowBounds, -Scaled(Palette.SpacingSm, scale), 0);
@@ -580,7 +578,7 @@ public sealed class RecordsListControl : UserControl
     // engine MeasureRowHeight above uses, so a wrapped row is never sized one way and painted
     // another, and it draws the emoji as color images rather than GDI's monochrome glyphs.
     IconTextLayout.Draw(
-      e.Graphics,
+      g,
       listBox.Items[e.Index].ToString() ?? string.Empty,
       listBox.Font,
       textBounds,
@@ -590,25 +588,20 @@ public sealed class RecordsListControl : UserControl
 
     if (withResumePill)
     {
-      DrawResumePill(e, listBox, rowBounds, scale);
+      DrawResumePill(g, listBox, rowBounds, scale);
     }
   }
 
-  private void DrawResumePill(
-    DrawItemEventArgs e,
-    ListBox listBox,
-    Rectangle rowBounds,
-    float scale
-  )
+  private static void DrawResumePill(Graphics g, ListBox listBox, Rectangle rowBounds, float scale)
   {
     Rectangle pill = ResumePillBounds(rowBounds, listBox.Font, scale);
-    (Color baseColor, Color hoverColor, _) = Palette.StartButton;
+    (Color baseColor, _, _) = Palette.StartButton;
     using GraphicsPath pillPath = RoundedRectangle.Path(
       pill,
       Scaled(Palette.ControlCornerRadius, scale)
     );
-    using SolidBrush pillBrush = new(e.Index == _hoveredPillIndex ? hoverColor : baseColor);
-    e.Graphics.FillPath(pillBrush, pillPath);
-    TextRenderer.DrawText(e.Graphics, ResumeLabel, listBox.Font, pill, Color.White, PillTextFlags);
+    using SolidBrush pillBrush = new(baseColor);
+    g.FillPath(pillBrush, pillPath);
+    TextRenderer.DrawText(g, ResumeLabel, listBox.Font, pill, Color.White, PillTextFlags);
   }
 }

@@ -646,9 +646,11 @@ Rules:
 - **Header row:** the `Records` label and the `Manage Records` button share one line — `Records`
   left-aligned, `Manage Records` right-aligned. `Clear All Records` is **not** in the main window;
   it exists only in the Manage Records window.
-- **Resume pill.** Each of the (up to five) record rows draws a green (`Palette.StartButton`, hover
-  shade on mouse-over) rounded `↻ Resume` pill with white text at its right edge, vertically
+- **Resume pill.** Each of the (up to five) record rows draws a green (`Palette.StartButton` base
+  fill, no hover shade) rounded `↻ Resume` pill with white text at its right edge, vertically
   centered, with the hand cursor over it. Clicking it raises `RecordsListControl.ResumeRequested`.
+  The pill deliberately has **no hover visual**: repainting owner-drawn rows on every hover change
+  made the list flicker, so hovering only swaps the cursor and invalidates nothing.
   It is owner-drawn inside the row, so — unlike `ButtonFactory` buttons — it has no keyboard focus
   indicator; keyboard users resume nothing (accepted: Resume is a mouse recovery action).
   `RecordsListControl.ResumePillWidth`/`ResumePillReserve`/`ResumePillBounds` are the one geometry
@@ -1615,6 +1617,17 @@ here; do not accumulate dated implementation history.
   `ListBox` items (variable height, wrapping), so one hit-tested pill drawn by the same code that
   measures the row keeps the wrap and the click target consistent; per-row child buttons would fight
   the list box's layout. The accepted cost is no keyboard focus indicator on the pill (§8.5).
+- **Owner-drawn elements and animation (open, worth fixing properly).** The Resume pill is painted
+  by the row's `DrawItem` handler, so any visual change to it means repainting a `ListBox` row, and
+  that flickered even with a double-buffered `ListBox` and per-row invalidation (an attempt to
+  buffer each row with `BufferedGraphics` inside `DrawItem` left the list empty). The shipped answer is
+  to give the pill no hover visual (§18.17). A proper fix, if hover or other animation is wanted
+  later, is to stop painting interactive elements inside the list box: host each record row as a
+  small custom control (or a `ButtonFactory` button positioned per row) that owns its own
+  `ControlStyles.OptimizedDoubleBuffer` painting and hover state, so a hover repaints only that
+  control's rectangle. The cost is losing the single owner-drawn list's shared measure/draw/hit-test
+  geometry (§8.5), so it needs a design decision and a multi-DPI manual check, not an incidental
+  edit.
 - **Clear All Records lives only in the manager.** It is the one destructive, history-wide action;
   keeping it out of the always-visible main window prevents accidental clicks next to the new
   Resume pills, and the manager already carries a confirmed Clear All.
@@ -1705,3 +1718,11 @@ preconditions, not optional suggestions.
 16. Record enduring decisions as present-tense rationale: update the governing section and this
     rationale section without dates, milestone labels, diary-style progress, or references to a
     deleted planning document.
+17. **No hover, press, or other animated state on owner-drawn controls.** Anything painted by hand
+    inside a stock control (today: the Resume pill inside the records `ListBox`, §8.5) must not
+    repaint on mouse movement — invalidating owner-drawn rows flickers the whole list, and
+    double buffering or narrower invalidation did not cure it. Such elements stay static and
+    signal interactivity only through the cursor. Interactive visuals (hover/pressed shades, focus
+    rings, animation) belong on real controls such as `ButtonFactory` buttons, which the OS paints
+    without flicker. Do not reintroduce a hover shade on the pill without first resolving the open
+    item in §17 ("Owner-drawn elements and animation").
