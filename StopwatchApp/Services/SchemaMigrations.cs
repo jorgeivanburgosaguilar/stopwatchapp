@@ -59,10 +59,19 @@ internal static class SchemaMigrations
     );
     """;
 
+  // Exact-resume columns. Both are nullable on purpose: NULL marks a record saved before this
+  // migration, whose exact elapsed time was never stored (only whole minutes were), so it can only
+  // be resumed at minute precision.
+  private const string V2ExactResumeColumns = """
+    ALTER TABLE records ADD COLUMN elapsedMs INTEGER;
+    ALTER TABLE records ADD COLUMN lastLapElapsedMs INTEGER;
+    """;
+
   /// <summary>
   /// Every migration, in ascending, consecutive <see cref="Migration.Version"/> order.
   /// </summary>
-  internal static IReadOnlyList<Migration> All { get; } = [new Migration(1, V1CreateTables)];
+  internal static IReadOnlyList<Migration> All { get; } =
+  [new Migration(1, V1CreateTables), new Migration(2, V2ExactResumeColumns)];
 
   /// <summary>
   /// The schema version a freshly initialized database ends up at — the highest version in

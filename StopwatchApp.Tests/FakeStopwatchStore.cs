@@ -14,6 +14,10 @@ internal sealed class FakeStopwatchStore : IStopwatchStore
   private readonly Dictionary<long, IReadOnlyList<Lap>> _laps = [];
   private PausedSession? _pausedSession;
 
+  // Monotonic like AUTOINCREMENT: a resumed (deleted) record's id is never reused, so the next
+  // saved record can't collide with a surviving one.
+  private long _nextId = 1;
+
   public TaskCompletionSource? PausedSessionSaveStarted { get; init; }
 
   public TaskCompletionSource? PausedSessionSaveGate { get; init; }
@@ -24,11 +28,15 @@ internal sealed class FakeStopwatchStore : IStopwatchStore
   /// <summary>When set, the interface reads report failure (<see langword="null"/>).</summary>
   public bool FailReads { get; set; }
 
+  /// <summary>When set, <see cref="ResumeRecordAsync"/> commits nothing and returns false.</summary>
+  public bool FailResumes { get; set; }
+
   public Task<long> SaveRecordAsync(
     long startTimestamp,
     long endTimestamp,
     long elapsedMs,
-    IReadOnlyList<Lap> laps
+    IReadOnlyList<Lap> laps,
+    long? lastLapElapsedMs = null
   )
   {
     if (FailRecordSaves)
@@ -36,15 +44,56 @@ internal sealed class FakeStopwatchStore : IStopwatchStore
       return Task.FromResult(0L);
     }
 
-    long id = _records.Count + 1;
+    long id = _nextId++;
     _records.Insert(
       0,
-      new StopwatchRecord(id, startTimestamp, endTimestamp, elapsedMs / 60000, laps.Count)
+      new StopwatchRecord(
+        id,
+        startTimestamp,
+        endTimestamp,
+        elapsedMs / 60000,
+        laps.Count,
+        elapsedMs,
+        lastLapElapsedMs
+      )
     );
     _laps[id] = [.. laps];
     // Mirrors Database: the record and the snapshot deletion are one atomic write.
     _pausedSession = null;
     return Task.FromResult(id);
+  }
+
+  /// <summary>
+  /// Adds a record the way a pre-exact-time build saved it: whole minutes only, with no exact
+  /// elapsed time or last-lap marker (both <see langword="null"/>).
+  /// </summary>
+  public long AddLegacyRecord(
+    long startTimestamp,
+    long endTimestamp,
+    long elapsedMinutes,
+    IReadOnlyList<Lap> laps
+  )
+  {
+    long id = _nextId++;
+    _records.Insert(
+      0,
+      new StopwatchRecord(id, startTimestamp, endTimestamp, elapsedMinutes, laps.Count)
+    );
+    _laps[id] = [.. laps];
+    return id;
+  }
+
+  public Task<bool> ResumeRecordAsync(long recordId, PausedSession snapshot)
+  {
+    if (FailResumes || _records.RemoveAll(record => record.Id == recordId) != 1)
+    {
+      return Task.FromResult(false);
+    }
+
+    // Mirrors Database: record, laps, and the snapshot write are one atomic change.
+    _laps.Remove(recordId);
+    _pausedSession = snapshot;
+    return Task.FromResult(true);
   }
 
   public Task<IReadOnlyList<StopwatchRecord>> GetAllRecordsAsync() =>

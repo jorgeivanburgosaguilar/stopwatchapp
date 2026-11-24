@@ -24,8 +24,16 @@ project-management, invoicing, monitoring, or cloud-sync product.
 - Start, pause, continue, add lap splits, stop and save a session, or reset and discard it.
 - Reset always asks for confirmation, including while idle. It returns the clock to `00:00:00`,
   clears the current session and laps, and deletes its recovery snapshot without saving a record.
-  Previously saved history is retained. Reset appears immediately after Stop in the main window
-  and tray menu, in dark orange; it has no keyboard shortcut or configuration setting.
+  Previously saved history is retained. Reset appears immediately before Stop in the main window
+  and tray menu, in dark orange; it has no keyboard shortcut or configuration setting. **Stop is
+  always the rightmost button** (idle `Start, Reset, Stop`; running `Pause, Lap, Reset, Stop`;
+  paused `Continue, Reset, Stop`).
+- Resume a mistakenly stopped session: each of the five records in the main window has a green
+  `↻ Resume` pill. After confirmation the record moves back into the main clock — paused, at the
+  exact time it was stopped, with its laps and lap clock restored — and leaves Records until it is
+  stopped again (saving one record with the combined time). It works from any state; a live
+  session is discarded after the confirmation warns about it. Records saved before exact times were
+  stored resume at whole-minute precision.
 - Show, below the main elapsed-time readout, a smaller lap-elapsed clock counting the time since
   the last lap split; it appears only once a lap has been recorded in the current session, freezes
   and resumes alongside the main clock on pause/continue, and disappears on Stop or Reset. It is a pure
@@ -41,7 +49,8 @@ project-management, invoicing, monitoring, or cloud-sync product.
   path.
 - Persist completed records in SQLite, show the five newest records in the main window, and expose
   the full history in one modeless records manager with five records per page, confirmed deletion,
-  and confirmed clear-all. Deletion preserves the current page and scroll offset, clamped only
+  and confirmed clear-all (`Clear All Records` exists **only** in the manager, not in the main
+  window). Deletion preserves the current page and scroll offset, clamped only
   when the remaining content is shorter.
 - Preserve laps in memory and in a saved live-session snapshot. A running session is periodically
   autosaved at the interval configured in `settings.json` (five minutes by default); an explicit
@@ -154,6 +163,7 @@ StopwatchApp/
     ClearRecordsDialog.cs  confirm dialog
     StopConfirmationDialog.cs  Stop confirmation dialog (§8.3/§8.5)
     ResetConfirmationDialog.cs  unconditional Reset confirmation (§8.3/§8.5)
+    ResumeRecordDialog.cs  Resume Session confirmation (§8.3/§8.5)
     DeleteRecordDialog.cs  per-record delete confirmation
     ManageRecordsForm.cs   modeless, paginated full-history window
   Models/                  one record type per file (§5)
@@ -218,6 +228,7 @@ refactor. Their authoritative declarations are in
 `StopwatchApp/Controls/StopwatchControl.cs`, `StopwatchApp/Services/TrayIconService.cs`,
 `StopwatchApp/Controls/RecordsListControl.cs`, `StopwatchApp/Controls/ClearRecordsDialog.cs`,
 `StopwatchApp/Controls/StopConfirmationDialog.cs`, `StopwatchApp/Controls/ResetConfirmationDialog.cs`,
+`StopwatchApp/Controls/ResumeRecordDialog.cs`,
 `StopwatchApp/Formatting/TimeFormat.cs`, and `StopwatchApp/Theme/Palette.cs`. Consult those files
 for exact signatures rather than duplicating them here.
 
@@ -225,7 +236,11 @@ for exact signatures rather than duplicating them here.
 depends only on it, so the state machine remains independently testable. `SaveRecordAsync` takes
 the session's laps and persists the record, its laps, **and the deletion of the recovery snapshot**
 in one atomic write, returning `0` when nothing was committed; `GetLapsAsync` loads one record's
-laps, newest first. `GetAllRecordsAsync` and `GetLapsAsync` return `null` when the read failed, which
+laps, newest first. `SaveRecordAsync` also stores the session's exact elapsed milliseconds and its
+last-real-lap marker (`lastLapElapsedMs`, optional parameter). `ResumeRecordAsync(recordId, snapshot)`
+deletes the record and its laps and upserts the paused-session snapshot in one atomic write,
+returning `false` (and changing nothing) for an unknown record or any failure.
+`GetAllRecordsAsync` and `GetLapsAsync` return `null` when the read failed, which
 is distinct from an empty result. There is no window-position persistence surface — it was removed with the schema rewrite in
 §9 (see §10.6).
 
@@ -247,7 +262,7 @@ second; `StopwatchTimer` itself owns no WinForms `Timer`. This split is what mak
 **Records ownership.** §8.3's duplicate guard reads `Records[0].StartTimestamp`, so
 `StopwatchTimer` — not `MainForm`, not `RecordsListControl` — owns the records list and its reload
 (both through `IStopwatchStore`), and raises `RecordsChanged` on every change. `RecordsListControl`
-only renders from lists pushed to it and raises `ClearAllRequested`; it never reads
+only renders from lists pushed to it and raises `ManageRecordsRequested`/`ResumeRequested`; it never reads
 `IStopwatchStore` itself. `MainForm` wires the two together and stays a thin orchestrator.
 `RestoreAsync` reloads `Records` (in addition to restoring a paused session, if any) so the list is
 populated before the caller ever reads it — a fresh `StopwatchTimer` has no other point at which
@@ -262,6 +277,10 @@ only for explicit confirmation; Cancel, Escape, and closing the window all cance
 `ConfirmReset` callback defaults to cancellation; `MainForm` supplies the dialog and restores a
 hidden window before showing it. The control guards timer actions while confirmation/reset is
 in progress so duplicate or conflicting actions cannot change the session being discarded.
+`StopwatchControl.ResumeRecordAsync` is the same kind of gate for Resume: its `ConfirmResume`
+callback (record, whether a live session would be discarded) defaults to cancellation, a running
+clock is paused while the question is open and resumed on cancel, and confirming calls
+`StopwatchTimer.ResumeRecordAsync`. `MainForm` supplies the dialog and restores a hidden window first.
 `StopwatchTimer.ResetAsync` owns the UI-free discard transition and uses the existing snapshot
 deletion boundary; no persistence interface or schema change is needed.
 
@@ -515,6 +534,29 @@ The authoritative transition implementation is in
   resumes it with confirmation time excluded; an already-paused or idle clock retains that state.
   Confirm discards the session and refreshes the main clock, laps, restored note, tray icon and
   tooltip to idle/zero. Duplicate and conflicting timer actions are ignored while this gate runs.
+- **Resume a stopped record.** `StopwatchTimer.ResumeRecordAsync(recordId)` turns one of the
+  `StopwatchTimer.RecentRecordCount` (5) newest records — the ones the main window lists — back into
+  the live session; any other id is rejected. It loads the record's laps (a failed read rejects it),
+  then, under the snapshot gate, calls `IStopwatchStore.ResumeRecordAsync`, which atomically deletes
+  the record and its laps and saves the snapshot. Only after that commits does it replace in-memory
+  state; on any failure nothing changes. The session comes back **paused** (never running) with the
+  record's original start time, `RestoredPausedAtMs` set to the record's end time, and the autosave
+  cadence reset. Elapsed time is `ElapsedMs`, or `ElapsedMinutes × 60000` for a legacy record (§9).
+  Because Stop appended a final partial lap that the user never pressed, an exact record whose
+  `LastLapElapsedMs` is below its `ElapsedMs` has its newest lap dropped and the lap clock restored
+  to `LastLapElapsedMs` (so lap number and lap clock continue exactly); if the last lap was a real
+  press (`LastLapElapsedMs == ElapsedMs`), every lap is kept and a fresh split starts. A legacy record
+  keeps all its laps and starts a fresh split. Resume never raises `OnStop` or saves a record; the
+  next Stop saves the continued session as one new record (same start time) with the combined time.
+  The record leaves Records on purpose: leaving it would trip Stop's duplicate guard
+  (`Records[0].StartTimestamp == _sessionStartMs`) and silently drop that save.
+- **Resume confirmation.** Every Resume passes through `StopwatchControl.ResumeRecordAsync`, which
+  always asks `ConfirmResume(record, hasLiveSession)` — a running clock is first paused, and a
+  cancel resumes it with the question's time excluded. When a running or paused session exists, the
+  dialog (§8.5) warns that it will be discarded (its snapshot is overwritten in the same
+  transaction, so no separate Reset runs). The same `_endingSession` guard as Stop/Reset blocks
+  conflicting timer actions meanwhile. A confirmed-but-failed resume shows a warning message box
+  and leaves the record in Records.
 
 ### 8.4 Formatters
 
@@ -538,12 +580,16 @@ Control row by state — exact labels and order:
 
 | State | Buttons shown (left → right) | Color intent |
 |---|---|---|
-| idle (not running, not paused) | Start, Stop, Reset | green, red, dark orange |
-| running | Pause, Lap, Stop, Reset | yellow, blue, red, dark orange |
-| paused | Continue, Stop, Reset | green, red, dark orange |
+| idle (not running, not paused) | Start, Reset, Stop | green, dark orange, red |
+| running | Pause, Lap, Reset, Stop | yellow, blue, dark orange, red |
+| paused | Continue, Reset, Stop | green, dark orange, red |
 
 Rules:
 
+- **Stop is always the rightmost button.** The buttons are added to the row in the order
+  primary, Pause, Lap, Reset, Stop and hidden ones take no flow space;
+  `StopwatchControl.VisibleButtonTexts` exposes the visible order for tests. The tray menu uses the
+  same order (§10.2).
 - No button is ever disabled. State is expressed purely by which buttons are present.
 - Stop while idle is a harmless no-op (the `ElapsedMs > 0 && SessionStartMs > 0` guard in `Stop()`
   absorbs it).
@@ -577,27 +623,38 @@ Rules:
   when there are none. **Only the most recent 5 are listed**
   (`RecordsListControl.MaxDisplayedRecords`); the records manager provides the full list with
   deletion. This preview panel is capped and not scrollable.
-- **Header row:** the `Records` label and the two action buttons below share one line —
-  `Records` left-aligned, `Manage Records` then `Clear All Records` right-aligned — replacing the former
-  stacked label-then-button-row layout, per the repo owner's markup of a screenshot: "the buttons and
-  the title 'Records List' should be on the same line."
+- **Header row:** the `Records` label and the `Manage Records` button share one line — `Records`
+  left-aligned, `Manage Records` right-aligned. `Clear All Records` is **not** in the main window;
+  it exists only in the Manage Records window.
+- **Resume pill.** Each of the (up to five) record rows draws a green (`Palette.StartButton`, hover
+  shade on mouse-over) rounded `↻ Resume` pill with white text at its right edge, vertically
+  centered, with the hand cursor over it. Clicking it raises `RecordsListControl.ResumeRequested`.
+  It is owner-drawn inside the row, so — unlike `ButtonFactory` buttons — it has no keyboard focus
+  indicator; keyboard users resume nothing (accepted: Resume is a mouse recovery action).
+  `RecordsListControl.ResumePillWidth`/`ResumePillReserve`/`ResumePillBounds` are the one geometry
+  shared by measuring (the row text wraps before the pill), drawing, hit-testing, and
+  `MainForm.RequiredClientWidth`'s per-record budget, so the four cannot drift. The window's
+  600-design-pixel compact width cap also grows by the pill reserve (`MainForm.ComputeFixedWidth`),
+  otherwise the cap would swallow the pill's space and force needless wrapping. The resulting
+  width is then trimmed by `MainForm.DesignResumeSlackTrim` (20 design pixels, scaled with DPI),
+  an empirically measured empty gap beside the pill on the owner's display; adjust that one
+  constant, not the pill geometry, if the gap needs tuning. The laps panel
+  has no pill.
 - **Row word-wrap, not clip:** a records/laps row past the sized-for worst case (a session
   over `MainForm.WorstCaseElapsedMinutes`, a lap id past 3 digits) word-wraps to a second line
   (`RecordsListControl.MeasureRowHeight`/owner-drawn `DrawMode.OwnerDrawVariable`), instead of the former
   `EndEllipsis` clipping. Each list box's, and the records host panel's, height is recomputed on
   every `UpdateRecords`/`UpdateLaps` call from the real (possibly wrapped) height of the rows actually
   shown — never a flat per-row constant — so the window (§10.3) can size itself to match.
-- A `Clear All Records` button is visible only when `Records.Count > 0` (the *actual* total, not the
-  capped display count) and, when clicked and confirmed, clears every persisted record — not just
-  the 5 shown. Styled red (`Palette.StopButton`) via the shared `ButtonFactory` (below),
-  matching the destructive-action color used elsewhere.
-- A **`Manage Records`** button sits beside `Clear All Records`, is always enabled, and
-  opens one modeless manager window. Styled blue (`Palette.LapButton`).
+- A **`Manage Records`** button is always enabled and opens one modeless manager window. Styled
+  blue (`Palette.LapButton`). The manager's own `Clear All Records` clears every persisted record
+  (not just five), styled red (`Palette.StopButton`) via the shared `ButtonFactory` (below).
 - The manager lists every saved record newest first, 5 per page, with Previous/Next navigation and
   confirmed per-row `Delete` actions. Its width is a fixed budget for a worst-case row with a `23:59` duration
   (`ManageRecordsForm.WorstCaseElapsedMinutes`) plus 50 design pixels (scaled with DPI), not a function of the page shown; a longer row wraps
-  to a second line instead of widening the window. Its header also has a confirmed `Clear All Records` action;
-  the main card's own Clear All shortcut remains.
+  to a second line instead of widening the window. Its header has the confirmed `Clear All Records`
+  action — the only place that action exists. Manage Records rows have no Resume action; only the
+  five newest records (those in the main window) can be resumed.
 - **Master-detail laps.** Every record row, including records without saved laps,
   shows a `▸`/`▾` expand toggle to its left; expanding reveals that record's laps beneath it,
   indented, newest first, in the same row template the live laps panel uses (§8.5's row text
@@ -625,6 +682,13 @@ Rules:
   `Cancel` dark slate (`Palette.CancelButton`, a new non-destructive-action token) — with equal
   top/bottom margins so the two sit on the same baseline (the former mismatched default/explicit margins
   had misaligned them). Confirming clears the records table and reloads the (now empty) list.
+- The Resume confirmation dialog (`Controls/ResumeRecordDialog.cs`), titled `Resume Session`, body
+  text `Resume the session from {date} {start}-{end} at {FormatTime(resumeMs)}? It moves back into
+  the stopwatch, paused, and leaves Records until you stop it again.` plus, only when a live session
+  would be discarded, ` The current session ({FormatTime(elapsed)}) and its laps will be discarded.`
+  Buttons `Cancel` (dark slate, initial focus) and `Resume` (green, `Palette.StartButton`), laid out
+  like the Reset dialog; Escape and the close box cancel. `FormatMessage` is a pure method covered
+  by tests.
 - The Stop confirmation dialog (`Controls/StopConfirmationDialog.cs`), titled `Stop Stopwatch`,
   body text `The stopwatch is at {FormatTime(elapsed)}. Stop it and save this session as a record?`,
   buttons `Cancel` (dark slate, `Palette.CancelButton`) and `Stop` (red, `Palette.StopButton`), laid
@@ -674,7 +738,9 @@ Four events with no-op defaults so the control works standalone:
 
 Reset does not emit `OnStop`; its control refreshes and raises `StateChanged` after the awaited
 discard. `ConfirmReset` is a confirmation callback, separate from these service events, and its
-standalone default is `false` so an unwired control cannot silently discard a session.
+standalone default is `false` so an unwired control cannot silently discard a session. Resume
+likewise emits no `OnStop` (it saves nothing); `ConfirmResume` is a confirmation callback whose
+standalone default is also cancellation.
 
 ---
 
@@ -695,6 +761,15 @@ table (one record owns zero or more laps, `recordId` referencing `records(id)`, 
 single-slot paused-session table; see "Schema versioning" below. There is no `window_position`
 table — the migration-era manual-position persistence surface was removed when this migration was
 rewritten (§10.6).
+
+**Migration 2 (exact-resume columns)** appends two nullable `INTEGER` columns to `records`:
+`elapsedMs` (the session's exact elapsed milliseconds) and `lastLapElapsedMs` (the elapsed time at
+the last *real* lap press, captured before Stop appended its final partial lap). `elapsedMinutes`
+remains the display value. They exist because Resume (§8.3) must restore to the second and keep the
+lap clock exact, which whole minutes and the start/end timestamps (they include paused time) cannot
+give. `NULL` marks a record saved before the migration (a "legacy" record): it can only be resumed
+at `elapsedMinutes × 60000` with a fresh split. The upgrade path is covered by a test that builds a
+version-1 database, inserts a legacy row, and initializes it.
 
 ### Schema versioning
 
@@ -723,15 +798,19 @@ The deliberately minimal API is declared in `StopwatchApp/Services/IStopwatchSto
 implemented in `StopwatchApp/Services/Database.cs`. There is no record-update or range-query
 surface. It supports inserting a record together with its laps atomically, loading newest-first
 records (each with its `LapCount`), loading one record's laps newest first, deleting one or all
-records (cascading their laps), and single-slot paused-session persistence. Record and lap
-insertion floors elapsed milliseconds to whole minutes before storage, and an unreadable saved
-session loads as `null`.
+records (cascading their laps), single-slot paused-session persistence, and atomically turning a
+record back into the paused-session snapshot (`ResumeRecordAsync`: delete laps, delete the record —
+which must affect exactly one row or the transaction rolls back — and upsert the snapshot, sharing
+one upsert helper with `SavePausedSessionAsync`). Record and lap
+insertion floors elapsed milliseconds to whole minutes for display storage (the exact value is kept
+alongside, above), and an unreadable saved session loads as `null`.
 
 Every storage method is wrapped in try/catch and **swallows errors**: a corrupt or unreadable saved
 session must return `null` rather than throw, and a failed write must never surface an exception to
 the UI. **This is deliberate — keep a comment next to the code saying so**, so it doesn't read as
 an oversight. Failure is still *reported*, never disguised as success: `SaveRecordAsync` returns `0`
-when nothing was committed (leaving the recovery snapshot intact), and the two list reads return
+when nothing was committed (leaving the recovery snapshot intact), `ResumeRecordAsync` returns
+`false` (leaving the record and any existing snapshot intact), and the two list reads return
 `null`, not an empty list, when they could not read. `StopwatchTimer` keeps its last-known records on
 a `null` reload, and `ManageRecordsForm` never caches a `null` lap load as "no laps" (it shows a
 retryable message instead).
@@ -755,7 +834,9 @@ UI shows the frozen elapsed time, a `Continue` button, the restored laps, and th
 pause" note (§8.5). **Time spent away while the app was closed is never counted** — resuming
 re-anchors `StartTime` from the current clock, exactly as an in-app pause/resume does.
 Reset deletes this single snapshot slot through the existing API, preserving completed records
-and their persisted laps. It adds neither a schema migration nor a settings property.
+and their persisted laps. It adds neither a schema migration nor a settings property. Resume
+(§8.3) reuses the same slot: a resumed record becomes the snapshot, so it also survives a restart
+as a paused session.
 
 ---
 
@@ -829,8 +910,10 @@ The tooltip is unaffected by laps; only the compact icon layouts above follow th
 ### 10.2 Tray context menu
 
 Order: `Open`, separator, the state-appropriate action(s) from §8.5 (`Start`/`Pause`/`Continue`/
-`Lap`/`Stop`/`Reset`), separator, `Exit`. Reset follows Stop in every state and uses a dark-orange
+`Lap`/`Reset`/`Stop`), separator, `Exit`. Stop is last in every state, matching the main window's
+button row, and Reset precedes it with a dark-orange
 reset-arrow glyph matching `Palette.ResetButton`; it calls the shared Reset confirmation gate.
+Resume is not in the tray menu (it needs a chosen record).
 Single left-clicking the tray icon opens (restores and activates)
 the main window; right-click remains reserved for the context menu. `Exit` is the only way to quit
 the application.
@@ -960,10 +1043,10 @@ Button colors (base / hover / pressed), same in both themes:
 
 | Button | Base | Hover | Pressed |
 |---|---|---|---|
-| Start / Continue (green) | `#16A34A` | `#15803D` | `#166534` |
+| Start / Continue (green) — also the `↻ Resume` pill and dialog `Resume` | `#16A34A` | `#15803D` | `#166534` |
 | Pause (yellow) | `#CA8A04` | `#A16207` | `#854D0E` |
 | Lap (blue) — also `Manage Records` | `#2563EB` | `#1D4ED8` | `#1E40AF` |
-| Stop (red) — also `Clear All Records`/dialog `Clear All` | `#DC2626` | `#B91C1C` | `#991B1B` |
+| Stop (red) — also the manager's `Clear All Records`/dialog `Clear All` | `#DC2626` | `#B91C1C` | `#991B1B` |
 | Reset (dark orange) — also dialog `Reset` | `#C2410C` | `#9A3412` | `#7C2D12` |
 | Cancel (dark slate) — dialog `Cancel` | `#334155` | `#1E293B` | `#0F172A` |
 
@@ -1025,7 +1108,9 @@ xUnit, in a `StopwatchApp.Tests` project.
 
 ## 14. Acceptance criteria (standing regression checklist)
 
-- Initial display is exactly `00:00:00`; Start, Stop, and Reset are visible at idle in that order.
+- Initial display is exactly `00:00:00`; Start, Reset, and Stop are visible at idle in that order.
+- Button order (§8.5): Stop is always the rightmost button — idle `Start, Reset, Stop`; running
+  `Pause, Lap, Reset, Stop`; paused `Continue, Reset, Stop`; the tray menu follows the same order.
 - The Lap button exists only while running — absent at idle and while paused.
 - Consecutive laps are splits, not cumulative totals: a lap after 61 s shows `00:01`; a second lap
   121 s later shows `00:02` (not `00:03`).
@@ -1037,8 +1122,20 @@ xUnit, in a `StopwatchApp.Tests` project.
 - Pause → Stop → restart shows **Start**, not Continue (stopping clears the saved session).
 - Stopping twice in a row without restarting yields exactly one record (the duplicate guard in
   `Stop()` holds).
-- Clear-all: the button is hidden when there are zero records, `Cancel` leaves records untouched,
-  `Clear All` empties the list back to the `No records yet` empty state.
+- Clear-all: the main window has **no** `Clear All Records` button; the Manage Records window's
+  button is disabled when there are zero records, `Cancel` leaves records untouched, `Clear All`
+  empties the list back to the `No records yet` empty state.
+- Resume (§8.3/§8.5/§9): each of the five listed records shows a `↻ Resume` pill (both themes,
+  all DPIs; text wraps before it). Clicking it asks for confirmation (Cancel focused; Escape/close
+  cancel). Confirming from any state loads the record paused at its exact stopped time (whole minutes
+  for a record saved before migration 2) with laps and the lap clock/number restored — Stop's
+  synthetic final lap is dropped — shows `Resumed from a saved point` with the record's end time,
+  and removes it from Records. Continue then Stop saves exactly one record (original start time,
+  combined duration, no duplicated laps). With a running or paused session the dialog says it will
+  be discarded; Cancel keeps a running clock running with the dialog time excluded. A failed commit
+  changes nothing. A resumed session survives a restart as a paused session. Records beyond the five
+  newest (Manage Records only) cannot be resumed. Check pill glyph rendering, hover/hand cursor, and
+  sizing in light/dark and at increased DPI manually.
 - A session under one minute stores `elapsedMinutes == 0` but still displays `00:01` via
   `FormatElapsed`'s floor.
 - `GetAllRecordsAsync()` on an empty table returns an empty list; records saved in order 0, 1, 2
@@ -1081,8 +1178,8 @@ xUnit, in a `StopwatchApp.Tests` project.
   from the Stop button, `Enter`, and every tray-menu Stop (the tray path restores the hidden window
   first). Setting `StopConfirmationAfterMinutes` to `0` disables it; a missing or malformed value
   falls back to five without affecting `AutosaveIntervalMinutes`, and vice versa.
-- Reset (§8.3/§8.5): dark-orange Reset sits directly to the right of Stop in every main-window
-  state and after Stop in every tray state. Every invocation confirms, including idle,
+- Reset (§8.3/§8.5): dark-orange Reset sits directly to the left of Stop in every main-window
+  state and before Stop in every tray state. Every invocation confirms, including idle,
   zero-duration, and with Stop confirmation disabled. The dialog text matches §8.5, initially
   focuses Cancel, and Cancel/Escape/closing preserve the session; a previously running clock
   resumes with dialog time excluded, while an already-paused clock stays paused. Tray Reset
@@ -1116,8 +1213,8 @@ xUnit, in a `StopwatchApp.Tests` project.
   or clear, and as the "Resumed from a pause" note appears/disappears — never a band of dead space
   to the right of or below the visible rows.
 - Title bar shows the version: it reads `Stopwatch {Application.ProductVersion}` (no `v` prefix).
-- Records header row (§8.5): `Records` sits left-aligned on the same line as, not stacked above,
-  `Manage Records` (blue) and `Clear All Records` (red), both right-aligned in that order.
+- Records header row (§8.5): `Records` sits left-aligned on the same line as `Manage Records`
+  (blue), right-aligned. There is no `Clear All Records` button in the main window.
 - Row word-wrap (§8.5): a record/lap row longer than the sized-for worst case (over
   `MainForm.WorstCaseElapsedMinutes`, or a lap id past 3 digits) wraps to a second line inside its row
   card instead of clipping or ellipsizing.
@@ -1126,12 +1223,12 @@ xUnit, in a `StopwatchApp.Tests` project.
   appearance (`RecordsListControl.UpdateLaps` syncing the hidden list box's width before its first
   measurement, below).
 - Records display cap (§8.5): only the 5 most recent records are listed in the main window
-  regardless of how many are persisted; "Clear All Records" still clears every persisted record, and
-  its own visibility still reflects the true total, not the capped display count.
+  regardless of how many are persisted; the manager's "Clear All Records" still clears every
+  persisted record, not just the five shown.
 - Manage Records window (§8.5): `Manage Records` is enabled and opens a single modeless,
   owner-managed window that lists all records newest first, paginated at 5 rows per page. Each row
-  has a confirmed Delete action; the header has a confirmed Clear All action. Add/edit behavior is
-  out of scope, and the main card's Clear All shortcut remains. The width includes 50 extra
+  has a confirmed Delete action; the header has the confirmed Clear All action (the only Clear All
+  in the app). Add/edit behavior is out of scope. The width includes 50 extra
   design pixels, scaled at higher DPI and clamped to the screen. Verify page navigation and
   repeated lap collapse/expand stay responsive, retain controls, and display the correct record's laps.
 - Lap persistence (§8.3/§9): stopping a session with laps saves them alongside the record; a
@@ -1421,6 +1518,29 @@ here; do not accumulate dated implementation history.
   persistence, no `IStopwatchStore` change, and no `PausedSession` change — the same reasoning as
   the lap-elapsed clock immediately above. `TrayIconService.UpdateDisplay` takes the tooltip value
   and the icon value as two separate parameters so they can diverge once a lap is in progress.
+- **Resume deletes the record and keeps its start time.** A mistaken Stop should be undoable
+  without producing two records for one session. Moving the record into the existing snapshot slot
+  (one atomic transaction) reuses all recovery semantics — it opens paused, survives a restart, and
+  Stop saves one combined record — with no second "resumable" state. Leaving the old row would also
+  trip Stop's duplicate guard and silently drop the later save. It is limited to the five newest
+  records because those are the ones the main window shows and a mistaken Stop is always the latest.
+- **Exact resume needs exact columns (migration 2).** The schema stored only whole minutes, and the
+  start/end timestamps include paused time, so an exact stopped time and the lap clock could not be
+  rebuilt. `elapsedMs` and `lastLapElapsedMs` are nullable so existing databases upgrade without
+  guessing: `NULL` rows resume at minute precision. `lastLapElapsedMs` is what lets Resume tell
+  Stop's synthetic final lap from a real lap press and drop only the former. `SaveRecordAsync` takes
+  `lastLapElapsedMs` as a trailing optional parameter, so callers that do not track laps are
+  unchanged.
+- **Resume is an owner-drawn pill inside the row, not a real button.** Rows are owner-drawn
+  `ListBox` items (variable height, wrapping), so one hit-tested pill drawn by the same code that
+  measures the row keeps the wrap and the click target consistent; per-row child buttons would fight
+  the list box's layout. The accepted cost is no keyboard focus indicator on the pill (§8.5).
+- **Clear All Records lives only in the manager.** It is the one destructive, history-wide action;
+  keeping it out of the always-visible main window prevents accidental clicks next to the new
+  Resume pills, and the manager already carries a confirmed Clear All.
+- **Stop is always the rightmost button.** The most destructive-to-flow action sits in one
+  predictable place across idle, running, and paused, and Reset (rarer, always confirmed) sits
+  beside it rather than in the middle of the state-dependent buttons. The tray menu mirrors it.
 - **Formatting belongs to CSharpier, while analyzers own code quality.** `IDE0055` is disabled so
   the SDK formatter cannot fight CSharpier, but compiler warnings, recommended analyzers, and all
   other enforced code-style diagnostics remain build-breaking.

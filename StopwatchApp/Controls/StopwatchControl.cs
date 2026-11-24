@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Drawing.Drawing2D;
 using StopwatchApp.Formatting;
+using StopwatchApp.Models;
 using StopwatchApp.Services;
 using StopwatchApp.Theme;
 
@@ -21,6 +22,7 @@ public sealed class StopwatchControl : UserControl
   private readonly Button _lapButton;
   private readonly Button _stopButton;
   private readonly Button _resetButton;
+  private readonly FlowLayoutPanel _buttonRow;
   private readonly Label _elapsedLabel;
   private readonly Label _lapElapsedLabel;
   private readonly Label _resumedNoteLabel;
@@ -135,15 +137,16 @@ public sealed class StopwatchControl : UserControl
       AutoSizeMode = AutoSizeMode.GrowAndShrink,
       Anchor = AnchorStyles.None,
     };
-    // Added in the fixed left-to-right order from AGENTS.md §8.5; hidden buttons take no flow space,
-    // so idle/paused render "Start/Continue, Stop, Reset" and running "Pause, Lap, Stop, Reset". The
-    // FlowLayoutPanel's own AutoSize shrinks to fit whichever set is visible, and re-centers via its
-    // TableLayoutPanel cell's Anchor=None below.
+    // Added in the fixed left-to-right order from AGENTS.md §8.5, with Stop always far right; hidden
+    // buttons take no flow space, so idle/paused render "Start/Continue, Reset, Stop" and running
+    // "Pause, Lap, Reset, Stop". The FlowLayoutPanel's own AutoSize shrinks to fit whichever set is
+    // visible, and re-centers via its TableLayoutPanel cell's Anchor=None below.
     buttonRow.Controls.Add(_primaryButton);
     buttonRow.Controls.Add(_pauseButton);
     buttonRow.Controls.Add(_lapButton);
-    buttonRow.Controls.Add(_stopButton);
     buttonRow.Controls.Add(_resetButton);
+    buttonRow.Controls.Add(_stopButton);
+    _buttonRow = buttonRow;
 
     // AGENTS.md §8.5/§10.3 — an interior TableLayoutPanel with Anchor=None cells is this repo's
     // centering idiom: a plain Controls collection never re-centers a child on its own, only a
@@ -220,6 +223,27 @@ public sealed class StopwatchControl : UserControl
   /// <summary>Gets or sets the mandatory Reset confirmation callback; defaults to cancellation.</summary>
   [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
   public Func<bool> ConfirmReset { get; set; } = () => false;
+
+  /// <summary>
+  /// Gets or sets the callback asked to confirm resuming a stopped record. It receives the record
+  /// and whether a live session (running or paused) would be discarded, and returns
+  /// <see langword="true"/> to proceed. Defaults to cancellation so an unwired control cannot
+  /// silently replace a session.
+  /// </summary>
+  [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+  public Func<StopwatchRecord, bool, bool> ConfirmResume { get; set; } = (_, _) => false;
+
+  /// <summary>
+  /// Gets the texts of the currently visible buttons in left-to-right flow order — Stop is always
+  /// last (AGENTS.md §8.5). Exposed for tests of the control-row order.
+  /// </summary>
+  internal IReadOnlyList<string> VisibleButtonTexts =>
+    [
+      .. _buttonRow
+        .Controls.OfType<Button>()
+        .Where(button => button.Visible)
+        .Select(button => button.Text),
+    ];
 
   /// <summary>
   /// Gets or sets whether the control renders its palette-driven surfaces in dark mode. Defaults
@@ -385,6 +409,52 @@ public sealed class StopwatchControl : UserControl
       }
 
       await Timer.ResetAsync();
+    }
+    finally
+    {
+      _endingSession = false;
+      UpdateDisplay();
+      StateChanged?.Invoke();
+    }
+  }
+
+  /// <summary>
+  /// Moves a recent stopped record back into the clock, paused at the time it was stopped. Always
+  /// asks <see cref="ConfirmResume"/> first; a running clock is paused while the question is open
+  /// and resumed if the user cancels. Confirming replaces any live session (the caller's
+  /// confirmation says so) — see <see cref="StopwatchTimer.ResumeRecordAsync"/>.
+  /// </summary>
+  /// <param name="record">The record, as shown in the main window's recent list.</param>
+  /// <returns><see langword="true"/> if the record is now the paused live session.</returns>
+  public async Task<bool> ResumeRecordAsync(StopwatchRecord record)
+  {
+    if (_endingSession)
+    {
+      return false;
+    }
+
+    _endingSession = true;
+    try
+    {
+      bool wasRunning = Timer.IsRunning;
+      if (wasRunning)
+      {
+        await Timer.PauseAsync();
+        UpdateDisplay();
+        StateChanged?.Invoke();
+      }
+
+      bool hasLiveSession = Timer.IsRunning || Timer.IsPaused;
+      if (!ConfirmResume(record, hasLiveSession))
+      {
+        if (wasRunning)
+        {
+          Timer.Start();
+        }
+        return false;
+      }
+
+      return await Timer.ResumeRecordAsync(record.Id);
     }
     finally
     {

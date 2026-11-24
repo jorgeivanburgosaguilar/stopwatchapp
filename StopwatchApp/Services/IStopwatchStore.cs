@@ -20,13 +20,28 @@ public interface IStopwatchStore
   /// <param name="endTimestamp">The session's end time, in epoch milliseconds (UTC).</param>
   /// <param name="elapsedMs">The session's elapsed time, in milliseconds. Floored to whole minutes internally before storing.</param>
   /// <param name="laps">The session's laps, in any order; each lap's own elapsed minutes are stored as already floored.</param>
+  /// <param name="lastLapElapsedMs">
+  /// The session's elapsed time at its last real lap press (before any final partial lap), stored so
+  /// a later resume can restore the lap clock exactly; <see langword="null"/> when unknown.
+  /// </param>
   /// <returns>The new row's id, or <c>0</c> if nothing was committed.</returns>
   Task<long> SaveRecordAsync(
     long startTimestamp,
     long endTimestamp,
     long elapsedMs,
-    IReadOnlyList<Lap> laps
+    IReadOnlyList<Lap> laps,
+    long? lastLapElapsedMs = null
   );
+
+  /// <summary>
+  /// Turns a persisted record back into the live session: in one atomic write it deletes the record
+  /// and its laps and saves <paramref name="snapshot"/> into the single paused-session slot, so
+  /// there is never an instant with neither a record nor a snapshot.
+  /// </summary>
+  /// <param name="recordId">The record to resume.</param>
+  /// <param name="snapshot">The session snapshot that replaces any existing one.</param>
+  /// <returns><see langword="true"/> if committed; <see langword="false"/> if nothing changed.</returns>
+  Task<bool> ResumeRecordAsync(long recordId, PausedSession snapshot);
 
   /// <summary>
   /// Loads every persisted record, newest first.

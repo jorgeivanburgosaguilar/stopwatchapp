@@ -333,6 +333,108 @@ public sealed class DatabaseTests : IAsyncLifetime
     await Assert.ThrowsAsync<NotSupportedException>(newer.InitializeAsync);
   }
 
+  [Fact]
+  public async Task SaveRecordAsync_StoresTheExactElapsedTimeAndLastLapMarker()
+  {
+    await _database.SaveRecordAsync(0, 200_000, 157_250, [new Lap(1, 0, 200_000, 2)], 100_000);
+
+    StopwatchRecord record = Assert.Single(await AllRecordsAsync());
+
+    Assert.Equal(2, record.ElapsedMinutes);
+    Assert.Equal(157_250, record.ElapsedMs);
+    Assert.Equal(100_000, record.LastLapElapsedMs);
+  }
+
+  [Fact]
+  public async Task InitializeAsync_UpgradingAVersionOneDatabase_KeepsLegacyRecordsWithNullExactColumns()
+  {
+    string legacyPath = Path.Combine(
+      Path.GetTempPath(),
+      $"stopwatch-tests-legacy-{Guid.NewGuid():N}.db"
+    );
+    try
+    {
+      await using (SqliteConnection connection = new($"Data Source={legacyPath}"))
+      {
+        await connection.OpenAsync();
+        await using SqliteCommand command = connection.CreateCommand();
+        command.CommandText =
+          SchemaMigrations.All[0].Sql
+          + "INSERT INTO records (startTimestamp, endTimestamp, elapsedMinutes) VALUES (5, 9, 42);"
+          + "PRAGMA user_version = 1;";
+        await command.ExecuteNonQueryAsync();
+      }
+
+      await using Database upgraded = new(legacyPath);
+      await upgraded.InitializeAsync();
+
+      IReadOnlyList<StopwatchRecord>? records = await upgraded.GetAllRecordsAsync();
+      StopwatchRecord legacy = Assert.Single(records ?? []);
+      Assert.Equal(42, legacy.ElapsedMinutes);
+      Assert.Null(legacy.ElapsedMs);
+      Assert.Null(legacy.LastLapElapsedMs);
+      Assert.Equal(2, SchemaMigrations.Current);
+    }
+    finally
+    {
+      SqliteConnection.ClearAllPools();
+      if (File.Exists(legacyPath))
+      {
+        File.Delete(legacyPath);
+      }
+    }
+  }
+
+  [Fact]
+  public async Task ResumeRecordAsync_RemovesTheRecordAndItsLapsAndSavesTheSnapshotTogether()
+  {
+    long keptId = await _database.SaveRecordAsync(0, 60_000, 60_000, [new Lap(1, 0, 60_000, 1)]);
+    long resumedId = await _database.SaveRecordAsync(1, 90_000, 90_000, [new Lap(1, 1, 90_000, 1)]);
+    PausedSession snapshot = new(90_000, 1, [new Lap(1, 1, 90_000, 1)], 90_000, 90_000, 90_000);
+
+    bool resumed = await _database.ResumeRecordAsync(resumedId, snapshot);
+
+    Assert.True(resumed);
+    StopwatchRecord remaining = Assert.Single(await AllRecordsAsync());
+    Assert.Equal(keptId, remaining.Id);
+    Assert.Empty(await LapsAsync(resumedId));
+    Assert.Single(await LapsAsync(keptId));
+    PausedSession? saved = await _database.LoadPausedSessionAsync();
+    Assert.Equal(snapshot.ElapsedTime, saved?.ElapsedTime);
+    Assert.Equal(snapshot.SessionStartTime, saved?.SessionStartTime);
+  }
+
+  [Fact]
+  public async Task ResumeRecordAsync_ForAnUnknownRecord_ReturnsFalseAndKeepsTheExistingSnapshot()
+  {
+    await _database.SaveRecordAsync(0, 60_000, 60_000, []);
+    PausedSession existing = new(1000, 0, [], 0, 0, 1000);
+    await _database.SavePausedSessionAsync(existing);
+
+    bool resumed = await _database.ResumeRecordAsync(999, new PausedSession(5, 5, [], 0, 0, 5));
+
+    Assert.False(resumed);
+    Assert.Single(await AllRecordsAsync());
+    PausedSession? saved = await _database.LoadPausedSessionAsync();
+    Assert.Equal(existing.ElapsedTime, saved?.ElapsedTime);
+  }
+
+  [Fact]
+  public async Task ResumeRecordAsync_WhenTheSnapshotWriteFails_RollsBackAndLeavesTheRecord()
+  {
+    long id = await _database.SaveRecordAsync(0, 60_000, 60_000, [new Lap(1, 0, 60_000, 1)]);
+    await ExecuteRawAsync(
+      "CREATE TRIGGER fail_snapshot BEFORE INSERT ON paused_session BEGIN SELECT RAISE(ABORT, 'x'); END;"
+    );
+
+    bool resumed = await _database.ResumeRecordAsync(id, new PausedSession(60_000, 0, [], 0, 0, 1));
+
+    Assert.False(resumed);
+    Assert.Single(await AllRecordsAsync());
+    Assert.Single(await LapsAsync(id));
+    Assert.Null(await _database.LoadPausedSessionAsync());
+  }
+
   private async Task<IReadOnlyList<StopwatchRecord>> AllRecordsAsync()
   {
     IReadOnlyList<StopwatchRecord>? records = await _database.GetAllRecordsAsync();

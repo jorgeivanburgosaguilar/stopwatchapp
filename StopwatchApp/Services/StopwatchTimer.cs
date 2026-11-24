@@ -9,6 +9,13 @@ namespace StopwatchApp.Services;
 /// </summary>
 public sealed class StopwatchTimer : IDisposable
 {
+  /// <summary>
+  /// How many of the newest records are shown in the main window and may be resumed
+  /// (<see cref="ResumeRecordAsync"/>). One constant so the preview and the resumable set can never
+  /// drift apart.
+  /// </summary>
+  public const int RecentRecordCount = 5;
+
   private readonly IStopwatchStore _store;
   private readonly TimeProvider _time;
   private readonly SemaphoreSlim _snapshotGate = new(1, 1);
@@ -211,6 +218,9 @@ public sealed class StopwatchTimer : IDisposable
     IsRunning = false;
     IsPaused = false;
     long endTimestamp = NowMs();
+    // The elapsed time at the last *real* lap press, captured before the final partial lap below
+    // moves it. Saved with the record so a later resume can drop that synthetic final lap.
+    long lastRealLapElapsed = _lastLapElapsed;
 
     if (_laps.Count > 0 && ElapsedMs > _lastLapElapsed)
     {
@@ -250,7 +260,7 @@ public sealed class StopwatchTimer : IDisposable
       }
       else if (
         await _store
-          .SaveRecordAsync(_sessionStartMs, endTimestamp, ElapsedMs, [.. _laps])
+          .SaveRecordAsync(_sessionStartMs, endTimestamp, ElapsedMs, [.. _laps], lastRealLapElapsed)
           .ConfigureAwait(false) == 0
       )
       {
@@ -296,6 +306,94 @@ public sealed class StopwatchTimer : IDisposable
     _lastLapTimestamp = 0;
     _nextAutosaveElapsedMs = 0;
     RestoredPausedAtMs = 0;
+  }
+
+  /// <summary>
+  /// Moves one of the <see cref="RecentRecordCount"/> newest records back into the live session,
+  /// paused at the exact time it was stopped (whole minutes for a record saved before exact times
+  /// were stored) with its laps restored, replacing whatever session exists. The record is removed
+  /// from <see cref="Records"/> — the next Stop saves the continued session as one new record — in
+  /// the same atomic write that saves the recovery snapshot. Never raises <see cref="OnStop"/> or
+  /// saves a record. On any failure nothing changes. See AGENTS.md §8.3.
+  /// </summary>
+  /// <param name="recordId">The id of a record in <see cref="Records"/>'s newest five.</param>
+  /// <returns><see langword="true"/> if the record is now the paused live session.</returns>
+  public async Task<bool> ResumeRecordAsync(long recordId)
+  {
+    StopwatchRecord? record = Records
+      .Take(RecentRecordCount)
+      .FirstOrDefault(candidate => candidate.Id == recordId);
+    if (record is null)
+    {
+      return false;
+    }
+
+    IReadOnlyList<Lap>? savedLaps = await _store.GetLapsAsync(recordId).ConfigureAwait(false);
+    if (savedLaps is null)
+    {
+      return false;
+    }
+
+    long elapsedMs = record.ElapsedMs ?? record.ElapsedMinutes * 60000;
+    List<Lap> laps = [.. savedLaps];
+    long lastLapElapsed = 0;
+    long lastLapTimestamp = 0;
+    if (laps.Count > 0)
+    {
+      if (record.LastLapElapsedMs is long lastRealLap && lastRealLap < elapsedMs)
+      {
+        // Stop appended a final partial lap that was never a real lap press: drop it so the lap
+        // clock and lap number continue exactly where the session was stopped.
+        Lap finalLap = laps[0];
+        laps.RemoveAt(0);
+        lastLapElapsed = lastRealLap;
+        lastLapTimestamp = finalLap.StartTimestamp;
+      }
+      else
+      {
+        // The last lap was a real press (or the exact lap marker is unknown, as for records saved
+        // before exact times were stored): the next split starts from the resume point.
+        lastLapElapsed = elapsedMs;
+        lastLapTimestamp = laps[0].EndTimestamp;
+      }
+    }
+
+    PausedSession snapshot = new(
+      elapsedMs,
+      record.StartTimestamp,
+      [.. laps],
+      lastLapElapsed,
+      lastLapTimestamp,
+      record.EndTimestamp
+    );
+
+    await _snapshotGate.WaitAsync().ConfigureAwait(false);
+    try
+    {
+      if (!await _store.ResumeRecordAsync(recordId, snapshot).ConfigureAwait(false))
+      {
+        return false;
+      }
+    }
+    finally
+    {
+      _snapshotGate.Release();
+    }
+
+    _laps.Clear();
+    _laps.AddRange(laps);
+    ElapsedMs = elapsedMs;
+    _startTime = 0;
+    _sessionStartMs = record.StartTimestamp;
+    _lastLapElapsed = lastLapElapsed;
+    _lastLapTimestamp = lastLapTimestamp;
+    _nextAutosaveElapsedMs = 0;
+    RestoredPausedAtMs = record.EndTimestamp;
+    IsRunning = false;
+    IsPaused = true;
+
+    await ReloadRecordsAsync().ConfigureAwait(false);
+    return true;
   }
 
   /// <summary>

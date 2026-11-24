@@ -102,7 +102,8 @@ public sealed class Database : IStopwatchStore, IAsyncDisposable
     long startTimestamp,
     long endTimestamp,
     long elapsedMs,
-    IReadOnlyList<Lap> laps
+    IReadOnlyList<Lap> laps,
+    long? lastLapElapsedMs = null
   )
   {
     try
@@ -115,14 +116,18 @@ public sealed class Database : IStopwatchStore, IAsyncDisposable
       await connection
         .ExecuteAsync(
           """
-          INSERT INTO records (startTimestamp, endTimestamp, elapsedMinutes)
-          VALUES (@startTimestamp, @endTimestamp, @elapsedMinutes);
+          INSERT INTO records
+            (startTimestamp, endTimestamp, elapsedMinutes, elapsedMs, lastLapElapsedMs)
+          VALUES
+            (@startTimestamp, @endTimestamp, @elapsedMinutes, @elapsedMs, @lastLapElapsedMs);
           """,
           new
           {
             startTimestamp,
             endTimestamp,
             elapsedMinutes = elapsedMs / 60000,
+            elapsedMs,
+            lastLapElapsedMs,
           },
           transaction: transaction
         )
@@ -173,6 +178,47 @@ public sealed class Database : IStopwatchStore, IAsyncDisposable
   }
 
   /// <inheritdoc />
+  public async Task<bool> ResumeRecordAsync(long recordId, PausedSession snapshot)
+  {
+    try
+    {
+      SqliteConnection connection = RequireConnection();
+      await using SqliteTransaction transaction = (SqliteTransaction)
+        await connection.BeginTransactionAsync().ConfigureAwait(false);
+
+      await connection
+        .ExecuteAsync(
+          "DELETE FROM record_laps WHERE recordId = @recordId;",
+          new { recordId },
+          transaction: transaction
+        )
+        .ConfigureAwait(false);
+      int deleted = await connection
+        .ExecuteAsync(
+          "DELETE FROM records WHERE id = @recordId;",
+          new { recordId },
+          transaction: transaction
+        )
+        .ConfigureAwait(false);
+      if (deleted != 1)
+      {
+        // Unknown record: nothing to resume. Disposing the uncommitted transaction rolls it back.
+        return false;
+      }
+
+      await UpsertPausedSessionAsync(connection, snapshot, transaction).ConfigureAwait(false);
+      await transaction.CommitAsync().ConfigureAwait(false);
+      return true;
+    }
+    catch (Exception)
+    {
+      // Deliberate per AGENTS.md §9: a failed write must never surface to the UI. The false return
+      // is how the caller learns nothing was committed (the record and old snapshot are intact).
+      return false;
+    }
+  }
+
+  /// <inheritdoc />
   public async Task<IReadOnlyList<StopwatchRecord>?> GetAllRecordsAsync()
   {
     try
@@ -187,7 +233,8 @@ public sealed class Database : IStopwatchStore, IAsyncDisposable
         .QueryAsync<RecordRow>(
           """
           SELECT r.id, r.startTimestamp, r.endTimestamp, r.elapsedMinutes,
-                 (SELECT COUNT(*) FROM record_laps WHERE recordId = r.id) AS lapCount
+                 (SELECT COUNT(*) FROM record_laps WHERE recordId = r.id) AS lapCount,
+                 r.elapsedMs, r.lastLapElapsedMs
           FROM records r
           ORDER BY r.id DESC;
           """
@@ -200,7 +247,9 @@ public sealed class Database : IStopwatchStore, IAsyncDisposable
           row.StartTimestamp,
           row.EndTimestamp,
           row.ElapsedMinutes,
-          row.LapCount
+          row.LapCount,
+          row.ElapsedMs,
+          row.LastLapElapsedMs
         )),
       ];
     }
@@ -294,39 +343,54 @@ public sealed class Database : IStopwatchStore, IAsyncDisposable
     try
     {
       SqliteConnection connection = RequireConnection();
-      string lapsJson = JsonSerializer.Serialize(session.Laps);
-
-      await connection
-        .ExecuteAsync(
-          """
-          INSERT INTO paused_session
-            (id, elapsedTime, sessionStartTime, lapsJson, lastLapElapsed, lastLapTimestamp, pausedAt)
-          VALUES
-            (1, @elapsedTime, @sessionStartTime, @lapsJson, @lastLapElapsed, @lastLapTimestamp, @pausedAt)
-          ON CONFLICT(id) DO UPDATE SET
-            elapsedTime = excluded.elapsedTime,
-            sessionStartTime = excluded.sessionStartTime,
-            lapsJson = excluded.lapsJson,
-            lastLapElapsed = excluded.lastLapElapsed,
-            lastLapTimestamp = excluded.lastLapTimestamp,
-            pausedAt = excluded.pausedAt;
-          """,
-          new
-          {
-            elapsedTime = session.ElapsedTime,
-            sessionStartTime = session.SessionStartTime,
-            lapsJson,
-            lastLapElapsed = session.LastLapElapsed,
-            lastLapTimestamp = session.LastLapTimestamp,
-            pausedAt = session.PausedAt,
-          }
-        )
-        .ConfigureAwait(false);
+      await UpsertPausedSessionAsync(connection, session, null).ConfigureAwait(false);
     }
     catch (Exception)
     {
       // Deliberate per AGENTS.md §9: a failed write must never surface to the UI.
     }
+  }
+
+  /// <summary>
+  /// Upserts the single paused-session slot, optionally inside <paramref name="transaction"/>.
+  /// Shared by <see cref="SavePausedSessionAsync"/> and <see cref="ResumeRecordAsync"/>; callers
+  /// own the swallow-everything policy.
+  /// </summary>
+  private static async Task UpsertPausedSessionAsync(
+    SqliteConnection connection,
+    PausedSession session,
+    SqliteTransaction? transaction
+  )
+  {
+    string lapsJson = JsonSerializer.Serialize(session.Laps);
+
+    await connection
+      .ExecuteAsync(
+        """
+        INSERT INTO paused_session
+          (id, elapsedTime, sessionStartTime, lapsJson, lastLapElapsed, lastLapTimestamp, pausedAt)
+        VALUES
+          (1, @elapsedTime, @sessionStartTime, @lapsJson, @lastLapElapsed, @lastLapTimestamp, @pausedAt)
+        ON CONFLICT(id) DO UPDATE SET
+          elapsedTime = excluded.elapsedTime,
+          sessionStartTime = excluded.sessionStartTime,
+          lapsJson = excluded.lapsJson,
+          lastLapElapsed = excluded.lastLapElapsed,
+          lastLapTimestamp = excluded.lastLapTimestamp,
+          pausedAt = excluded.pausedAt;
+        """,
+        new
+        {
+          elapsedTime = session.ElapsedTime,
+          sessionStartTime = session.SessionStartTime,
+          lapsJson,
+          lastLapElapsed = session.LastLapElapsed,
+          lastLapTimestamp = session.LastLapTimestamp,
+          pausedAt = session.PausedAt,
+        },
+        transaction: transaction
+      )
+      .ConfigureAwait(false);
   }
 
   /// <inheritdoc />
@@ -425,6 +489,10 @@ public sealed class Database : IStopwatchStore, IAsyncDisposable
     public long ElapsedMinutes { get; set; }
 
     public long LapCount { get; set; }
+
+    public long? ElapsedMs { get; set; }
+
+    public long? LastLapElapsedMs { get; set; }
   }
 
   /// <summary>

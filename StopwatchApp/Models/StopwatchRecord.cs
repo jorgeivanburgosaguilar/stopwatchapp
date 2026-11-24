@@ -11,10 +11,21 @@ namespace StopwatchApp.Models;
 /// The number of laps saved alongside this record. Lets the UI decide whether a record has a
 /// detail to expand without a separate query per row.
 /// </param>
+/// <param name="ElapsedMs">
+/// The session's exact elapsed time in milliseconds, or <see langword="null"/> for a record saved
+/// before exact times were stored (it can then only be resumed at minute precision).
+/// </param>
+/// <param name="LastLapElapsedMs">
+/// The session's elapsed time at its last real lap press, before Stop appended its final partial
+/// lap, or <see langword="null"/> when unknown. Lets Resume drop that synthetic final lap and keep
+/// the lap clock exact.
+/// </param>
 public sealed record StopwatchRecord(
   long Id,
   long StartTimestamp,
   long EndTimestamp,
   long ElapsedMinutes,
-  long LapCount = 0
+  long LapCount = 0,
+  long? ElapsedMs = null,
+  long? LastLapElapsedMs = null
 );

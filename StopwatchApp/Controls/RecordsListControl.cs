@@ -1,6 +1,7 @@
 ﻿using System.Drawing.Drawing2D;
 using StopwatchApp.Formatting;
 using StopwatchApp.Models;
+using StopwatchApp.Services;
 using StopwatchApp.Theme;
 
 namespace StopwatchApp.Controls;
@@ -9,9 +10,9 @@ namespace StopwatchApp.Controls;
 /// Renders the laps panel (shown only while there is at least one lap) and the records panel
 /// (always shown, with a "No records yet" empty state), per AGENTS.md §8.5. Data is pushed in via
 /// <see cref="UpdateRecords"/>/<see cref="UpdateLaps"/> — this control never reads
-/// <c>IStopwatchStore</c> itself; it only raises <see cref="ClearAllRequested"/> or
-/// <see cref="ManageRecordsRequested"/> and
-/// lets its owner (<c>MainForm</c>, AGENTS.md §3) perform the actual clear.
+/// <c>IStopwatchStore</c> itself; it only raises <see cref="ManageRecordsRequested"/> or
+/// <see cref="ResumeRequested"/> and lets its owner (<c>MainForm</c>, AGENTS.md §3) perform the
+/// actual action.
 /// </summary>
 public sealed class RecordsListControl : UserControl
 {
@@ -19,14 +20,24 @@ public sealed class RecordsListControl : UserControl
   // a future history/records-manager window (out of scope for now) will offer the full list with
   // edit/delete. Bounding the display count is also what lets this control's height be a small,
   // fixed constant instead of stretching to fill whatever space MainForm's fixed window has left.
-  private const int MaxDisplayedRecords = 5;
+  private const int MaxDisplayedRecords = StopwatchTimer.RecentRecordCount;
 
+  /// <summary>The Resume pill's label.</summary>
+  internal const string ResumeLabel = "↻ Resume";
+
+  private const TextFormatFlags PillTextFlags =
+    TextFormatFlags.NoPadding
+    | TextFormatFlags.SingleLine
+    | TextFormatFlags.HorizontalCenter
+    | TextFormatFlags.VerticalCenter;
+
+  private readonly List<StopwatchRecord> _shownRecords = [];
   private readonly Label _lapsHeader;
   private readonly ListBox _lapsListBox;
   private readonly ListBox _recordsListBox;
   private readonly Label _emptyStateLabel;
-  private readonly Button _clearAllButton;
   private readonly Button _manageRecordsButton;
+  private int _hoveredPillIndex = -1;
   private readonly Panel _recordsHost;
   private readonly Font _rowFont;
   private readonly RowIconSet _rowIcons = new();
@@ -102,7 +113,10 @@ public sealed class RecordsListControl : UserControl
       BorderStyle = BorderStyle.None,
       Font = _rowFont,
     };
-    ConfigureRowRendering(_recordsListBox);
+    ConfigureRowRendering(_recordsListBox, withResumePill: true);
+    _recordsListBox.MouseClick += OnRecordsMouseClick;
+    _recordsListBox.MouseMove += OnRecordsMouseMove;
+    _recordsListBox.MouseLeave += (_, _) => SetHoveredPill(-1);
     _emptyStateLabel = new Label
     {
       Text = "No records yet",
@@ -111,52 +125,30 @@ public sealed class RecordsListControl : UserControl
       Visible = false,
     };
 
-    // AGENTS.md §8.5 — both header-row buttons use the shared ButtonFactory, so they carry the
-    // same stock, palette-colored appearance as the stopwatch card's transport buttons. Order
-    // left-to-right is Manage Records then Clear All Records, both right-aligned beside the
-    // "Records" label per the owner's markup.
+    // AGENTS.md §8.5 — the header's one action button uses the shared ButtonFactory, so it carries
+    // the same stock, palette-colored appearance as the stopwatch card's transport buttons. Clear
+    // All Records lives only in the Manage Records window, so the "Records" title sits left-aligned
+    // on the same line as Manage Records, right-aligned.
     _manageRecordsButton = ButtonFactory.Create("Manage Records", Palette.LapButton);
-    _manageRecordsButton.Margin = new Padding(0, 0, Palette.SpacingSm, 0);
+    _manageRecordsButton.Margin = new Padding(0);
+    _manageRecordsButton.Anchor = AnchorStyles.Right;
     _manageRecordsButton.Click += (_, _) => ManageRecordsRequested?.Invoke();
 
-    _clearAllButton = ButtonFactory.Create("Clear All Records", Palette.StopButton);
-    _clearAllButton.Margin = new Padding(0);
-    _clearAllButton.Visible = false;
-    _clearAllButton.Click += (_, _) => ClearAllRequested?.Invoke();
-
-    FlowLayoutPanel headerButtonsRow = new()
-    {
-      FlowDirection = FlowDirection.LeftToRight,
-      AutoSize = true,
-      AutoSizeMode = AutoSizeMode.GrowAndShrink,
-      Anchor = AnchorStyles.Right,
-      // Both buttons must always render on one line, never wrap: WrapContents defaults to true,
-      // which can wrap to a second line during preferred-size measurement
-      // during an AutoSize preferred-size query even though the real fixed window is comfortably
-      // wide enough for both, silently inflating the computed height by a whole button row.
-      WrapContents = false,
-    };
-    headerButtonsRow.Controls.Add(_manageRecordsButton);
-    headerButtonsRow.Controls.Add(_clearAllButton);
-
-    // Keep the actions in their own line below the title. Besides creating a clearer title/action
-    // rhythm, this lets the main window fit its rows instead of permanently reserving the combined
-    // width of the title and both action labels.
     TableLayoutPanel headerRow = new()
     {
       Dock = DockStyle.Top,
       AutoSize = true,
       AutoSizeMode = AutoSizeMode.GrowAndShrink,
-      ColumnCount = 1,
-      RowCount = 2,
+      ColumnCount = 2,
+      RowCount = 1,
       Margin = new Padding(0, 0, 0, Palette.SpacingSm),
     };
     headerRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+    headerRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
     headerRow.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-    headerRow.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-    recordsLabel.Margin = new Padding(0, 0, 0, Palette.SpacingXs);
+    recordsLabel.Margin = new Padding(0);
     headerRow.Controls.Add(recordsLabel, 0, 0);
-    headerRow.Controls.Add(headerButtonsRow, 0, 1);
+    headerRow.Controls.Add(_manageRecordsButton, 1, 0);
 
     // AGENTS.md §8.5/§10.3 — Dock.Top with an explicit Height (not Dock.Fill inside a Percent(100)
     // row) so this host's height is a small, known constant instead of stretching to fill whatever's
@@ -187,8 +179,8 @@ public sealed class RecordsListControl : UserControl
     layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
     layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
     layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-    // Rows, top to bottom: laps header, laps list, header row (Records label + Manage Records/Clear
-    // All Records buttons), records host.
+    // Rows, top to bottom: laps header, laps list, header row (Records label + Manage Records
+    // button), records host.
     layout.Controls.Add(_lapsHeader, 0, 0);
     layout.Controls.Add(_lapsListBox, 0, 1);
     layout.Controls.Add(headerRow, 0, 2);
@@ -201,11 +193,14 @@ public sealed class RecordsListControl : UserControl
     ApplyTheme();
   }
 
-  /// <summary>Fires when the user clicks the "Clear All Records" button.</summary>
-  public event Action? ClearAllRequested;
-
   /// <summary>Fires when the user clicks the "Manage Records" button.</summary>
   public event Action? ManageRecordsRequested;
+
+  /// <summary>
+  /// Fires when the user clicks the Resume pill on one of the shown records. The owner decides
+  /// whether to proceed (AGENTS.md §8.3) — this control only reports the request.
+  /// </summary>
+  public event Action<StopwatchRecord>? ResumeRequested;
 
   /// <summary>
   /// Gets or sets whether dark-theme colors should be used for the surfaces
@@ -233,10 +228,9 @@ public sealed class RecordsListControl : UserControl
 
   /// <summary>
   /// Replaces the displayed records, expected newest first (per <c>IStopwatchStore.GetAllRecordsAsync</c>).
-  /// Toggles the empty state and the "Clear All Records" button's visibility. Only the most recent
-  /// <see cref="MaxDisplayedRecords"/> are actually listed (AGENTS.md §8.5); the records manager
-  /// offers the full list. "Clear All Records" still clears
-  /// every persisted record, not just the ones shown here. The records host's height is recomputed
+  /// Toggles the empty state. Only the most recent <see cref="MaxDisplayedRecords"/> are actually
+  /// listed (AGENTS.md §8.5), each with a Resume pill; the records manager offers the full list. The
+  /// records host's height is recomputed
   /// to fit exactly the rows now shown (AGENTS.md §8.5/§10.3) — 1 row's worth for the empty state, or
   /// the true (possibly word-wrapped) height of however many of the capped records are displayed —
   /// instead of a fixed height sized for the worst case.
@@ -244,9 +238,13 @@ public sealed class RecordsListControl : UserControl
   /// <param name="records">The records to display.</param>
   public void UpdateRecords(IReadOnlyList<StopwatchRecord> records)
   {
+    _shownRecords.Clear();
+    _shownRecords.AddRange(records.Take(MaxDisplayedRecords));
+    _hoveredPillIndex = -1;
+
     _recordsListBox.BeginUpdate();
     _recordsListBox.Items.Clear();
-    foreach (StopwatchRecord record in records.Take(MaxDisplayedRecords))
+    foreach (StopwatchRecord record in _shownRecords)
     {
       _recordsListBox.Items.Add(FormatRecordRow(record));
     }
@@ -255,7 +253,6 @@ public sealed class RecordsListControl : UserControl
     bool hasRecords = records.Count > 0;
     _recordsListBox.Visible = hasRecords;
     _emptyStateLabel.Visible = !hasRecords;
-    _clearAllButton.Visible = hasRecords;
 
     int shownCount = Math.Min(records.Count, MaxDisplayedRecords);
     _recordsHost.Height = hasRecords
@@ -383,18 +380,24 @@ public sealed class RecordsListControl : UserControl
   /// would clash with the custom paint.
   /// </summary>
   /// <param name="listBox">The list box to configure.</param>
-  private void ConfigureRowRendering(ListBox listBox)
+  /// <param name="withResumePill">
+  /// Whether rows reserve room for, and draw, the Resume pill at their right edge (records only).
+  /// </param>
+  private void ConfigureRowRendering(ListBox listBox, bool withResumePill = false)
   {
     listBox.SelectionMode = SelectionMode.None;
     listBox.DrawMode = DrawMode.OwnerDrawVariable;
     listBox.MeasureItem += (_, e) =>
     {
       float scale = listBox.DeviceDpi / 96f;
+      // A record row's text wraps before the Resume pill that is drawn at its right edge.
+      int pillReserve = withResumePill ? ResumePillReserve(listBox.Font, scale) : 0;
       int availableWidth = Math.Max(
         1,
         listBox.ClientSize.Width
           - Scaled(Palette.SpacingSm * 2, scale)
           - SystemInformation.VerticalScrollBarWidth
+          - pillReserve
       );
       e.ItemHeight = MeasureRowHeight(
         listBox.Items[e.Index]?.ToString() ?? string.Empty,
@@ -403,7 +406,102 @@ public sealed class RecordsListControl : UserControl
         scale
       );
     };
-    listBox.DrawItem += (_, e) => DrawRow(listBox, e);
+    listBox.DrawItem += (_, e) => DrawRow(listBox, e, withResumePill);
+  }
+
+  /// <summary>
+  /// The width of the Resume pill: its label plus horizontal padding. <paramref name="font"/> is the
+  /// row font as already scaled for the device, so only the padding needs <paramref name="scale"/>.
+  /// </summary>
+  /// <param name="font">The row font.</param>
+  /// <param name="scale">The device-DPI scale (<c>DeviceDpi / 96</c>).</param>
+  internal static int ResumePillWidth(Font font, float scale) =>
+    TextRenderer
+      .MeasureText(
+        ResumeLabel,
+        font,
+        Size.Empty,
+        TextFormatFlags.NoPadding | TextFormatFlags.SingleLine
+      )
+      .Width + Scaled(Palette.SpacingMd * 2, scale);
+
+  /// <summary>
+  /// The horizontal space a record row gives up to its Resume pill: the pill plus the gap between
+  /// it and the row text. Shared by measuring, drawing, and <c>MainForm</c>'s width budget so the
+  /// three can never disagree.
+  /// </summary>
+  /// <param name="font">The row font.</param>
+  /// <param name="scale">The device-DPI scale (<c>DeviceDpi / 96</c>).</param>
+  internal static int ResumePillReserve(Font font, float scale) =>
+    ResumePillWidth(font, scale) + Scaled(Palette.SpacingSm, scale);
+
+  /// <summary>
+  /// The Resume pill's rectangle inside a row card: right-aligned (inset by the row's text inset)
+  /// and vertically centered. Used for drawing and for hit-testing clicks.
+  /// </summary>
+  /// <param name="rowBounds">The row card's bounds.</param>
+  /// <param name="font">The row font.</param>
+  /// <param name="scale">The device-DPI scale (<c>DeviceDpi / 96</c>).</param>
+  internal static Rectangle ResumePillBounds(Rectangle rowBounds, Font font, float scale)
+  {
+    int width = ResumePillWidth(font, scale);
+    int height = Math.Min(rowBounds.Height, font.Height + Scaled(Palette.SpacingXs * 2, scale));
+    int inset = Scaled(Palette.SpacingSm, scale);
+    return new Rectangle(
+      rowBounds.Right - inset - width,
+      rowBounds.Top + ((rowBounds.Height - height) / 2),
+      width,
+      height
+    );
+  }
+
+  /// <summary>The row card's rectangle inside its list item bounds (the gap between cards).</summary>
+  private static Rectangle RowCardBounds(Rectangle itemBounds, float scale) =>
+    Rectangle.Inflate(itemBounds, 0, -(Scaled(Palette.SpacingXs, scale) / 2));
+
+  /// <summary>
+  /// Finds the shown record whose Resume pill is under <paramref name="point"/>, or -1.
+  /// </summary>
+  private int PillIndexAt(Point point)
+  {
+    int index = _recordsListBox.IndexFromPoint(point);
+    if (index < 0 || index >= _shownRecords.Count)
+    {
+      return -1;
+    }
+
+    float scale = _recordsListBox.DeviceDpi / 96f;
+    Rectangle card = RowCardBounds(_recordsListBox.GetItemRectangle(index), scale);
+    return ResumePillBounds(card, _recordsListBox.Font, scale).Contains(point) ? index : -1;
+  }
+
+  private void OnRecordsMouseClick(object? sender, MouseEventArgs e)
+  {
+    if (e.Button != MouseButtons.Left)
+    {
+      return;
+    }
+
+    int index = PillIndexAt(e.Location);
+    if (index >= 0)
+    {
+      ResumeRequested?.Invoke(_shownRecords[index]);
+    }
+  }
+
+  private void OnRecordsMouseMove(object? sender, MouseEventArgs e) =>
+    SetHoveredPill(PillIndexAt(e.Location));
+
+  private void SetHoveredPill(int index)
+  {
+    if (_hoveredPillIndex == index)
+    {
+      return;
+    }
+
+    _hoveredPillIndex = index;
+    _recordsListBox.Cursor = index >= 0 ? Cursors.Hand : Cursors.Default;
+    _recordsListBox.Invalidate();
   }
 
   /// <summary>
@@ -439,7 +537,7 @@ public sealed class RecordsListControl : UserControl
   private static int Scaled(int designPixels, float scale) =>
     (int)Math.Ceiling(designPixels * scale);
 
-  private void DrawRow(ListBox listBox, DrawItemEventArgs e)
+  private void DrawRow(ListBox listBox, DrawItemEventArgs e, bool withResumePill)
   {
     if (e.Index < 0)
     {
@@ -457,7 +555,7 @@ public sealed class RecordsListControl : UserControl
 
     // The same scale MeasureRowHeight used, so a row is painted at the height it was measured for.
     float scale = listBox.DeviceDpi / 96f;
-    Rectangle rowBounds = Rectangle.Inflate(e.Bounds, 0, -(Scaled(Palette.SpacingXs, scale) / 2));
+    Rectangle rowBounds = RowCardBounds(e.Bounds, scale);
     using GraphicsPath path = RoundedRectangle.Path(
       rowBounds,
       Scaled(Palette.ControlCornerRadius, scale)
@@ -472,6 +570,11 @@ public sealed class RecordsListControl : UserControl
     }
 
     Rectangle textBounds = Rectangle.Inflate(rowBounds, -Scaled(Palette.SpacingSm, scale), 0);
+    if (withResumePill)
+    {
+      // Text wraps before the pill, exactly as MeasureItem budgeted for it.
+      textBounds.Width = Math.Max(1, textBounds.Width - ResumePillReserve(listBox.Font, scale));
+    }
     // AGENTS.md §8.5 — IconTextLayout word-wraps, not ellipsizes: a row past the window's sized-for
     // worst case (a session over 24h, a 4-digit lap id) wraps to a second line. It is the same
     // engine MeasureRowHeight above uses, so a wrapped row is never sized one way and painted
@@ -484,5 +587,28 @@ public sealed class RecordsListControl : UserControl
       Palette.Text(_dark),
       _rowIcons
     );
+
+    if (withResumePill)
+    {
+      DrawResumePill(e, listBox, rowBounds, scale);
+    }
+  }
+
+  private void DrawResumePill(
+    DrawItemEventArgs e,
+    ListBox listBox,
+    Rectangle rowBounds,
+    float scale
+  )
+  {
+    Rectangle pill = ResumePillBounds(rowBounds, listBox.Font, scale);
+    (Color baseColor, Color hoverColor, _) = Palette.StartButton;
+    using GraphicsPath pillPath = RoundedRectangle.Path(
+      pill,
+      Scaled(Palette.ControlCornerRadius, scale)
+    );
+    using SolidBrush pillBrush = new(e.Index == _hoveredPillIndex ? hoverColor : baseColor);
+    e.Graphics.FillPath(pillBrush, pillPath);
+    TextRenderer.DrawText(e.Graphics, ResumeLabel, listBox.Font, pill, Color.White, PillTextFlags);
   }
 }

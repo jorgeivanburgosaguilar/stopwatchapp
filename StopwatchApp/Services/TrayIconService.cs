@@ -287,20 +287,20 @@ public sealed partial class TrayIconService : IDisposable
       [
         CreateMenuItem("Pause", TrayMenuAction.Pause, () => _control.PauseTimerAsync()),
         CreateMenuItem("Lap", TrayMenuAction.Lap, _control.AddLap),
-        CreateMenuItem("Stop", TrayMenuAction.Stop, () => _control.StopTimerAsync()),
         CreateMenuItem("Reset", TrayMenuAction.Reset, () => _control.ResetTimerAsync()),
+        CreateMenuItem("Stop", TrayMenuAction.Stop, () => _control.StopTimerAsync()),
       ],
       TrayState.Paused =>
       [
         CreateMenuItem("Continue", TrayMenuAction.Continue, _control.StartTimer),
-        CreateMenuItem("Stop", TrayMenuAction.Stop, () => _control.StopTimerAsync()),
         CreateMenuItem("Reset", TrayMenuAction.Reset, () => _control.ResetTimerAsync()),
+        CreateMenuItem("Stop", TrayMenuAction.Stop, () => _control.StopTimerAsync()),
       ],
       _ =>
       [
         CreateMenuItem("Start", TrayMenuAction.Start, _control.StartTimer),
-        CreateMenuItem("Stop", TrayMenuAction.Stop, () => _control.StopTimerAsync()),
         CreateMenuItem("Reset", TrayMenuAction.Reset, () => _control.ResetTimerAsync()),
+        CreateMenuItem("Stop", TrayMenuAction.Stop, () => _control.StopTimerAsync()),
       ],
     };
 

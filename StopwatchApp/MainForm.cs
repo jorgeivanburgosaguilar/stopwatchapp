@@ -49,6 +49,7 @@ public sealed class MainForm : Form
   private const int DesignCardPadding = Palette.SpacingLg * 2;
   private const int DesignCellMargin = 6; // WinForms' default Control.Margin is 3px/side
   private const int DesignRootPadding = Palette.SpacingMd * 2;
+  private const int DesignResumeSlackTrim = 20; // measured empty gap beside the Resume pill
 
   private readonly Database _database;
   private readonly StopwatchControl _stopwatchControl;
@@ -59,6 +60,7 @@ public sealed class MainForm : Form
   private readonly Icon _appIcon;
   private readonly int _activateMessage;
   private ManageRecordsForm? _manageRecordsForm;
+  private bool _resumeConfirmed;
 
   // AGENTS.md §17 performance note — ResizeForElapsedTime runs on every running-second tick.
   // TimeFormat.FormatTime's digit count only changes at an hours-digit boundary (e.g. 9:59:59 ->
@@ -112,6 +114,7 @@ public sealed class MainForm : Form
     };
     _stopwatchControl.ConfirmStop = ConfirmStop;
     _stopwatchControl.ConfirmReset = ConfirmReset;
+    _stopwatchControl.ConfirmResume = ConfirmResume;
     _recordsListControl = new RecordsListControl();
     _trayIconService = new TrayIconService(_stopwatchControl, RestoreWindow, ExitApplication);
     _activateMessage = (int)Program.RegisterWindowMessage(Program.ActivateMessageName);
@@ -150,8 +153,8 @@ public sealed class MainForm : Form
     _stopwatchControl.StateChanged += RefreshTray;
     _stopwatchControl.Tick += RefreshTray;
     _stopwatchControl.Tick += ResizeForElapsedTime;
-    _recordsListControl.ClearAllRequested += ClearRecordsAsync;
     _recordsListControl.ManageRecordsRequested += OpenManageRecords;
+    _recordsListControl.ResumeRequested += ResumeRecordAsync;
     Load += InitializeAsync;
 
     // AGENTS.md §10.3/§10.6 — size from the actual idle, empty-records control tree; ResizeToContent
@@ -390,14 +393,26 @@ public sealed class MainForm : Form
       _stopwatchControl.Timer.Laps,
       _stopwatchControl.Timer.ElapsedMs
     );
-    int compactWidth = (int)Math.Ceiling(CompactClientWidth * (deviceDpi / 96f));
-    return Math.Min(contentWidth, compactWidth);
+    float scale = deviceDpi / 96f;
+    using Font scaledMonoFont = new(
+      monoProbeFont.FontFamily,
+      monoProbeFont.Size * scale,
+      monoProbeFont.Style
+    );
+    // The compact cap budgets the row text; the Resume pill each record row reserves at its right
+    // edge comes on top of it, or the cap would squeeze the text and wrap it needlessly.
+    int compactWidth =
+      (int)Math.Ceiling(CompactClientWidth * scale)
+      + RecordsListControl.ResumePillReserve(scaledMonoFont, scale);
+    // Trim the slack the owner measured to the right of the Resume pill (about 20 design pixels).
+    int slack = (int)Math.Ceiling(DesignResumeSlackTrim * scale);
+    return Math.Min(contentWidth, compactWidth) - slack;
   }
 
   /// <summary>
   /// Computes the minimum client width for three independent needs, at <paramref name="deviceDpi"/>,
-  /// and returns whichever is larger: the widest currently visible row, the stacked records action
-  /// row, or the elapsed display. Rows beyond this current-content width word-wrap rather than
+  /// and returns whichever is larger: the widest currently visible row, the records header
+  /// line, or the elapsed display. Rows beyond this current-content width word-wrap rather than
   /// permanently reserving unused space. A <see cref="Font"/>'s point size is
   /// otherwise measured against a fixed 96dpi baseline regardless of the caller's actual DPI context
   /// (AGENTS.md §7/§10.3) — the mismatch that makes record rows clip above 100%
@@ -428,10 +443,14 @@ public sealed class MainForm : Form
       monoBodyFont.Size * scale,
       monoBodyFont.Style
     );
+    // A record row also reserves room for its Resume pill (RecordsListControl.ResumePillReserve),
+    // so a worst-case 24 h row still fits on one line.
+    int pillReserve = RecordsListControl.ResumePillReserve(scaledMonoFont, scale);
     int recordRowWidth = records
-      .Take(5)
+      .Take(StopwatchTimer.RecentRecordCount)
       .Select(record =>
         MeasureIconRowWidth(RecordsListControl.FormatRecordRow(record), scaledMonoFont)
+        + pillReserve
       )
       .DefaultIfEmpty(0)
       .Max();
@@ -489,7 +508,8 @@ public sealed class MainForm : Form
       .Width;
 
   /// <summary>
-  /// Computes the minimum client width for the stacked records action row at <paramref name="scale"/>.
+  /// Computes the minimum client width for the records header line (title plus Manage Records) at
+  /// <paramref name="scale"/>.
   /// </summary>
   private static int HeaderActionsWidth(float scale)
   {
@@ -513,11 +533,9 @@ public sealed class MainForm : Form
     // Padding.Right; its Padding.Left/Right are both Palette.SpacingMd (ButtonFactory.Create).
     int buttonPadding = (int)Math.Ceiling(Palette.SpacingMd * 2 * scale);
     int manageButtonWidth = buttonPadding + TextWidth("Manage Records");
-    int clearButtonWidth = buttonPadding + TextWidth("Clear All Records");
-    // The gap between the two buttons in their FlowLayoutPanel is Manage Records' own right
-    // Margin, Palette.SpacingSm (RecordsListControl's header row construction).
-    int interButtonGap = (int)Math.Ceiling(Palette.SpacingSm * scale);
-    int headerRowContentWidth = manageButtonWidth + interButtonGap + clearButtonWidth;
+    // The "Records" title shares this line with the button (RecordsListControl's header row).
+    int titleWidth = TextWidth("Records") + (int)Math.Ceiling(Palette.SpacingSm * scale);
+    int headerRowContentWidth = titleWidth + manageButtonWidth;
 
     // Same card/cell/root chrome as the mono row's budget, minus the row-specific text inset and
     // scrollbar width — this row isn't drawn by RecordsListControl.DrawRow and never scrolls.
@@ -726,14 +744,35 @@ public sealed class MainForm : Form
     return ResetConfirmationDialog.ShowConfirm(this) == DialogResult.Yes;
   }
 
-  private async void ClearRecordsAsync()
+  private bool ConfirmResume(StopwatchRecord record, bool hasLiveSession)
   {
-    if (ClearRecordsDialog.ShowConfirm(this) != DialogResult.Yes)
+    if (!Visible)
     {
-      return;
+      RestoreWindow();
     }
 
-    await _stopwatchControl.Timer.ClearRecordsAsync();
+    // The live session's elapsed time is only worth naming when it would actually be discarded.
+    long? liveElapsedMs = hasLiveSession ? _stopwatchControl.Timer.ElapsedMs : null;
+    _resumeConfirmed =
+      ResumeRecordDialog.ShowConfirm(this, record, liveElapsedMs) == DialogResult.Yes;
+    return _resumeConfirmed;
+  }
+
+  private async void ResumeRecordAsync(StopwatchRecord record)
+  {
+    _resumeConfirmed = false;
+    bool resumed = await _stopwatchControl.ResumeRecordAsync(record);
+    // Only a confirmed-but-failed resume deserves a message; cancelling is not an error.
+    if (_resumeConfirmed && !resumed)
+    {
+      MessageBox.Show(
+        this,
+        "Could not resume this record. It was left in Records unchanged.",
+        "Stopwatch",
+        MessageBoxButtons.OK,
+        MessageBoxIcon.Warning
+      );
+    }
   }
 
   private void OpenManageRecords()

@@ -52,7 +52,7 @@ public sealed class StopwatchResetControlTests
       Assert.Empty(await store.GetAllRecordsAsync());
       Assert.Null(await store.LoadPausedSessionAsync());
       Assert.Equal("00:00:00", Descendants(control).OfType<Label>().First().Text);
-      string[] expectedButtons = ["Start", "Stop", "Reset"];
+      string[] expectedButtons = ["Start", "Reset", "Stop"];
       Assert.Equal(
         expectedButtons,
         Descendants(control)
@@ -182,7 +182,7 @@ public sealed class StopwatchResetControlTests
     });
 
   [Fact]
-  public Task Reset_ButtonFollowsStopAndUsesOrangeInBothThemes() =>
+  public Task Reset_ButtonPrecedesStopAndUsesOrangeInBothThemes() =>
     RunOnStaAsync(() =>
     {
       using StopwatchControl control = new(new FakeStopwatchStore(), new FakeTimeProvider(), 5, 0);
@@ -192,7 +192,7 @@ public sealed class StopwatchResetControlTests
         control.DarkMode = dark;
         Button[] buttons = Descendants(control).OfType<Button>().ToArray();
         Button reset = Assert.Single(buttons, button => button.Text == "Reset");
-        Assert.Equal("Stop", buttons[Array.IndexOf(buttons, reset) - 1].Text);
+        Assert.Equal("Stop", buttons[Array.IndexOf(buttons, reset) + 1].Text);
         Assert.Equal(Color.FromArgb(0xC2, 0x41, 0x0C).ToArgb(), reset.BackColor.ToArgb());
         Assert.Equal(Color.White.ToArgb(), reset.ForeColor.ToArgb());
         Assert.Equal(
