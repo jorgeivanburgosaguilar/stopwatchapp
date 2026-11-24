@@ -10,7 +10,15 @@ namespace StopwatchApp.Services;
 /// <param name="StopConfirmationAfterMinutes">
 /// The elapsed minutes after which Stop asks for confirmation; <c>0</c> disables the confirmation.
 /// </param>
-public sealed record AppSettings(int AutosaveIntervalMinutes, int StopConfirmationAfterMinutes)
+/// <param name="PauseWhenAway">
+/// Whether a running session pauses itself when the workstation locks, the screen saver starts, or
+/// the display turns off.
+/// </param>
+public sealed record AppSettings(
+  int AutosaveIntervalMinutes,
+  int StopConfirmationAfterMinutes,
+  bool PauseWhenAway
+)
 {
   private static readonly JsonSerializerOptions SerializerOptions = new()
   {
@@ -23,12 +31,15 @@ public sealed record AppSettings(int AutosaveIntervalMinutes, int StopConfirmati
   /// <summary>The fallback Stop-confirmation threshold used when configuration is absent or invalid.</summary>
   public const int DefaultStopConfirmationAfterMinutes = 5;
 
+  /// <summary>The fallback for <see cref="PauseWhenAway"/> when configuration is absent or invalid.</summary>
+  public const bool DefaultPauseWhenAway = true;
+
   /// <summary>Gets the settings file name expected beside the application executable.</summary>
   public const string FileName = "settings.json";
 
   /// <summary>Gets the settings used when the file is missing, unreadable, or malformed.</summary>
   public static AppSettings Defaults { get; } =
-    new(DefaultAutosaveIntervalMinutes, DefaultStopConfirmationAfterMinutes);
+    new(DefaultAutosaveIntervalMinutes, DefaultStopConfirmationAfterMinutes, DefaultPauseWhenAway);
 
   /// <summary>
   /// Loads settings from the file beside the application executable, with the same fallbacks as
@@ -63,7 +74,7 @@ public sealed record AppSettings(int AutosaveIntervalMinutes, int StopConfirmati
       int stopConfirmation = raw.StopConfirmationAfterMinutes is { } minutes
         ? Math.Max(0, minutes)
         : DefaultStopConfirmationAfterMinutes;
-      return new AppSettings(autosave, stopConfirmation);
+      return new AppSettings(autosave, stopConfirmation, raw.PauseWhenAway ?? DefaultPauseWhenAway);
     }
     catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
     {
@@ -74,6 +85,7 @@ public sealed record AppSettings(int AutosaveIntervalMinutes, int StopConfirmati
   // Nullable mirror of the record so a missing key is distinguishable from an explicit 0.
   private sealed record RawSettings(
     int? AutosaveIntervalMinutes,
-    int? StopConfirmationAfterMinutes
+    int? StopConfirmationAfterMinutes,
+    bool? PauseWhenAway
   );
 }

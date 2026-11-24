@@ -1,4 +1,5 @@
 {
   "AutosaveIntervalMinutes": 5,
-  "StopConfirmationAfterMinutes": 5
+  "StopConfirmationAfterMinutes": 5,
+  "PauseWhenAway": true
 }

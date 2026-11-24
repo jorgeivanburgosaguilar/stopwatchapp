@@ -113,6 +113,48 @@ public sealed class AppSettingsTests
     }
   }
 
+  [Theory]
+  [InlineData("{ \"PauseWhenAway\": false }", false)]
+  [InlineData("{ \"PauseWhenAway\": true }", true)]
+  [InlineData("{ }", AppSettings.DefaultPauseWhenAway)]
+  [InlineData("not json", AppSettings.DefaultPauseWhenAway)]
+  public void Load_PauseWhenAway_UsesValueOrDefault(string json, bool expected)
+  {
+    string path = CreateSettingsFile(json);
+
+    try
+    {
+      AppSettings settings = AppSettings.Load(path);
+
+      Assert.Equal(expected, settings.PauseWhenAway);
+    }
+    finally
+    {
+      File.Delete(path);
+    }
+  }
+
+  [Fact]
+  public void Load_PauseWhenAwayOffDoesNotAffectOtherSettings()
+  {
+    string path = CreateSettingsFile(
+      "{ \"PauseWhenAway\": false, \"AutosaveIntervalMinutes\": 9, \"StopConfirmationAfterMinutes\": 7 }"
+    );
+
+    try
+    {
+      AppSettings settings = AppSettings.Load(path);
+
+      Assert.False(settings.PauseWhenAway);
+      Assert.Equal(9, settings.AutosaveIntervalMinutes);
+      Assert.Equal(7, settings.StopConfirmationAfterMinutes);
+    }
+    finally
+    {
+      File.Delete(path);
+    }
+  }
+
   private static string CreateSettingsFile(string json)
   {
     string path = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.json");

@@ -59,6 +59,8 @@ public sealed class MainForm : Form
   private readonly Font _bodyFont;
   private readonly Icon _appIcon;
   private readonly int _activateMessage;
+  private readonly AwayMonitor? _awayMonitor;
+  private readonly System.Windows.Forms.Timer _awayReturnTimer;
   private ManageRecordsForm? _manageRecordsForm;
   private bool _resumeConfirmed;
 
@@ -169,6 +171,20 @@ public sealed class MainForm : Form
     // startup, then keep it live for the rest of the process by reacting to SystemEvents.
     ApplyDarkMode();
     SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
+
+    // AGENTS.md §10.7 — the screen saver has no push notification for a tray app, so while an away
+    // pause caused by it is waiting for the user, this timer polls for its end. It only runs then.
+    _awayReturnTimer = new System.Windows.Forms.Timer { Interval = 1000 };
+    _awayReturnTimer.Tick += (_, _) => CheckScreenSaverEnded();
+    if (settings.PauseWhenAway)
+    {
+      _stopwatchControl.IsScreenSaverRunning = AwayMonitor.IsScreenSaverRunning;
+      _awayMonitor = new AwayMonitor(OnAway, OnReturn);
+      if (IsHandleCreated)
+      {
+        _awayMonitor.RegisterDisplayNotifications(Handle);
+      }
+    }
   }
 
   /// <inheritdoc />
@@ -185,6 +201,22 @@ public sealed class MainForm : Form
     }
 
     base.OnFormClosing(e);
+  }
+
+  /// <inheritdoc />
+  protected override void OnHandleCreated(EventArgs e)
+  {
+    base.OnHandleCreated(e);
+    // Toggling ShowInTaskbar recreates the window handle (AGENTS.md §10.3), which silently drops the
+    // display notifications registered for the old one, so register again for every new handle.
+    _awayMonitor?.RegisterDisplayNotifications(Handle);
+  }
+
+  /// <inheritdoc />
+  protected override void OnHandleDestroyed(EventArgs e)
+  {
+    _awayMonitor?.UnregisterDisplayNotifications();
+    base.OnHandleDestroyed(e);
   }
 
   /// <inheritdoc />
@@ -227,6 +259,13 @@ public sealed class MainForm : Form
     {
       RestoreWindow();
       return;
+    }
+
+    // Display on/off notifications (AGENTS.md §10.7); the message still falls through to the base
+    // procedure afterwards, as Windows expects it to be processed normally.
+    if (m.Msg == AwayMonitor.WmPowerBroadcast)
+    {
+      _awayMonitor?.HandleMessage(m.WParam, m.LParam);
     }
 
     // AGENTS.md §10.3 — intercept the minimize system command itself, rather than reacting
@@ -276,6 +315,9 @@ public sealed class MainForm : Form
       // it holding a reference to OnUserPreferenceChanged (and therefore to this form) past this
       // form's own disposal (AGENTS.md §5/§7).
       SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged;
+      _awayMonitor?.Dispose();
+      _awayReturnTimer.Stop();
+      _awayReturnTimer.Dispose();
       // AGENTS.md §5/§10.3 — fonts and icons created via `new Font(...)`/`new Icon(...)` hold
       // native GDI handles and are never disposed by the base Form; each factory/loader here is
       // documented as caller-owned, so ownership is discharged here.
@@ -655,6 +697,57 @@ public sealed class MainForm : Form
     }
 
     InvokeOnUiThread(ApplyDarkMode);
+  }
+
+  // The AwayMonitor callbacks arrive on SystemEvents' own thread (lock/unlock) or this form's
+  // thread (display state), so both marshal with InvokeOnUiThread.
+  private void OnAway(AwayReason reason) => InvokeOnUiThread(() => PauseForAway(reason));
+
+  private void OnReturn() => InvokeOnUiThread(ReturnFromAway);
+
+  private async void PauseForAway(AwayReason reason)
+  {
+    // The outer await keeps the UI synchronization context (AGENTS.md §5).
+    await _stopwatchControl.PauseForAwayAsync(reason);
+    if (reason == AwayReason.ScreenSaver && _stopwatchControl.PendingAwayReturn)
+    {
+      _awayReturnTimer.Start();
+    }
+  }
+
+  private void CheckScreenSaverEnded()
+  {
+    if (!_stopwatchControl.PendingAwayReturn)
+    {
+      _awayReturnTimer.Stop();
+      return;
+    }
+
+    // A secure screen saver ends at the lock screen; the unlock signal brings the window back then.
+    if (!AwayMonitor.IsScreenSaverRunning() && _awayMonitor?.IsSessionLocked != true)
+    {
+      ReturnFromAway();
+    }
+  }
+
+  private void ReturnFromAway()
+  {
+    // Opens the window only; it never continues or stops the session, so a stray keypress while
+    // coming back cannot change it — the user decides (AGENTS.md §10.7).
+    if (!_stopwatchControl.TryConsumeAwayReturn())
+    {
+      return;
+    }
+
+    _awayReturnTimer.Stop();
+    if (Visible)
+    {
+      Activate();
+    }
+    else
+    {
+      RestoreWindow();
+    }
   }
 
   private async void InitializeAsync(object? sender, EventArgs e)

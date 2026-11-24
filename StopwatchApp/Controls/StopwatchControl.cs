@@ -29,8 +29,12 @@ public sealed class StopwatchControl : UserControl
   private readonly Font _elapsedFont;
   private readonly Font _lapElapsedFont;
   private readonly int _stopConfirmationAfterMinutes;
+  private readonly TimeProvider _time;
   private bool _darkMode;
   private bool _endingSession;
+  private AwayReason? _awayReason;
+  private long _awayAtMs;
+  private bool _awayReturnPending;
 
   /// <summary>
   /// Initializes a new instance of the <see cref="StopwatchControl"/> class.
@@ -49,6 +53,7 @@ public sealed class StopwatchControl : UserControl
   )
   {
     _stopConfirmationAfterMinutes = stopConfirmationAfterMinutes;
+    _time = time;
     Timer = new StopwatchTimer(store, time, autosaveIntervalMinutes);
 
     _uiTimer = new System.Windows.Forms.Timer { Interval = 1000 };
@@ -57,6 +62,18 @@ public sealed class StopwatchControl : UserControl
       // System.Windows.Forms.Timer.Tick always fires on the UI thread, so calling Timer.Tick()
       // (synchronous, no awaits) and refreshing controls here directly is safe.
       Timer.Tick();
+      // AGENTS.md §8.3/§10.7 — a screen saver has no push notification a tray app can receive, so
+      // it is polled here, once a second, only while running. The pause saves the snapshot itself,
+      // so the rest of this tick (autosave, display refresh) is already covered by it.
+      if (IsScreenSaverRunning())
+      {
+        await PauseForAwayAsync(AwayReason.ScreenSaver);
+        if (!Timer.IsRunning)
+        {
+          return;
+        }
+      }
+
       await Timer.SaveAutosaveIfDueAsync();
       UpdateDisplay();
       Tick?.Invoke();
@@ -234,6 +251,20 @@ public sealed class StopwatchControl : UserControl
   public Func<StopwatchRecord, bool, bool> ConfirmResume { get; set; } = (_, _) => false;
 
   /// <summary>
+  /// Gets or sets the probe polled once a second while running to detect a screen saver
+  /// (AGENTS.md §10.7). Defaults to never, so the control works standalone and the away pause stays
+  /// off unless <c>MainForm</c> enables it.
+  /// </summary>
+  [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+  public Func<bool> IsScreenSaverRunning { get; set; } = () => false;
+
+  /// <summary>
+  /// Gets whether the session was auto-paused because the user went away and the main window has
+  /// not yet been brought back for it (see <see cref="TryConsumeAwayReturn"/>).
+  /// </summary>
+  public bool PendingAwayReturn => _awayReturnPending && _awayReason is not null;
+
+  /// <summary>
   /// Gets the texts of the currently visible buttons in left-to-right flow order — Stop is always
   /// last (AGENTS.md §8.5). Exposed for tests of the control-row order.
   /// </summary>
@@ -306,6 +337,66 @@ public sealed class StopwatchControl : UserControl
     await Timer.PauseAsync();
     UpdateDisplay();
     StateChanged?.Invoke();
+  }
+
+  /// <summary>
+  /// Pauses a running session because the user went away (AGENTS.md §8.3): the normal pause flow
+  /// (frozen display, saved snapshot) plus a note saying when and why. A no-op unless the clock is
+  /// running, so an idle or already-paused session, and a Stop/Reset/Resume confirmation in
+  /// progress, are never touched, and when several signals arrive together the first reason wins.
+  /// </summary>
+  /// <param name="reason">Why the user is considered away.</param>
+  public async Task PauseForAwayAsync(AwayReason reason)
+  {
+    if (_endingSession || !Timer.IsRunning)
+    {
+      return;
+    }
+
+    long nowMs = _time.GetUtcNow().ToUnixTimeMilliseconds();
+    await PauseTimerAsync();
+    if (Timer.IsPaused)
+    {
+      _awayReason = reason;
+      _awayAtMs = nowMs;
+      _awayReturnPending = true;
+      UpdateDisplay();
+      StateChanged?.Invoke();
+    }
+  }
+
+  /// <summary>
+  /// Reports, once per away pause, that the user is back and the main window should be shown
+  /// (AGENTS.md §10.7). Returns <see langword="false"/> when no away pause is waiting, so the
+  /// repeated display-on and unlock signals of one absence open the window only once.
+  /// </summary>
+  /// <returns><see langword="true"/> the first time it is called after an away pause.</returns>
+  public bool TryConsumeAwayReturn()
+  {
+    if (!PendingAwayReturn)
+    {
+      return false;
+    }
+
+    _awayReturnPending = false;
+    return true;
+  }
+
+  /// <summary>
+  /// Builds the note shown under the clock after an away pause (AGENTS.md §8.5).
+  /// </summary>
+  /// <param name="reason">Why the session was paused.</param>
+  /// <param name="pausedAtUnixMs">The pause time, in Unix milliseconds (shown in local time).</param>
+  /// <returns>The note text.</returns>
+  public static string FormatAwayNote(AwayReason reason, long pausedAtUnixMs)
+  {
+    string cause = reason switch
+    {
+      AwayReason.Locked => "the computer was locked",
+      AwayReason.ScreenSaver => "the screen saver started",
+      _ => "the display turned off",
+    };
+    return $"Paused when {cause} at {TimeFormat.FormatTimeOnly(pausedAtUnixMs)}";
   }
 
   /// <summary>
@@ -454,7 +545,15 @@ public sealed class StopwatchControl : UserControl
         return false;
       }
 
-      return await Timer.ResumeRecordAsync(record.Id);
+      bool resumed = await Timer.ResumeRecordAsync(record.Id);
+      if (resumed)
+      {
+        // The resumed record is a different session; an earlier away note does not describe it.
+        _awayReason = null;
+        _awayReturnPending = false;
+      }
+
+      return resumed;
     }
     finally
     {
@@ -547,7 +646,20 @@ public sealed class StopwatchControl : UserControl
     _lapButton.Visible = running;
     _stopButton.Visible = true;
 
-    if (Timer.RestoredPausedAtMs > 0)
+    // The away note only describes the pause it caused: anything that leaves the paused state
+    // (Continue, Stop, Reset) ends it.
+    if (!Timer.IsPaused)
+    {
+      _awayReason = null;
+      _awayReturnPending = false;
+    }
+
+    if (_awayReason is { } awayReason)
+    {
+      _resumedNoteLabel.Text = FormatAwayNote(awayReason, _awayAtMs);
+      _resumedNoteLabel.Visible = true;
+    }
+    else if (Timer.RestoredPausedAtMs > 0)
     {
       _resumedNoteLabel.Text =
         $"Resumed from a saved point on {TimeFormat.FormatDate(Timer.RestoredPausedAtMs)} "

@@ -63,6 +63,11 @@ project-management, invoicing, monitoring, or cloud-sync product.
 - Ask for confirmation before Stop once a session has reached the threshold configured in
   `settings.json` (`StopConfirmationAfterMinutes`, five minutes by default, `0` disables): the clock
   pauses, a dialog asks, Stop proceeds on confirm and a running clock resumes on cancel.
+- Pause a running session automatically when the user steps away (`PauseWhenAway` in
+  `settings.json`, on by default): the workstation locks (Win+L), the screen saver starts, or the
+  display turns off. The pause happens at the event, and when the user returns the main window opens
+  paused with a note (`Paused when the computer was locked at 14:32:05`) so they choose Continue or
+  Stop. It never applies to an idle or already-paused session and never continues by itself.
 - Enforce one process instance. Starting a second copy activates the existing window, including
   when it is hidden in the tray.
 - Support window-scoped shortcuts: `Space` toggles Start/Pause/Continue, `Shift+Space` adds a lap,
@@ -82,7 +87,8 @@ project-management, invoicing, monitoring, or cloud-sync product.
   context menu.
 - Out of scope (do not add): global/system-wide hotkeys, run-at-login/startup registration,
   restoration directly into a running state, exact recovery beyond the most recent checkpoint,
-  idle detection, CSV/JSON export, cloud sync, telemetry, installer/MSIX.
+  input-idle detection (keyboard/mouse inactivity timers), back-dating an away pause to the last
+  input, auto-continue on return, pausing on sleep/hibernate, CSV/JSON export, cloud sync, telemetry, installer/MSIX.
 - **No taskbar integration** — no overlay badge, no thumbnail toolbar buttons, no progress bar,
   no title-bar clock. The tray icon is the only out-of-window surface.
 - A live-session autosave is a recovery snapshot, not a running-state restore. Recovery always
@@ -170,14 +176,16 @@ StopwatchApp/
     StopwatchRecord.cs     a persisted record (§8.1/§9)
     Lap.cs                 an in-memory/restored split (§8.1)
     PausedSession.cs       the single saved-session snapshot (§9)
+    AwayReason.cs          why a session was auto-paused: Locked, ScreenSaver, DisplayOff (§8.3/§10.7)
   Services/                UI-free, unit-testable
-    AppSettings.cs         validated settings.json loader (autosave cadence, stop-confirmation threshold)
+    AppSettings.cs         validated settings.json loader (autosave cadence, stop-confirmation threshold, PauseWhenAway)
+    AwayMonitor.cs         lock/unlock, display on/off and screen-saver detection (§10.7)
     StopwatchTimer.cs      tick loop, autosave checkpoints, transitions, and records ownership (§8)
     TrayIconService.cs     NotifyIcon, rendered icon, context menu (§10)
     IStopwatchStore.cs     the data-access interface (§3.1/§9)
     Database.cs            SQLite access via Dapper (§9)
     SchemaMigrations.cs    versioned schema steps, PRAGMA user_version (§9)
-  settings.json            deployable configuration: autosave cadence and stop-confirmation threshold
+  settings.json            deployable configuration: autosave cadence, stop-confirmation threshold, PauseWhenAway
   Formatting/
     TimeFormat.cs          the four formatters (§8.4)
   Theme/
@@ -557,6 +565,17 @@ The authoritative transition implementation is in
   transaction, so no separate Reset runs). The same `_endingSession` guard as Stop/Reset blocks
   conflicting timer actions meanwhile. A confirmed-but-failed resume shows a warning message box
   and leaves the record in Records.
+- **Away pause.** `StopwatchControl.PauseForAwayAsync(AwayReason)` is the one gate for an automatic
+  pause (§10.7). It is a no-op unless the clock is running and no Stop/Reset/Resume gate is active,
+  so an idle or manually paused session is never touched and, when several signals arrive together
+  (lock followed by display-off), the first reason wins. It runs the normal `PauseTimerAsync` flow
+  (frozen display, saved snapshot) and records the reason, the pause time, and a one-shot
+  "return pending" flag. `TryConsumeAwayReturn()` returns `true` once per away pause so repeated
+  unlock/display-on/screen-saver-ended signals open the window only once. Leaving the paused state
+  (Continue, Stop, Reset, a confirmed Resume) clears the note. It is an ordinary pause, so no
+  `StopwatchTimer`, `IStopwatchStore`, `PausedSession`, or schema change exists; after a restart the
+  existing "Resumed from a saved point" note applies instead. Time away is excluded exactly as with
+  any pause/continue.
 
 ### 8.4 Formatters
 
@@ -702,6 +721,10 @@ Rules:
 - A note reading `Resumed from a pause on {date} at {time}` (via `FormatDate`/`FormatTimeOnly` on
   `RestoredPausedAtMs`) appears under the timer only after restoring a saved session. It persists
   through Continue and is cleared by Stop, Reset, or a fresh Start.
+- An away-pause note occupies the same label slot and takes precedence over the restored note while
+  it applies: `Paused when {the computer was locked | the screen saver started | the display turned
+  off} at {FormatTimeOnly}` (`StopwatchControl.FormatAwayNote`, a pure method covered by tests). It
+  is cleared when the session leaves the paused state.
 
 Row text templates, literal (including the emoji):
 
@@ -1021,6 +1044,42 @@ v1 baseline for the laps-detail change (§9) — the one-time exception document
 position persistence is ever wanted again, it needs a new migration and a new interface method, not
 a resurrection of the removed one.
 
+### 10.7 Away detection (auto-pause)
+
+Active only when `settings.json` has `PauseWhenAway` true (the default); otherwise `MainForm`
+creates no `AwayMonitor` and leaves `StopwatchControl.IsScreenSaverRunning` at its never-true
+default. None of it needs elevation: every API below is an ordinary user-level call.
+
+- **Lock/unlock — push.** `AwayMonitor` subscribes to `SystemEvents.SessionSwitch`.
+  `SessionLock` and `ConsoleDisconnect` (fast user switching) mean away; `SessionUnlock` and
+  `ConsoleConnect` mean return (`AwayMonitor.Classify`). Win+L, Ctrl+Alt+Del → Lock, Dynamic Lock,
+  and a lid-close lock all arrive this way. These events fire on `SystemEvents`' own thread, so
+  `MainForm` marshals them with `InvokeOnUiThread`; the subscription is static, so `Dispose`
+  unsubscribes (§5).
+- **Display off/on — push.** `RegisterPowerSettingNotification` with `GUID_CONSOLE_DISPLAY_STATE`
+  on the main window handle delivers `WM_POWERBROADCAST`/`PBT_POWERSETTINGCHANGE`; `MainForm.WndProc`
+  forwards it to `AwayMonitor.HandleMessage`. `AwayMonitor.ReadDisplayState` decodes the
+  `POWERBROADCAST_SETTING` payload: `0` off (away), `1` on (return, only while the session is
+  unlocked, so waking the monitor to the lock screen does not pop the window up), `2` dimmed
+  (ignored). Toggling `ShowInTaskbar` recreates the window handle (§10.3) and drops the
+  registration, so `MainForm` registers in `OnHandleCreated` and unregisters in
+  `OnHandleDestroyed`. A failed registration is deliberately ignored: the feature then degrades to
+  lock and screen-saver detection.
+- **Screen saver — polled.** A tray app receives no screen-saver notification (`SC_SCREENSAVE` goes
+  only to the foreground window), so `StopwatchControl`'s existing one-second UI tick calls
+  `IsScreenSaverRunning` (`SystemParametersInfo(SPI_GETSCREENSAVERRUNNING)`) **only while the clock
+  is running**. One trivial user32 call per second; nothing polls while idle or paused. The pause
+  happens at the moment the screen saver starts, i.e. after the idle timeout has already elapsed, so
+  those idle minutes stay counted (no back-dating, by decision).
+- **Return.** `MainForm.ReturnFromAway` shows the window only when `TryConsumeAwayReturn()` is true:
+  activate it if visible, otherwise `RestoreWindow()` (which centers, §10.6). It opens no modal and
+  never continues or stops, so a stray keypress on arrival cannot change the session. For a
+  screen-saver pause the end of the screen saver is also polled, by a one-second timer that runs
+  only while that return is pending and stays quiet while the session is locked (a secure screen
+  saver ends at the lock screen; the unlock signal then does the work). Windows' foreground-lock
+  rules may flash the taskbar button instead of granting focus; the window is still shown.
+- Sleep/hibernate is not an away trigger (out of scope, §1.2).
+
 ---
 
 ## 11. Theme
@@ -1265,6 +1324,17 @@ xUnit, in a `StopwatchApp.Tests` project.
   Stop or Reset. The window's height grows and shrinks to fit it appearing and disappearing, with no dead
   space. The tray icon follows this same split (see the "Tray icon split" criterion above); the
   tooltip is unaffected throughout and always shows the total session elapsed time.
+
+- Away pause (§8.3/§10.7), with `PauseWhenAway` true: with the clock running, Win+L pauses it at
+  the lock (frozen time, snapshot saved, tray frozen); after unlocking, the main window is shown
+  centered, paused, with `Paused when the computer was locked at …`, and Continue excludes the time
+  away. Lock/unlock with an idle or manually paused session shows no window and no note. Display-off
+  and screen-saver starts pause the same way with their own notes; when several signals arrive
+  together the first reason is shown. The window opens once per absence. Stop, Reset, Continue, or a
+  confirmed Resume clear the note. A secure screen saver does not pop the window up until unlock.
+  With `PauseWhenAway` false none of this happens. Verify manually: lock while the window is hidden
+  in the tray, hide/show the window several times, lock again (handle re-registration), and confirm
+  Exit leaves no ghost tray icon.
 
 Implement these as automated tests wherever the behavior is UI-free, and as a manual check where it
 genuinely requires a running window (tray, hotkeys).
@@ -1541,6 +1611,19 @@ here; do not accumulate dated implementation history.
 - **Stop is always the rightmost button.** The most destructive-to-flow action sits in one
   predictable place across idle, running, and paused, and Reset (rarer, always confirmed) sits
   beside it rather than in the middle of the state-dependent buttons. The tray menu mirrors it.
+- **Away detection is event-driven wherever Windows offers an event, and polled only for the
+  screen saver.** Lock and display state are pushed (`SessionSwitch`, a power-setting notification),
+  so they cost nothing between events. A tray app cannot receive a screen-saver notification, so it
+  is polled with one cheap call per second, and only while running — the timer's own tick already
+  exists, so there is no new always-on timer. The pause sits in `StopwatchControl` beside Stop/Reset
+  because it must share their `_endingSession` guard and display refresh; `StopwatchTimer` stays
+  unchanged since an away pause is just a pause. Pausing happens at the event rather than being
+  back-dated to the last input: lock is exact anyway, and back-dating would rewrite elapsed time
+  backwards (a new transition and more edge cases) for a few idle minutes. Sleep is excluded
+  because waking already requires input and a lid-close usually locks first. The return only opens
+  the window — no modal — so the keypress that wakes the PC cannot Stop or Continue by accident.
+  Idle-timeout-based pausing remains out of scope (§1.2); this feature reacts to Windows' own
+  away states, not to input inactivity.
 - **Formatting belongs to CSharpier, while analyzers own code quality.** `IDE0055` is disabled so
   the SDK formatter cannot fight CSharpier, but compiler warnings, recommended analyzers, and all
   other enforced code-style diagnostics remain build-breaking.
