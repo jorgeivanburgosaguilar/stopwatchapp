@@ -43,6 +43,7 @@ public sealed partial class TrayIconService : IDisposable
 
   private readonly StopwatchControl _control;
   private readonly Action _onOpen;
+  private readonly Action _onIconClick;
   private readonly Action _onExit;
   private readonly NotifyIcon _notifyIcon;
   private readonly ContextMenuStrip _contextMenu;
@@ -70,13 +71,16 @@ public sealed partial class TrayIconService : IDisposable
   /// The stopwatch control the tray menu's transition items act on and whose state
   /// <see cref="UpdateDisplay"/> renders.
   /// </param>
-  /// <param name="onOpen">Invoked when the user opens the tray icon (single left-click or the
-  /// <c>Open</c> menu item).</param>
+  /// <param name="onOpen">Invoked when the user selects the tray menu's <c>Open</c> item; it only
+  /// ever opens the window.</param>
+  /// <param name="onIconClick">Invoked on a single left-click of the tray icon; the owner decides
+  /// whether that opens, raises, or hides the window (see <see cref="ResolveIconClick"/>).</param>
   /// <param name="onExit">Invoked when the user selects the tray menu's <c>Exit</c> item.</param>
-  public TrayIconService(StopwatchControl control, Action onOpen, Action onExit)
+  public TrayIconService(StopwatchControl control, Action onOpen, Action onIconClick, Action onExit)
   {
     _control = control;
     _onOpen = onOpen;
+    _onIconClick = onIconClick;
     _onExit = onExit;
 
     _menuImages = CreateMenuImages();
@@ -84,9 +88,9 @@ public sealed partial class TrayIconService : IDisposable
     _notifyIcon = new NotifyIcon { ContextMenuStrip = _contextMenu, Visible = true };
     _notifyIcon.MouseClick += (_, e) =>
     {
-      if (ShouldOpen(e.Button))
+      if (IsIconClick(e.Button))
       {
-        _onOpen();
+        _onIconClick();
       }
     };
 
@@ -222,12 +226,40 @@ public sealed partial class TrayIconService : IDisposable
     days.ToString(CultureInfo.InvariantCulture) + "D";
 
   /// <summary>
-  /// Returns whether a tray-icon mouse click should open the main window. Only a single left-click
-  /// opens it; right-click remains exclusively available for the context menu. Internal so the
-  /// input rule can be tested without constructing a native <see cref="NotifyIcon"/>.
+  /// Returns whether a tray-icon mouse click is the icon gesture (open/raise/hide the main window).
+  /// Only a single left-click is; right-click remains exclusively available for the context menu.
+  /// Internal so the input rule can be tested without constructing a native
+  /// <see cref="NotifyIcon"/>.
   /// </summary>
   /// <param name="button">The mouse button reported by <see cref="NotifyIcon.MouseClick"/>.</param>
-  internal static bool ShouldOpen(MouseButtons button) => button == MouseButtons.Left;
+  internal static bool IsIconClick(MouseButtons button) => button == MouseButtons.Left;
+
+  /// <summary>
+  /// Decides what a tray-icon left-click does to the main window: open it when hidden, hide it when
+  /// it is open and in front, otherwise just bring it to the front. A window blocked by a modal
+  /// dialog is never hidden (that would strand the dialog), so it is raised instead. Internal so the
+  /// rule can be tested without a native <see cref="NotifyIcon"/>.
+  /// </summary>
+  /// <param name="windowVisible">Whether the main window is currently shown.</param>
+  /// <param name="windowEnabled">Whether the main window accepts input (false while a modal owned
+  /// dialog or message box is open).</param>
+  /// <param name="wasActive">Whether the main window was the active window when the click began.</param>
+  internal static TrayClickAction ResolveIconClick(
+    bool windowVisible,
+    bool windowEnabled,
+    bool wasActive
+  )
+  {
+    if (!windowVisible)
+    {
+      return TrayClickAction.Open;
+    }
+
+    return windowEnabled && wasActive ? TrayClickAction.Hide : TrayClickAction.BringToFront;
+  }
+
+  /// <summary>Returns whether a native window currently accepts input.</summary>
+  internal static bool IsWindowInputEnabled(IntPtr window) => IsWindowEnabled(window);
 
   /// <inheritdoc />
   public void Dispose()
@@ -640,6 +672,10 @@ public sealed partial class TrayIconService : IDisposable
   [LibraryImport("user32.dll")]
   [return: MarshalAs(UnmanagedType.Bool)]
   private static partial bool DestroyIcon(IntPtr hIcon);
+
+  [LibraryImport("user32.dll")]
+  [return: MarshalAs(UnmanagedType.Bool)]
+  private static partial bool IsWindowEnabled(IntPtr hWnd);
 
   /// <summary>
   /// Which tray-icon presentation is active (AGENTS.md §10.1): large minutes during the first

@@ -64,6 +64,11 @@ public sealed class MainForm : Form
   private ManageRecordsForm? _manageRecordsForm;
   private bool _resumeConfirmed;
 
+  // AGENTS.md §10.2 — see OnTrayIconClick: a tray press deactivates this window a moment before the
+  // click event arrives, so a deactivation this recent still counts as "was in front".
+  private const long TrayClickActiveWindowMs = 1000;
+  private long _lastDeactivatedTickMs = long.MinValue / 2;
+
   // AGENTS.md §17 performance note — ResizeForElapsedTime runs on every running-second tick.
   // TimeFormat.FormatTime's digit count only changes at an hours-digit boundary (e.g. 9:59:59 ->
   // 10:00:00), so caching the elapsed text's length lets an ordinary tick skip ComputeFixedWidth
@@ -118,7 +123,12 @@ public sealed class MainForm : Form
     _stopwatchControl.ConfirmReset = ConfirmReset;
     _stopwatchControl.ConfirmResume = ConfirmResume;
     _recordsListControl = new RecordsListControl();
-    _trayIconService = new TrayIconService(_stopwatchControl, RestoreWindow, ExitApplication);
+    _trayIconService = new TrayIconService(
+      _stopwatchControl,
+      RestoreWindow,
+      OnTrayIconClick,
+      ExitApplication
+    );
     _activateMessage = (int)Program.RegisterWindowMessage(Program.ActivateMessageName);
 
     // AGENTS.md §8.5/§10.3 — two rows, not three: the version footer row is gone (the version
@@ -326,6 +336,37 @@ public sealed class MainForm : Form
     }
 
     base.Dispose(disposing);
+  }
+
+  /// <inheritdoc />
+  protected override void OnDeactivate(EventArgs e)
+  {
+    base.OnDeactivate(e);
+    _lastDeactivatedTickMs = Environment.TickCount64;
+  }
+
+  private void OnTrayIconClick()
+  {
+    // AGENTS.md §10.2 — pressing the tray icon takes activation away from this window just before
+    // the MouseClick arrives, so "was it in front?" also accepts a very recent deactivation.
+    bool wasActive =
+      ActiveForm == this
+      || Environment.TickCount64 - _lastDeactivatedTickMs <= TrayClickActiveWindowMs;
+    bool enabled = Visible && TrayIconService.IsWindowInputEnabled(Handle);
+    switch (TrayIconService.ResolveIconClick(Visible, enabled, wasActive))
+    {
+      case TrayClickAction.Open:
+        RestoreWindow();
+        break;
+      case TrayClickAction.Hide:
+        HideToTray();
+        break;
+      default:
+        // Activate a blocking modal dialog if there is one, otherwise this window; never re-center.
+        Form? modal = OwnedForms.FirstOrDefault(f => f.Visible && f.Modal);
+        (modal ?? this).Activate();
+        break;
+    }
   }
 
   private void HideToTray()

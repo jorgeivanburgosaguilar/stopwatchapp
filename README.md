@@ -6,31 +6,16 @@ Tiny stopwatch built with C#, .NET 10 and WinForms with record keeping and sessi
 
 ## Features
 
-- Start, pause, continue, add lap splits, and stop a timing session.
-- Elapsed time shown in the main window and in a runtime-rendered system tray icon (minutes below
-  one hour, an `h:mm` label from one to nine hours, whole hours from ten hours to one day, days
-  thereafter), with a tooltip that always shows the full unbounded `HH:mm:ss` duration.
-- Close-to-tray behavior: the main window is hidden from the taskbar when closed or minimized, and
-  a single left click on the tray icon restores it. The tray's own context menu mirrors the valid
-  timer actions and is the explicit exit path.
-- Completed sessions, together with their laps, are persisted to a local SQLite database. The main
-  window previews the five newest records, and a modeless records manager exposes the full history,
-  paginated ten per page, with confirmed per-record deletion and confirmed clear-all. Each record
-  with saved laps can be expanded in place to show them, newest first.
-- Laps are kept in memory during a session and included in a periodic autosaved snapshot (interval
-  configurable in `settings.json`, five minutes by default), plus an immediate save on pause.
-  Restoring a snapshot always resumes in the paused state, so time spent while the app was closed
-  is never counted. Once a session is stopped, its laps are saved permanently alongside its record.
-- Stop asks for confirmation once a session has run for a configurable time
-  (`StopConfirmationAfterMinutes` in `settings.json`, five minutes by default, `0` to disable): the
-  clock pauses while asking and resumes if you cancel.
-- Single-instance enforcement: launching a second copy activates the existing window, even if it is
-  hidden in the tray.
-- Window-scoped keyboard shortcuts: `Space` (Start/Pause/Continue), `Shift+Space` (Lap), `Enter`
-  (Stop).
-- Follows the live Windows light/dark theme, scales for per-monitor DPI, sizes the window to its
-  content, centers it whenever opened, and shows the application version in the window title.
-- Fully offline: no network calls, telemetry, analytics, auto-update, or crash reporting.
+- Start, pause, lap, stop, and reset
+- Tray icon with live elapsed time (click to show/hide)
+- Session history with laps (local SQLite)
+- Resume a mistakenly stopped session
+- Auto-pause on lock, screen saver, or display off
+- Crash/close recovery (autosave, reopens paused)
+- Stop and reset confirmation
+- Keyboard shortcuts (`Space`, `Shift+Space`, `Enter`)
+- Light/dark theme and per-monitor DPI
+- Single instance, fully offline
 
 ## Technical specifications
 
@@ -42,7 +27,7 @@ Tiny stopwatch built with C#, .NET 10 and WinForms with record keeping and sessi
   switching and `PerMonitorV2` high-DPI awareness.
 - **Storage:** a single local SQLite file at `%LOCALAPPDATA%\StopwatchApp\stopwatch.db`, created on
   first run.
-- **Testing:** xUnit, 168 tests covering timer state transitions, formatting, layout helpers, and
+- **Testing:** xUnit, 285 tests covering timer state transitions, formatting, layout helpers, and
   SQLite persistence.
 
 ## Building

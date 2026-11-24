@@ -151,9 +151,26 @@ public class TrayIconServiceTests
   [InlineData(MouseButtons.Right, false)]
   [InlineData(MouseButtons.Middle, false)]
   [InlineData(MouseButtons.None, false)]
-  public void ShouldOpen_OnlyAcceptsLeftClick(MouseButtons button, bool expected)
+  public void IsIconClick_OnlyAcceptsLeftClick(MouseButtons button, bool expected)
   {
-    Assert.Equal(expected, TrayIconService.ShouldOpen(button));
+    Assert.Equal(expected, TrayIconService.IsIconClick(button));
+  }
+
+  [Theory]
+  [InlineData(false, true, true, TrayClickAction.Open)]
+  [InlineData(false, true, false, TrayClickAction.Open)]
+  [InlineData(true, true, true, TrayClickAction.Hide)]
+  [InlineData(true, true, false, TrayClickAction.BringToFront)]
+  [InlineData(true, false, true, TrayClickAction.BringToFront)]
+  [InlineData(true, false, false, TrayClickAction.BringToFront)]
+  public void ResolveIconClick_OpensRaisesOrHides(
+    bool visible,
+    bool enabled,
+    bool wasActive,
+    TrayClickAction expected
+  )
+  {
+    Assert.Equal(expected, TrayIconService.ResolveIconClick(visible, enabled, wasActive));
   }
 
   // Regression guard for the bug where hour/day labels rendered far smaller than the minutes

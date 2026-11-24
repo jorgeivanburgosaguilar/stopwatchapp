@@ -44,8 +44,9 @@ project-management, invoicing, monitoring, or cloud-sync product.
   once a lap has been recorded in the current session, otherwise the whole session), so pressing Lap
   resets the icon back to minutes; its tooltip is unaffected by laps and always shows the full
   unbounded session-total `HH:mm:ss` duration.
-- Keep the main window out of the taskbar when closed or minimized, and restore it with one left
-  click on the tray icon. The tray menu mirrors the valid timer actions and is the explicit exit
+- Keep the main window out of the taskbar when closed or minimized, and toggle it with one left
+  click on the tray icon (opens when hidden, hides when in front, otherwise brings it to the front).
+  The tray menu mirrors the valid timer actions and is the explicit exit
   path.
 - Persist completed records in SQLite, show the five newest records in the main window, and expose
   the full history in one modeless records manager with five records per page, confirmed deletion,
@@ -277,7 +278,7 @@ populated before the caller ever reads it — a fresh `StopwatchTimer` has no ot
 `Records` is first loaded.
 
 The tray, shortcuts, and buttons all route through `StopwatchControl`'s shared action methods so
-transitions and display refreshes cannot diverge. `TrayIconService` takes callbacks rather than a
+transitions and display refreshes cannot diverge. `TrayIconService` takes callbacks (menu `Open`, icon click, `Exit`) rather than a
 `MainForm` reference. `RecordsListControl` accepts pushed record and lap lists, raises requests for
 record-management actions, and never reads `IStopwatchStore`. The clear-records dialog returns Yes
 only for explicit confirmation; Cancel, Escape, and closing the window all cancel the operation.
@@ -937,8 +938,14 @@ Order: `Open`, separator, the state-appropriate action(s) from §8.5 (`Start`/`P
 button row, and Reset precedes it with a dark-orange
 reset-arrow glyph matching `Palette.ResetButton`; it calls the shared Reset confirmation gate.
 Resume is not in the tray menu (it needs a chosen record).
-Single left-clicking the tray icon opens (restores and activates)
-the main window; right-click remains reserved for the context menu. `Exit` is the only way to quit
+A single left-click on the tray icon toggles the main window
+(`TrayIconService.ResolveIconClick`): hidden → open (restore, center, activate); open and in front →
+hide to the tray (`HideToTray`, which also closes Manage Records); open but covered by another app,
+or blocked by a modal dialog → activate it only (the modal if one is open), with no re-centering.
+"In front" means the window is `ActiveForm` or was deactivated within
+`MainForm.TrayClickActiveWindowMs` (1000 ms), because pressing the tray icon takes activation away
+just before `MouseClick` arrives. The menu's `Open` item stays open-only; right-click remains
+reserved for the context menu. `Exit` is the only way to quit
 the application.
 
 ### 10.3 Window behavior
@@ -1312,8 +1319,11 @@ xUnit, in a `StopwatchApp.Tests` project.
   the two sit aligned on the same baseline.
 - Button focus (§8.5/§17): tabbing through any window shows the stock keyboard-focus indicator on
   whichever button has focus, matching ordinary WinForms `Button` behavior.
-- Tray open gesture (§10.2): a single left-click opens and activates the main window;
-  right-click remains exclusively available for the context menu.
+- Tray click gesture (§10.2): a single left-click opens the hidden window (centered); a second
+  click hides it with no taskbar button left. With the window covered by another app the click
+  brings it to the front without moving or hiding it; with a modal confirmation open it activates
+  the modal instead of hiding. The menu's `Open` only opens; right-click remains exclusively
+  available for the context menu.
 - Lap-elapsed clock (§8.1/§8.5): absent at idle and while running with no laps yet; appears
   reading `Lap 2 · 00:00:00` immediately after the first Lap press (numbering the split currently
   in progress, one past the laps already recorded) and resets to `00:00:00` — with the lap number
@@ -1624,6 +1634,14 @@ here; do not accumulate dated implementation history.
   the window — no modal — so the keypress that wakes the PC cannot Stop or Continue by accident.
   Idle-timeout-based pausing remains out of scope (§1.2); this feature reacts to Windows' own
   away states, not to input inactivity.
+- **The tray icon click toggles, but only hides a window that was in front.** A plain open/hide
+  toggle would hide a window the user merely wants to find again behind other apps, so a covered
+  window is raised first and the next click hides it. Windows deactivates the window when the tray
+  is pressed, before `MouseClick` fires, so "in front" is read from `ActiveForm` or a deactivation
+  within a short grace window (`OnDeactivate` timestamp) instead of the instantaneous state. A
+  window blocked by a modal (disabled, `IsWindowEnabled`) is raised, never hidden, so the modal is
+  not stranded. The decision is the pure `TrayIconService.ResolveIconClick`, unit tested; the menu
+  `Open` keeps its own open-only callback.
 - **Formatting belongs to CSharpier, while analyzers own code quality.** `IDE0055` is disabled so
   the SDK formatter cannot fight CSharpier, but compiler warnings, recommended analyzers, and all
   other enforced code-style diagnostics remain build-breaking.
