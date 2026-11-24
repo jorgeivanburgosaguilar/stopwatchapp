@@ -46,24 +46,20 @@ public sealed class ManageRecordsFormTests
       Assert.Equal(labels, Descendants(form).OfType<IconTextLabel>().ToArray());
       Invoke(form, "ToggleLapsAsync", 1L);
       Assert.Equal(labels, Descendants(form).OfType<IconTextLabel>().ToArray());
-      Assert.Contains(
-        labels,
-        label => label.Visible && label.Text.Contains("Lap 101:", StringComparison.Ordinal)
+      Assert.Contains(labels, label =>
+        label.Visible && label.Text.Contains("Lap 101:", StringComparison.Ordinal)
       );
       Invoke(form, "ChangePage", 1);
       Invoke(form, "ToggleLapsAsync", 6L);
-      Assert.Contains(
-        Descendants(form),
-        control => control.Visible && control.Text.Contains("Lap 601:", StringComparison.Ordinal)
+      Assert.Contains(Descendants(form), control =>
+        control.Visible && control.Text.Contains("Lap 601:", StringComparison.Ordinal)
       );
-      Assert.DoesNotContain(
-        Descendants(form),
-        control => control.Visible && control.Text.Contains("Lap 101:", StringComparison.Ordinal)
+      Assert.DoesNotContain(Descendants(form), control =>
+        control.Visible && control.Text.Contains("Lap 101:", StringComparison.Ordinal)
       );
       Invoke(form, "ChangePage", -1);
-      Assert.Contains(
-        Descendants(form),
-        control => control.Visible && control.Text.Contains("Lap 101:", StringComparison.Ordinal)
+      Assert.Contains(Descendants(form), control =>
+        control.Visible && control.Text.Contains("Lap 101:", StringComparison.Ordinal)
       );
       form.Close();
     });
@@ -124,9 +120,8 @@ public sealed class ManageRecordsFormTests
         .Single(button => button.AccessibleName == "Show laps");
       Invoke(form, "ToggleLapsAsync", 1L);
       Assert.Equal("Hide laps", toggle.AccessibleName);
-      Assert.Contains(
-        Descendants(form),
-        control => control.Text == "No laps recorded for this session."
+      Assert.Contains(Descendants(form), control =>
+        control.Text == "No laps recorded for this session."
       );
       Invoke(form, "ToggleLapsAsync", 1L);
       Assert.Equal("Show laps", toggle.AccessibleName);
@@ -153,9 +148,8 @@ public sealed class ManageRecordsFormTests
       form.UpdateRecords([survivor]);
       Assert.Equal(1, loads);
       Assert.Contains(Descendants(form), control => control.AccessibleName == "Hide laps");
-      Assert.Contains(
-        Descendants(form),
-        control => control.Text.Contains("Lap 1:", StringComparison.Ordinal)
+      Assert.Contains(Descendants(form), control =>
+        control.Text.Contains("Lap 1:", StringComparison.Ordinal)
       );
       form.UpdateRecords([]);
       Assert.DoesNotContain(Descendants(form).OfType<Button>(), button => button.Tag is long);
@@ -179,22 +173,19 @@ public sealed class ManageRecordsFormTests
       );
 
       Invoke(form, "ToggleLapsAsync", 1L);
-      Assert.Contains(
-        Descendants(form),
-        control => control.Text.StartsWith("Couldn't load laps", StringComparison.Ordinal)
+      Assert.Contains(Descendants(form), control =>
+        control.Text.StartsWith("Couldn't load laps", StringComparison.Ordinal)
       );
-      Assert.DoesNotContain(
-        Descendants(form),
-        control => control.Text == "No laps recorded for this session."
+      Assert.DoesNotContain(Descendants(form), control =>
+        control.Text == "No laps recorded for this session."
       );
 
       Invoke(form, "ToggleLapsAsync", 1L);
       Invoke(form, "ToggleLapsAsync", 1L);
 
       Assert.Equal(2, loads);
-      Assert.Contains(
-        Descendants(form),
-        control => control.Text.Contains("Lap 1:", StringComparison.Ordinal)
+      Assert.Contains(Descendants(form), control =>
+        control.Text.Contains("Lap 1:", StringComparison.Ordinal)
       );
     });
 

@@ -91,8 +91,7 @@ internal sealed class RowIconSet : IDisposable
   private static Bitmap Load(RowIcon icon)
   {
     string name = ResourceName(icon);
-    using Stream stream =
-      typeof(RowIconSet).Assembly.GetManifestResourceStream(name)
+    using Stream stream = typeof(RowIconSet).Assembly.GetManifestResourceStream(name)
       ?? throw new InvalidOperationException($"Embedded resource '{name}' is missing.");
     using Bitmap decoded = new(stream);
     // A Bitmap decoded from a stream needs that stream for its whole lifetime; copying it detaches

@@ -22,9 +22,8 @@ public sealed class IconTextLayoutTests
       atoms.Where(atom => atom.Icon is not null).Select(atom => atom.Icon!.Value)
     );
     Assert.Contains(atoms, atom => atom.Text == "Duration:");
-    Assert.DoesNotContain(
-      atoms,
-      atom => atom.Text is not null && atom.Text.Contains("📅", StringComparison.Ordinal)
+    Assert.DoesNotContain(atoms, atom =>
+      atom.Text is not null && atom.Text.Contains("📅", StringComparison.Ordinal)
     );
   }
 
@@ -152,9 +151,8 @@ public sealed class IconTextLayoutTests
     }
 
     // GDI's monochrome fallback would only ever produce black, white, and gray anti-alias blends.
-    Assert.Contains(
-      colors.Select(Color.FromArgb),
-      c => Math.Abs(c.R - c.G) > 40 || Math.Abs(c.G - c.B) > 40
+    Assert.Contains(colors.Select(Color.FromArgb), c =>
+      Math.Abs(c.R - c.G) > 40 || Math.Abs(c.G - c.B) > 40
     );
   }
 }
